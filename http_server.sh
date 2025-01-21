@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Compile http_server.c with GCC and enable all warnings
-gcc -Wall -o http_server http_server.c
+gcc -Wall -o http_server.exe http_server.c
 
 # Check if the compilation was successful
 if [ $? -eq 0 ]; then

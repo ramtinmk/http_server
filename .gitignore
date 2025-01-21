@@ -1,0 +1,19 @@
+# Ignore object files and executable binaries
+*.o
+*.out
+*.exe
+
+# Ignore compiled output
+http_server
+
+# Ignore backup and temporary files
+*~
+*.swp
+*.tmp
+
+# Ignore build directories
+/build/
+/dist/
+
+/# Ignore logs
+*.log
