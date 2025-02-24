@@ -1,0 +1,3 @@
+/home/ramtinmk/http_server_C/CMakeFiles/rebuild_cache.dir
+/home/ramtinmk/http_server_C/CMakeFiles/edit_cache.dir
+/home/ramtinmk/http_server_C/CMakeFiles/http_server.dir
