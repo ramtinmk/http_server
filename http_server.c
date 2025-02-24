@@ -5,16 +5,16 @@
  * and HTTP protocol handling. Not recommended for production use.
  */
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <unistd.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <sys/wait.h>
-#include <signal.h>
-#include <asm-generic/signal.h>
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
+ #include <unistd.h>
+ #include <sys/socket.h>
+ #include <netinet/in.h>
+ #include <arpa/inet.h>
+ #include <sys/wait.h>
+ #include <signal.h>
+//  #include <signal.h>
  
  #define PORT 8080
  #define BACKLOG 10
@@ -34,22 +34,20 @@
     "Connection: close\r\n\r\n" \
     "<html><head><title>" status "</title></head>" \
     "<body><h1>" status "</h1><p>" msg "</p></body></html>\r\n"
-
-
-typedef struct {
-    char method[8];
-    char path[1024];
-    char headers[32][2][256]; // [header_count][key/value]
-    int header_count;
-} HTTPRequest;
+ typedef struct {
+     char method[8];
+     char path[1024];
+     char headers[32][2][256]; // [header_count][key/value]
+     int header_count;
+ } HTTPRequest;
  
  // Function declarations
-void handle_client(int client_socket);
-int create_server_socket(void);
-void sigchld_handler(int sig);
-static void parse_request_line(char *line, HTTPRequest *req);
-static void parse_header_line(char *line, HTTPRequest *req);
-
+ void handle_client(int client_socket);
+ int create_server_socket(void);
+ void sigchld_handler(int sig);
+ static void parse_request_line(char *line, HTTPRequest *req);
+ static void parse_header_line(char *line, HTTPRequest *req);
+ 
 
 
 // Error responses
@@ -256,7 +254,7 @@ void handle_client(int client_socket) {
      }
  }
  
-int create_server_socket(void) {
+ int create_server_socket(void) {
      int server_socket;
      struct sockaddr_in server_addr;
  

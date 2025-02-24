@@ -11,6 +11,8 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 # Add the executable
 add_executable(http_server http_server.c)
 
+add_executable(test test.c)
+
 # Enable warnings
 if(CMAKE_COMPILER_IS_GNUCC OR CMAKE_C_COMPILER_ID MATCHES "Clang")
     target_compile_options(http_server PRIVATE -Wall -Wextra -pedantic)
