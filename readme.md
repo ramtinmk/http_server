@@ -40,7 +40,7 @@ make
    } HTTPRequest;
    ```
 
-2. **HTTP Error Handling**  
+2. **HTTP Error Handling**  ✅
    - Implement 400 (Bad Request), 404 (Not Found), 501 (Not Implemented)
    - Create error template HTML responses
    - Handle malformed requests gracefully
