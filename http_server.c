@@ -16,24 +16,26 @@
  #include <signal.h>
 //  #include <signal.h>
  
- #define PORT 8080
- #define BACKLOG 10
- #define BUFFER_SIZE 2048
- #define RESPONSE_TEMPLATE "HTTP/1.1 200 OK\r\n" \
-                           "Content-Type: text/html\r\n" \
-                           "Connection: close\r\n" \
-                           "\r\n" \
-                           "<html><head><title>Test Server</title></head>" \
-                           "<body><h1>Educational HTTP Server</h1>" \
-                           "<p>Requested path: %s</p>" \
-                           "<p>Method: %s</p>" \
-                           "</body></html>\r\n"
+#define PORT 8080
+#define BACKLOG 10
+#define BUFFER_SIZE 4096
+#define RESPONSE_TEMPLATE \
+"HTTP/1.1 200 OK\r\n" \
+"Content-Type: text/html\r\n" \
+"Connection: close\r\n" \
+"Content-Length: %ld\r\n" /* Add Content-Length header */ \
+"\r\n" \
+"%s" /* Placeholder for HTML content */
+
+
 #define ERROR_TEMPLATE(status, msg) \
     "HTTP/1.1 " status "\r\n" \
     "Content-Type: text/html\r\n" \
     "Connection: close\r\n\r\n" \
     "<html><head><title>" status "</title></head>" \
     "<body><h1>" status "</h1><p>" msg "</p></body></html>\r\n"
+
+
  typedef struct {
      char method[8];
      char path[1024];
@@ -187,7 +189,7 @@ void handle_client(int client_socket) {
         return;
     }
 
-    // Parse headers
+    // Parse headers (same as before)
     while (ptr < end) {
         line_end = strstr(ptr, "\r\n");
         if (!line_end) break;
@@ -197,12 +199,11 @@ void handle_client(int client_socket) {
             ptr += 2;
             break;
         }
-
         parse_header_line(ptr, &request);
         ptr = line_end + 2;
     }
 
-    // Validate required headers (HTTP/1.1 requires Host header)
+    // Validate Host header (same as before)
     int has_host = 0;
     for (int i = 0; i < request.header_count; i++) {
         if (strcasecmp(request.headers[i][0], "Host") == 0) {
@@ -215,45 +216,65 @@ void handle_client(int client_socket) {
         return;
     }
 
-    // Simple path validation (example: only serve root path)
-    if (strcmp(request.path, "/") != 0) {
+    char filepath[1024];
+    char response_body[BUFFER_SIZE];
+    long file_size = 0;
+    FILE *html_file = NULL;
+    int status_code = 200; // Default OK
+
+    if (strcmp(request.path, "/home") == 0) {
+        snprintf(filepath, sizeof(filepath), "home.html"); // File in same directory
+    } else if (strcmp(request.path, "/hello") == 0) {
+        snprintf(filepath, sizeof(filepath), "hello.html"); // File in same directory
+    } else if (strcmp(request.path, "/") == 0) { // Optionally serve a default root page?
+        snprintf(filepath, sizeof(filepath), "home.html"); // Or a different default, or 404
+    }
+     else {
         send_error_response(client_socket, NOT_FOUND_404);
+        return; // Early return for 404
+    }
+
+    html_file = fopen(filepath, "r");
+    if (html_file == NULL) {
+        perror("fopen");
+        send_error_response(client_socket, NOT_FOUND_404); // File not found is 404
         return;
     }
-     *line_end = '\0';
-     parse_request_line(ptr, &request);
-     ptr = line_end + 2;
- 
-     // Parse headers
-     while (ptr < end) {
-         line_end = strstr(ptr, "\r\n");
-         if (!line_end) {
-             break;
-         }
-         *line_end = '\0';
- 
-         // Check for empty line indicating end of headers
-         if (ptr == line_end) {
-             ptr += 2;
-             break;
-         }
- 
-         parse_header_line(ptr, &request);
-         ptr = line_end + 2;
-     }
 
-    //  print_http_request(&request);
- 
-     // Prepare response using parsed request data
-     char response[BUFFER_SIZE];
-     snprintf(response, BUFFER_SIZE, RESPONSE_TEMPLATE, request.path, request.method);
-     
-     // Send response
-     if (write(client_socket, response, strlen(response)) < 0) {
-         perror("write");
-     }
- }
- 
+    // Get file size
+    fseek(html_file, 0, SEEK_END);
+    file_size = ftell(html_file);
+    fseek(html_file, 0, SEEK_SET);
+
+    if (file_size > sizeof(response_body) -1 ) {
+        fprintf(stderr, "File too large to fit in buffer: %s\n", filepath);
+        fclose(html_file);
+        send_error_response(client_socket, NOT_FOUND_404); // Or 500 Internal Server Error?
+        return;
+    }
+
+    // Read file content
+    size_t bytes_read_from_file = fread(response_body, 1, file_size, html_file);
+    if (bytes_read_from_file != file_size) {
+        perror("fread");
+        fclose(html_file);
+        send_error_response(client_socket, NOT_FOUND_404); // Or 500 Internal Server Error?
+        return;
+    }
+    response_body[bytes_read_from_file] = '\0'; // Null terminate
+
+    fclose(html_file);
+
+
+    char response[BUFFER_SIZE];
+    snprintf(response, BUFFER_SIZE, RESPONSE_TEMPLATE, file_size, response_body);
+
+
+    // Send response
+    if (write(client_socket, response, strlen(response)) < 0) {
+        perror("write");
+    }
+}
  int create_server_socket(void) {
      int server_socket;
      struct sockaddr_in server_addr;
