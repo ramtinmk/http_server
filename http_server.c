@@ -5,15 +5,16 @@
  * and HTTP protocol handling. Not recommended for production use.
  */
 
- #include <stdio.h>
- #include <stdlib.h>
- #include <string.h>
- #include <unistd.h>
- #include <sys/socket.h>
- #include <netinet/in.h>
- #include <arpa/inet.h>
- #include <sys/wait.h>
- #include <signal.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <sys/wait.h>
+#include <signal.h>
+#include <asm-generic/signal.h>
  
  #define PORT 8080
  #define BACKLOG 10
@@ -27,21 +28,45 @@
                            "<p>Requested path: %s</p>" \
                            "<p>Method: %s</p>" \
                            "</body></html>\r\n"
- 
- typedef struct {
-     char method[8];
-     char path[1024];
-     char headers[32][2][256]; // [header_count][key/value]
-     int header_count;
- } HTTPRequest;
+#define ERROR_TEMPLATE(status, msg) \
+    "HTTP/1.1 " status "\r\n" \
+    "Content-Type: text/html\r\n" \
+    "Connection: close\r\n\r\n" \
+    "<html><head><title>" status "</title></head>" \
+    "<body><h1>" status "</h1><p>" msg "</p></body></html>\r\n"
+
+
+typedef struct {
+    char method[8];
+    char path[1024];
+    char headers[32][2][256]; // [header_count][key/value]
+    int header_count;
+} HTTPRequest;
  
  // Function declarations
- void handle_client(int client_socket);
- int create_server_socket(void);
- void sigchld_handler(int sig);
- static void parse_request_line(char *line, HTTPRequest *req);
- static void parse_header_line(char *line, HTTPRequest *req);
- 
+void handle_client(int client_socket);
+int create_server_socket(void);
+void sigchld_handler(int sig);
+static void parse_request_line(char *line, HTTPRequest *req);
+static void parse_header_line(char *line, HTTPRequest *req);
+
+
+
+// Error responses
+static const char *BAD_REQUEST_400 = ERROR_TEMPLATE("400 Bad Request", "Malformed request syntax");
+static const char *NOT_FOUND_404 = ERROR_TEMPLATE("404 Not Found", "The requested resource was not found");
+static const char *NOT_IMPLEMENTED_501 = ERROR_TEMPLATE("501 Not Implemented", "HTTP method not supported");
+
+// Supported methods
+const char *SUPPORTED_METHODS[] = {"GET", "HEAD"};
+const int SUPPORTED_METHOD_COUNT = 2;
+
+// Helper functions
+void send_error_response(int client_socket, const char *response);
+int method_is_supported(const char *method);
+int validate_request(HTTPRequest *req);
+
+
  int main() {
      int server_socket, client_socket;
      struct sockaddr_in client_addr;
@@ -133,30 +158,70 @@ void print_http_request(const HTTPRequest *req) {
         printf("    %s: %s\n", req->headers[i][0], req->headers[i][1]);
     }
 }
- void handle_client(int client_socket) {
-     char buffer[BUFFER_SIZE];
-     ssize_t bytes_read;
-     
-     bytes_read = read(client_socket, buffer, BUFFER_SIZE - 1);
-     if (bytes_read < 0) {
-         perror("read");
-         return;
-     }
-     buffer[bytes_read] = '\0';
- 
-     HTTPRequest request = {0}; // Initialize all fields to zero
- 
-     char *ptr = buffer;
-     char *end = buffer + bytes_read;
- 
-     // Parse request line
-     char *line_end = strstr(ptr, "\r\n");
-     if (!line_end) {
-         // Malformed request, send 400 Bad Request
-         const char *bad_request = "HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n";
-         write(client_socket, bad_request, strlen(bad_request));
-         return;
-     }
+void handle_client(int client_socket) {
+    char buffer[BUFFER_SIZE];
+    ssize_t bytes_read;
+
+    bytes_read = read(client_socket, buffer, BUFFER_SIZE - 1);
+    if (bytes_read < 0) {
+        perror("read");
+        return;
+    }
+    buffer[bytes_read] = '\0';
+
+    HTTPRequest request = {0};
+    char *ptr = buffer;
+    char *end = buffer + bytes_read;
+
+    // Parse request line
+    char *line_end = strstr(ptr, "\r\n");
+    if (!line_end) {
+        send_error_response(client_socket, BAD_REQUEST_400);
+        return;
+    }
+    *line_end = '\0';
+    parse_request_line(ptr, &request);
+    ptr = line_end + 2;
+
+    // Validate method
+    if (!method_is_supported(request.method)) {
+        send_error_response(client_socket, NOT_IMPLEMENTED_501);
+        return;
+    }
+
+    // Parse headers
+    while (ptr < end) {
+        line_end = strstr(ptr, "\r\n");
+        if (!line_end) break;
+        *line_end = '\0';
+
+        if (ptr == line_end) { // End of headers
+            ptr += 2;
+            break;
+        }
+
+        parse_header_line(ptr, &request);
+        ptr = line_end + 2;
+    }
+
+    // Validate required headers (HTTP/1.1 requires Host header)
+    int has_host = 0;
+    for (int i = 0; i < request.header_count; i++) {
+        if (strcasecmp(request.headers[i][0], "Host") == 0) {
+            has_host = 1;
+            break;
+        }
+    }
+    if (!has_host) {
+        send_error_response(client_socket, BAD_REQUEST_400);
+        return;
+    }
+
+    // Simple path validation (example: only serve root path)
+    if (strcmp(request.path, "/") != 0) {
+        send_error_response(client_socket, NOT_FOUND_404);
+        return;
+    }
      *line_end = '\0';
      parse_request_line(ptr, &request);
      ptr = line_end + 2;
@@ -179,7 +244,7 @@ void print_http_request(const HTTPRequest *req) {
          ptr = line_end + 2;
      }
 
-     print_http_request(&request);
+    //  print_http_request(&request);
  
      // Prepare response using parsed request data
      char response[BUFFER_SIZE];
@@ -191,7 +256,7 @@ void print_http_request(const HTTPRequest *req) {
      }
  }
  
- int create_server_socket(void) {
+int create_server_socket(void) {
      int server_socket;
      struct sockaddr_in server_addr;
  
@@ -228,7 +293,22 @@ void print_http_request(const HTTPRequest *req) {
      return server_socket;
  }
  
- void sigchld_handler(int sig) {
+void sigchld_handler(int sig) {
      (void)sig; // Silence unused parameter warning
      while (waitpid(-1, NULL, WNOHANG) > 0);
  }
+ // New helper functions
+void send_error_response(int client_socket, const char *response) {
+    if (write(client_socket, response, strlen(response)) < 0) {
+        perror("write error response");
+    }
+}
+
+int method_is_supported(const char *method) {
+    for (int i = 0; i < SUPPORTED_METHOD_COUNT; i++) {
+        if (strcmp(method, SUPPORTED_METHODS[i]) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
