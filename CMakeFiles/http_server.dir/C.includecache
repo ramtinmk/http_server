@@ -7,6 +7,8 @@
 #IncludeRegexTransform: 
 
 /home/ramtinmk/http_server_C/http_server.c
+http_server.h
+/home/ramtinmk/http_server_C/http_server.h
 stdio.h
 -
 stdlib.h
@@ -24,5 +26,17 @@ arpa/inet.h
 sys/wait.h
 -
 signal.h
+-
+
+/home/ramtinmk/http_server_C/http_server.h
+stdio.h
+-
+stdlib.h
+-
+string.h
+-
+unistd.h
+-
+sys/socket.h
 -
 

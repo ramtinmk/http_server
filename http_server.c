@@ -5,6 +5,8 @@
  * and HTTP protocol handling. Not recommended for production use.
  */
 
+#include "http_server.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -14,53 +16,22 @@
 #include <arpa/inet.h>
 #include <sys/wait.h>
 #include <signal.h>
-//  #include <signal.h>
 
-#define PORT 8080
-#define BACKLOG 10
-#define BUFFER_SIZE 4096
-#define RESPONSE_TEMPLATE "HTTP/1.1 200 OK\r\n" \
-                          "Content-Type: text/html\r\n" \
-                          "Connection: keep-alive\r\n" \
-                          "Content-Length: %ld\r\n" \
-                          "\r\n" \
-                          "%s"
 
-#define ERROR_TEMPLATE(status, msg)                \
-    "HTTP/1.1 " status "\r\n"                      \
-    "Content-Type: text/html\r\n"                  \
-    "Connection: close\r\n\r\n"                    \
-    "<html><head><title>" status "</title></head>" \
-    "<body><h1>" status "</h1><p>" msg "</p></body></html>\r\n"
-
-typedef struct
-{
-    char method[8];
-    char path[1024];
-    char headers[32][2][256]; // [header_count][key/value]
-    int header_count;
-    int keep_alive; // Flag for keep-alive requested by client
-} HTTPRequest;
-
-// Function declarations
-void handle_client(int client_socket);
-int create_server_socket(void);
 void sigchld_handler(int sig);
 static void parse_request_line(char *line, HTTPRequest *req);
 static void parse_header_line(char *line, HTTPRequest *req);
 
 // Error responses
-static const char *BAD_REQUEST_400 = ERROR_TEMPLATE("400 Bad Request", "Malformed request syntax");
-static const char *NOT_FOUND_404 = ERROR_TEMPLATE("404 Not Found", "The requested resource was not found");
-static const char *NOT_IMPLEMENTED_501 = ERROR_TEMPLATE("501 Not Implemented", "HTTP method not supported");
+const char *BAD_REQUEST_400 = ERROR_TEMPLATE("400 Bad Request", "Malformed request syntax");
+const char *NOT_FOUND_404 = ERROR_TEMPLATE("404 Not Found", "The requested resource was not found");
+const char *NOT_IMPLEMENTED_501 = ERROR_TEMPLATE("501 Not Implemented", "HTTP method not supported");
 
 // Supported methods
 const char *SUPPORTED_METHODS[] = {"GET", "HEAD"};
 const int SUPPORTED_METHOD_COUNT = 2;
 
 // Helper functions
-void send_error_response(int client_socket, const char *response);
-int method_is_supported(const char *method);
 int validate_request(HTTPRequest *req);
 
 int main()
