@@ -45,7 +45,7 @@ make
    - Create error template HTML responses
    - Handle malformed requests gracefully
 
-3. **HTTP/1.1 Keep-Alive Support**  
+3. **HTTP/1.1 Keep-Alive Support**  ✅
    - Add `Connection: keep-alive` header
    - Implement request pipelining
    - Use content-length for proper message delimitation
