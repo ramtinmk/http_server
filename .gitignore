@@ -54,4 +54,5 @@ dkms.conf
 http_server
 
 test
-./CMakeFiles
+
+build/
