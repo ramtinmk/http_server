@@ -50,5 +50,25 @@ extern const char *BAD_REQUEST_400;
 extern const char *NOT_FOUND_404;
 extern const char *NOT_IMPLEMENTED_501;
 
+// Forward declaration
+typedef struct ThreadPool ThreadPool;
+typedef struct Task Task;
+
+struct Task {
+    int client_socket;
+    // ... any other task specific data ...
+    struct Task *next; // For linked list queue (or use array/deque)
+};
+
+struct ThreadPool {
+    int pool_size;
+    pthread_t *threads;        // Array of thread IDs
+    Task *task_queue_head;     // Head of the task queue (if linked list)
+    Task *task_queue_tail;     // Tail of the task queue (if linked list)
+    pthread_mutex_t queue_mutex; // Mutex for task queue access
+    pthread_cond_t queue_cond;   // Condition variable for task queue
+    int shutdown;              // Flag to indicate shutdown
+    // ... other thread pool management data ...
+};
 
 #endif // HTTP_SERVER_H

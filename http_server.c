@@ -16,11 +16,18 @@
 #include <arpa/inet.h>
 #include <sys/wait.h>
 #include <signal.h>
+#include <pthread.h>
 
 
 void sigchld_handler(int sig);
 static void parse_request_line(char *line, HTTPRequest *req);
 static void parse_header_line(char *line, HTTPRequest *req);
+
+ThreadPool *create_thread_pool(int pool_size);
+void destroy_thread_pool(ThreadPool *pool);
+void add_task_to_queue(ThreadPool *pool, int client_socket);
+Task *get_task_from_queue(ThreadPool *pool); // Or Task* get_task_from_queue(...) depending on task structure return
+void *worker_thread_function(void *arg);
 
 // Error responses
 const char *BAD_REQUEST_400 = ERROR_TEMPLATE("400 Bad Request", "Malformed request syntax");
@@ -34,12 +41,17 @@ const int SUPPORTED_METHOD_COUNT = 2;
 // Helper functions
 int validate_request(HTTPRequest *req);
 
+// --- Thread Pool Configuration ---
+#define THREAD_POOL_SIZE 4 
+
 int main()
 {
     int server_socket, client_socket;
     struct sockaddr_in client_addr;
     socklen_t addr_size = sizeof(client_addr);
 
+    // --- Remove SIGCHLD handler ---
+    /*
     // Set up SIGCHLD handler to prevent zombie processes
     struct sigaction sa;
     sa.sa_handler = sigchld_handler;
@@ -50,6 +62,16 @@ int main()
         perror("sigaction");
         exit(EXIT_FAILURE);
     }
+    */
+
+    // --- Initialize Thread Pool ---
+    ThreadPool *thread_pool = create_thread_pool(THREAD_POOL_SIZE);
+    if (thread_pool == NULL) {
+        fprintf(stderr, "Failed to create thread pool\n");
+        exit(EXIT_FAILURE);
+    }
+    printf("Thread pool initialized with %d threads.\n", THREAD_POOL_SIZE);
+
 
     // Create server socket
     server_socket = create_server_socket();
@@ -65,14 +87,23 @@ int main()
             continue;
         }
 
-        // Fork child process to handle client
+        printf("Client connected: %s:%d\n",
+               inet_ntoa(client_addr.sin_addr),
+               ntohs(client_addr.sin_port));
+
+        // --- Submit task to thread pool instead of forking ---
+        add_task_to_queue(thread_pool, client_socket);
+
+
+        // --- Remove fork() child/parent process logic ---
+        /*
         pid_t pid = fork();
         if (pid == 0)
         { // Child process
             close(server_socket);
             printf("Client connected: %s:%d\n",
-                   inet_ntoa(client_addr.sin_addr),
-                   ntohs(client_addr.sin_port));
+                    inet_ntoa(client_addr.sin_addr),
+                    ntohs(client_addr.sin_port));
 
             handle_client(client_socket);
 
@@ -87,10 +118,175 @@ int main()
         {
             perror("fork");
         }
+        */
     }
 
     close(server_socket);
+
+    // --- Destroy Thread Pool before exiting ---
+    destroy_thread_pool(thread_pool);
+    printf("Thread pool destroyed.\n");
+
     return 0;
+}
+
+
+// --- Implement Thread Pool Functions ---
+
+ThreadPool *create_thread_pool(int pool_size) {
+    if (pool_size <= 0) {
+        fprintf(stderr, "Error: Pool size must be greater than 0\n");
+        return NULL;
+    }
+
+    ThreadPool *pool = malloc(sizeof(ThreadPool));
+    if (!pool) {
+        perror("Failed to allocate thread pool");
+        return NULL;
+    }
+
+    pool->pool_size = pool_size;
+    pool->threads = malloc(sizeof(pthread_t) * pool_size);
+    if (!pool->threads) {
+        perror("Failed to allocate thread array");
+        free(pool);
+        return NULL;
+    }
+
+    pool->task_queue_head = NULL;
+    pool->task_queue_tail = NULL;
+    if (pthread_mutex_init(&pool->queue_mutex, NULL) != 0) {
+        perror("Mutex initialization failed");
+        free(pool->threads);
+        free(pool);
+        return NULL;
+    }
+    if (pthread_cond_init(&pool->queue_cond, NULL) != 0) {
+        perror("Condition variable initialization failed");
+        pthread_mutex_destroy(&pool->queue_mutex);
+        free(pool->threads);
+        free(pool);
+        return NULL;
+    }
+    pool->shutdown = 0;
+
+    for (int i = 0; i < pool_size; i++) {
+        if (pthread_create(&pool->threads[i], NULL, worker_thread_function, pool) != 0) {
+            perror("Failed to create worker thread");
+            // In a real-world scenario, you'd want to handle thread creation failure more gracefully,
+            // potentially destroying already created threads and pool resources.
+            destroy_thread_pool(pool); // Attempt to cleanup partially created pool
+            return NULL;
+        }
+    }
+
+    return pool;
+}
+
+void destroy_thread_pool(ThreadPool *pool) {
+    if (!pool) return;
+
+    pthread_mutex_lock(&pool->queue_mutex);
+    pool->shutdown = 1; // Set shutdown flag
+    pthread_cond_broadcast(&pool->queue_cond); // Wake up all worker threads
+    pthread_mutex_unlock(&pool->queue_mutex);
+
+    for (int i = 0; i < pool->pool_size; i++) {
+        if (pthread_join(pool->threads[i], NULL) != 0) {
+            perror("Failed to join worker thread");
+        }
+    }
+
+    pthread_mutex_destroy(&pool->queue_mutex);
+    pthread_cond_destroy(&pool->queue_cond);
+
+    // Free task queue (important to free any remaining tasks if queue wasn't fully processed)
+    Task *current_task = pool->task_queue_head;
+    while (current_task != NULL) {
+        Task *next_task = current_task->next;
+        free(current_task);
+        current_task = next_task;
+    }
+
+    free(pool->threads);
+    free(pool);
+}
+
+void add_task_to_queue(ThreadPool *pool, int client_socket) {
+    if (!pool) return;
+
+    Task *new_task = malloc(sizeof(Task));
+    if (!new_task) {
+        perror("Failed to allocate task");
+        close(client_socket); // Important: close socket if task allocation fails
+        return;
+    }
+    new_task->client_socket = client_socket;
+    new_task->next = NULL;
+
+    pthread_mutex_lock(&pool->queue_mutex);
+    if (pool->task_queue_tail == NULL) {
+        pool->task_queue_head = new_task;
+        pool->task_queue_tail = new_task;
+    } else {
+        pool->task_queue_tail->next = new_task;
+        pool->task_queue_tail = new_task;
+    }
+
+    pthread_cond_signal(&pool->queue_cond); // Signal a worker thread that a task is available
+    pthread_mutex_unlock(&pool->queue_mutex);
+}
+
+Task *get_task_from_queue(ThreadPool *pool) {
+    if (!pool) return NULL;
+
+    pthread_mutex_lock(&pool->queue_mutex);
+
+    // Wait while queue is empty and server is not shutting down
+    while (pool->task_queue_head == NULL && !pool->shutdown) {
+        pthread_cond_wait(&pool->queue_cond, &pool->queue_mutex);
+    }
+
+    if (pool->shutdown && pool->task_queue_head == NULL) {
+        pthread_mutex_unlock(&pool->queue_mutex);
+        return NULL; // Signal for thread to exit
+    }
+
+    Task *task = pool->task_queue_head;
+    if (task != NULL) {
+        pool->task_queue_head = task->next;
+        if (pool->task_queue_head == NULL) {
+            pool->task_queue_tail = NULL; // Queue became empty
+        }
+    }
+
+    pthread_mutex_unlock(&pool->queue_mutex);
+    return task;
+}
+
+void *worker_thread_function(void *arg) {
+    ThreadPool *pool = (ThreadPool *)arg;
+
+    while (1) {
+        Task *task = get_task_from_queue(pool);
+        if (task == NULL) {
+            // Null task means shutdown signal, thread should exit
+            break;
+        }
+
+        int client_socket = task->client_socket;
+        free(task); // Free task structure after getting client socket
+
+        handle_client(client_socket); // Process the client request
+
+        close(client_socket); // Close client socket after handling
+
+        // Example of optional delay (for demonstration purposes only, remove in production)
+        // sleep(1);
+    }
+
+    pthread_exit(NULL);
+    return NULL; // Never reached, but good practice to include
 }
 
 static void parse_request_line(char *line, HTTPRequest *req)

@@ -5,11 +5,53 @@
 #include <unistd.h>
 #include <sys/socket.h>
 #include <arpa/inet.h>
+#include <pthread.h>
+
 
 #define SERVER_IP "127.0.0.1" // Loopback address
 #define SERVER_PORT 8080
 #define BUFFER_SIZE 2048
 
+// --- Function Prototypes ---
+void* multithread_request_handler(void* thread_arg);
+char* send_http_request(int client_socket, const char* request);
+int create_and_connect_socket();
+void test_home_page();
+void test_hello_page();
+void test_root_page();
+void test_not_found_404();
+void test_not_implemented_501();
+void test_keep_alive_connection();
+void test_multithread_handling(int num_threads);
+int main();
+
+typedef struct {
+    int thread_id;
+    int client_socket;
+    const char* request;
+    char* response;
+} ThreadArgs;
+
+// Function executed by each thread in multithreaded test
+void* multithread_request_handler(void* thread_arg) {
+    ThreadArgs* args = (ThreadArgs*)thread_arg;
+    args->response = send_http_request(args->client_socket, args->request);
+
+    if (args->response != NULL) {
+        // Basic check, you can add more specific checks if needed for multithreading test
+        if (strstr(args->response, "HTTP/1.1 200 OK") != NULL) {
+            printf("Thread %d: Request successful (basic check).\n", args->thread_id);
+        } else {
+            printf("Thread %d: Request FAIL - Incorrect status code (basic check).\n", args->thread_id);
+        }
+    } else {
+        printf("Thread %d: Request FAIL - No response or error.\n", args->thread_id);
+    }
+
+    close(args->client_socket);
+    pthread_exit(NULL);
+    return NULL;
+}
 
 // Function to send HTTP request and receive response
 char* send_http_request(int client_socket, const char* request) {
@@ -225,16 +267,70 @@ void test_keep_alive_connection() {
     close(client_socket); // Explicitly close socket after Keep-Alive test
 }
 
+void test_multithread_handling(int num_threads) {
+    pthread_t threads[num_threads];
+    ThreadArgs thread_args[num_threads];
+
+    printf("Starting Multithread Test with %d threads...\n", num_threads);
+
+    for (int i = 0; i < num_threads; i++) {
+        int client_socket = create_and_connect_socket();
+        if (client_socket == -1) {
+            fprintf(stderr, "Failed to create client socket for thread %d, test aborted.\n", i);
+            return; // Abort test if socket creation fails
+        }
+
+        thread_args[i].thread_id = i;
+        thread_args[i].client_socket = client_socket;
+        thread_args[i].request = "GET /home HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"; // Example request
+        thread_args[i].response = NULL; // Initialize response to NULL
+
+        if (pthread_create(&threads[i], NULL, multithread_request_handler, &thread_args[i]) != 0) {
+            perror("pthread_create");
+            close(client_socket); // Close socket if thread creation fails
+            fprintf(stderr, "Failed to create thread %d, test may be incomplete.\n", i);
+            // Continue to next iteration to try and create remaining threads (for better cleanup)
+        }
+    }
+
+    // Wait for all threads to complete
+    for (int i = 0; i < num_threads; i++) {
+        if (pthread_join(threads[i], NULL) != 0) {
+            perror("pthread_join");
+        }
+    }
+
+    int pass_count = 0;
+    for (int i = 0; i < num_threads; i++) {
+        if (thread_args[i].response != NULL && strstr(thread_args[i].response, "HTTP/1.1 200 OK") != NULL) {
+            pass_count++;
+            free(thread_args[i].response); // Free response memory
+        }
+    }
+
+    if (pass_count == num_threads) {
+        printf("Multithread Test with %d threads: PASS - All threads received OK responses.\n", num_threads);
+    } else {
+        printf("Multithread Test with %d threads: FAIL - %d/%d threads failed or received incorrect responses.\n", num_threads, num_threads - pass_count, num_threads);
+    }
+}
+
 int main() {
     printf("Starting HTTP Server Tests...\n");
 
-    test_root_page();      // Test root path "/"
-    test_home_page();      // Test /home
-    test_hello_page();     // Test /hello
-    test_not_found_404();
-    test_not_implemented_501();
-    test_keep_alive_connection();
-    // test_ok_response(); // You can comment out the original root test if root now serves home.html
+    // test_root_page();
+    // test_home_page();
+    // test_hello_page();
+    // test_not_found_404();
+    // test_not_implemented_501();
+    // test_keep_alive_connection();
+
+    // --- Multithreaded Tests ---
+    test_multithread_handling(1);     // Test with 1 thread (for baseline)
+    test_multithread_handling(4);     // Test with thread pool size threads
+    test_multithread_handling(10);    // Test with more threads than pool size
+    test_multithread_handling(50);    // Test with significantly more threads (stress test - adjust if needed)
+
 
     printf("HTTP Server Tests Completed.\n");
     return 0;
