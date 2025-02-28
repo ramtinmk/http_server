@@ -42,7 +42,7 @@ const int SUPPORTED_METHOD_COUNT = 2;
 int validate_request(HTTPRequest *req);
 
 // --- Thread Pool Configuration ---
-#define THREAD_POOL_SIZE 10
+#define THREAD_POOL_SIZE 16
 
 int main()
 {

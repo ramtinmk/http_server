@@ -11,7 +11,7 @@
 // --- Configuration and Constants ---
 #define PORT 8080
 #define BACKLOG 10
-#define BUFFER_SIZE 4096
+#define BUFFER_SIZE 8092
 
 // --- Response Templates ---
 #define RESPONSE_TEMPLATE \
