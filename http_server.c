@@ -17,7 +17,7 @@
 #include <sys/wait.h>
 #include <signal.h>
 #include <pthread.h>
-
+#include <fcntl.h>        // For open() flags like O_RDONLY
 
 void sigchld_handler(int sig);
 static void parse_request_line(char *line, HTTPRequest *req);
@@ -413,9 +413,8 @@ void handle_client(int client_socket)
         }
 
         char filepath[1024];
-        char response_body[BUFFER_SIZE];
         long file_size = 0;
-        FILE *html_file = NULL;
+        int file_fd = -1; // Initialize to -1 for error checking
 
         if (strcmp(request.path, "/home") == 0)
         {
@@ -436,54 +435,50 @@ void handle_client(int client_socket)
             continue;                                   // Continue to next request in keep-alive, or close if client requested
         }
 
-        html_file = fopen(filepath, "r");
-        if (html_file == NULL)
-        {
-            perror("fopen");
+        file_fd = open(filepath, O_RDONLY); // Use open() here
+        if (file_fd == -1) {
+            perror("open");
             send_error_response(client_socket, NOT_FOUND_404);
-            keep_alive_connection = request.keep_alive; // Honor client's keep-alive preference for error responses
-            continue;                                   // Continue to next request in keep-alive, or close if client requested
+            keep_alive_connection = request.keep_alive;
+            continue;
         }
 
-        // Get file size
-        fseek(html_file, 0, SEEK_END);
-        file_size = ftell(html_file);
-        fseek(html_file, 0, SEEK_SET);
-
-        if (file_size > sizeof(response_body) - 1)
-        {
-            fprintf(stderr, "File too large to fit in buffer: %s\n", filepath);
-            fclose(html_file);
+        // Get file size (using file descriptor now if needed, or reuse your existing file_size logic)
+        struct stat file_stat;
+        if (fstat(file_fd, &file_stat) == -1) { // Get file stats from fd
+            perror("fstat");
+            close(file_fd); // Close fd on error
             send_error_response(client_socket, NOT_FOUND_404);
-            keep_alive_connection = request.keep_alive; // Honor client's keep-alive preference for error responses
-            continue;                                   // Continue to next request in keep-alive, or close if client requested
+            keep_alive_connection = request.keep_alive;
+            continue;
+        }
+        file_size = file_stat.st_size;
+
+        char response_headers[BUFFER_SIZE];
+        snprintf(response_headers, BUFFER_SIZE,
+                 "HTTP/1.1 200 OK\r\n"
+                 "Content-Type: text/html\r\n"
+                 "Connection: keep-alive\r\n"
+                 "Content-Length: %ld\r\n"
+                 "\r\n", file_size);
+
+        if (write(client_socket, response_headers, strlen(response_headers)) < 0) {
+            perror("write headers");
+            close(file_fd);
+            break;
         }
 
-        // Read file content
-        size_t bytes_read_from_file = fread(response_body, 1, file_size, html_file);
-        if (bytes_read_from_file != file_size)
-        {
-            perror("fread");
-            fclose(html_file);
-            send_error_response(client_socket, NOT_FOUND_404);
-            keep_alive_connection = request.keep_alive; // Honor client's keep-alive preference for error responses
-            continue;                                   // Continue to next request in keep-alive, or close if client requested
+        off_t offset = 0;
+        ssize_t sent_bytes = sendfile(client_socket, file_fd, &offset, file_size);
+        if (sent_bytes == -1) {
+            perror("sendfile");
+            close(file_fd);
+            break;
         }
-        response_body[bytes_read_from_file] = '\0'; // Null terminate
-        fclose(html_file);
+        close(file_fd); // Close file descriptor
 
-        char response[BUFFER_SIZE];
-        snprintf(response, BUFFER_SIZE, RESPONSE_TEMPLATE, file_size, response_body);
-
-        // Send response
-        if (write(client_socket, response, strlen(response)) < 0)
-        {
-            perror("write");
-            break; // Write error, close keep-alive loop
-        }
-        if (!request.keep_alive)
-        {                              // Check after sending response
-            keep_alive_connection = 0; // Stop keep-alive after sending response if client requested close
+        if (!request.keep_alive) {
+            keep_alive_connection = 0;
         }
     }
     printf("Keep-alive connection closed for client socket %d\n", client_socket);
