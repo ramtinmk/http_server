@@ -160,10 +160,15 @@ void test_hello_page() {
 }
 
 
-void test_root_page() { // Testing root path, might serve home.html
+void test_root_page(int test_number) { // Testing root path, might serve home.html
+    int count = 0;
+    for (int i=0;i<test_number;i++)
+    {
     int client_socket = create_and_connect_socket();
+    
     if (client_socket == -1) return;
 
+    
     char request[] = "GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
     char *response = send_http_request(client_socket, request);
 
@@ -174,12 +179,20 @@ void test_root_page() { // Testing root path, might serve home.html
             printf("Test / (root) Page: PASS\n");
         } else {
             printf("Test / (root) Page: FAIL - Incorrect content or status\n");
+            count++;
         }
         free(response);
     } else {
         printf("Test / (root) Page: FAIL - No response or error\n");
+        count++;
     }
     close(client_socket);
+
+}
+    
+
+    
+    printf("%d number failed",count);
 }
 
 
@@ -318,18 +331,18 @@ void test_multithread_handling(int num_threads) {
 int main() {
     printf("Starting HTTP Server Tests...\n");
 
-    // test_root_page();
+    test_root_page(100);
     // test_home_page();
     // test_hello_page();
     // test_not_found_404();
     // test_not_implemented_501();
     // test_keep_alive_connection();
 
-    // --- Multithreaded Tests ---
-    test_multithread_handling(1);     // Test with 1 thread (for baseline)
-    test_multithread_handling(4);     // Test with thread pool size threads
-    test_multithread_handling(10);    // Test with more threads than pool size
-    test_multithread_handling(50);    // Test with significantly more threads (stress test - adjust if needed)
+    // // --- Multithreaded Tests ---
+    // test_multithread_handling(1);     // Test with 1 thread (for baseline)
+    // test_multithread_handling(4);     // Test with thread pool size threads
+    // test_multithread_handling(10);    // Test with more threads than pool size
+    // test_multithread_handling(50);    // Test with significantly more threads (stress test - adjust if needed)
 
 
     printf("HTTP Server Tests Completed.\n");

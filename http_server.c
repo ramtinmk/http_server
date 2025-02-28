@@ -42,7 +42,7 @@ const int SUPPORTED_METHOD_COUNT = 2;
 int validate_request(HTTPRequest *req);
 
 // --- Thread Pool Configuration ---
-#define THREAD_POOL_SIZE 4 
+#define THREAD_POOL_SIZE 10
 
 int main()
 {
@@ -291,6 +291,7 @@ void *worker_thread_function(void *arg) {
 
 static void parse_request_line(char *line, HTTPRequest *req)
 {
+    if (!line) return; // Check for NULL line
     char *method_end = strchr(line, ' ');
     if (!method_end)
         return;
@@ -309,6 +310,7 @@ static void parse_request_line(char *line, HTTPRequest *req)
 
 static void parse_header_line(char *line, HTTPRequest *req)
 {
+    if (!line) return; // Check for NULL line
     if (req->header_count >= 32)
         return; // Max headers reached
     char *colon = strchr(line, ':');
@@ -341,37 +343,45 @@ void print_http_request(const HTTPRequest *req)
 }
 void handle_client(int client_socket)
 {
-    char buffer[BUFFER_SIZE];
+    RingBuffer *request_rb = ring_buffer_create(BUFFER_SIZE);
+    if (!request_rb) {
+        perror("Failed to create request ring buffer");
+        return; // Or handle error as appropriate
+    }
+    RingBuffer *response_rb = ring_buffer_create(BUFFER_SIZE); // You might use this later for more complex responses
+    if (!response_rb) {
+        perror("Failed to create response ring buffer");
+        ring_buffer_free(request_rb);
+        return; // Or handle error as appropriate
+    }
     ssize_t bytes_read;
     int keep_alive_connection = 1; // Start with keep-alive enabled
+    char line_buffer[BUFFER_SIZE]; // Temporary buffer for reading lines
 
     while (keep_alive_connection)
     {
         HTTPRequest request = {0};
         request.keep_alive = 1; // Default to keep-alive unless client requests close
 
-        bytes_read = read(client_socket, buffer, BUFFER_SIZE - 1);
+        char temp_buffer[BUFFER_SIZE]; // Temporary buffer for reading from socket
+        bytes_read = read(client_socket, temp_buffer, BUFFER_SIZE); // Read into temp buffer
+        if (bytes_read > 0) {
+            ring_buffer_write(request_rb, temp_buffer, bytes_read); // Write to ring buffer
+        }
         if (bytes_read <= 0)
         {
             if (bytes_read < 0)
                 perror("read"); // Log read error if it occurred
-            break;              // Connection closed or error, exit keep-alive loop
+            break;                  // Connection closed or error, exit keep-alive loop
         }
-        buffer[bytes_read] = '\0';
 
-        char *ptr = buffer;
-        char *end = buffer + bytes_read;
-
-        // Parse request line
-        char *line_end = strstr(ptr, "\r\n");
-        if (!line_end)
-        {
+        // Parse request line from ring buffer
+        char *request_line = ring_buffer_readline(request_rb, line_buffer, sizeof(line_buffer));
+        if (!request_line) {
             send_error_response(client_socket, BAD_REQUEST_400);
-            break; // Bad request, close keep-alive loop for simplicity in this example
+            break; // Bad request, close keep-alive loop
         }
-        *line_end = '\0';
-        parse_request_line(ptr, &request);
-        ptr = line_end + 2;
+        parse_request_line(request_line, &request);
 
         // Validate method
         if (!method_is_supported(request.method))
@@ -380,22 +390,19 @@ void handle_client(int client_socket)
             break; // Unsupported method, close keep-alive loop
         }
 
-        // Parse headers
-        while (ptr < end)
+        // Parse headers from ring buffer
+        while (1)
         {
-            line_end = strstr(ptr, "\r\n");
-            if (!line_end)
-                break;
-            *line_end = '\0';
-
-            if (ptr == line_end)
-            { // End of headers
-                ptr += 2;
+            char *header_line = ring_buffer_readline(request_rb, line_buffer, sizeof(line_buffer));
+            if (!header_line) {
+                // No more complete lines in buffer, or error
                 break;
             }
-
-            parse_header_line(ptr, &request);
-            ptr = line_end + 2;
+            if (header_line[0] == '\0') {
+                // Empty line indicates end of headers
+                break;
+            }
+            parse_header_line(header_line, &request);
         }
 
         // Check for Connection: close header
@@ -405,7 +412,7 @@ void handle_client(int client_socket)
             {
                 if (strcasecmp(request.headers[i][1], "close") == 0)
                 {
-                    request.keep_alive = 0;    // Client explicitly requested to close
+                    request.keep_alive = 0;       // Client explicitly requested to close
                     keep_alive_connection = 0; // Signal to close keep-alive loop after this response
                 }
                 break; // Found Connection header, no need to check further
@@ -432,7 +439,7 @@ void handle_client(int client_socket)
         {
             send_error_response(client_socket, NOT_FOUND_404);
             keep_alive_connection = request.keep_alive; // Honor client's keep-alive preference for error responses
-            continue;                                   // Continue to next request in keep-alive, or close if client requested
+            continue;                                     // Continue to next request in keep-alive, or close if client requested
         }
 
         file_fd = open(filepath, O_RDONLY); // Use open() here
@@ -482,6 +489,8 @@ void handle_client(int client_socket)
         }
     }
     printf("Keep-alive connection closed for client socket %d\n", client_socket);
+    ring_buffer_free(request_rb);
+    ring_buffer_free(response_rb);
 }
 
 int create_server_socket(void)
@@ -551,4 +560,157 @@ int method_is_supported(const char *method)
         }
     }
     return 0;
+}
+
+
+// --- Ring Buffer Function Implementations ---
+
+RingBuffer *ring_buffer_create(size_t capacity) {
+    RingBuffer *rb = malloc(sizeof(RingBuffer));
+    if (!rb) return NULL;
+    rb->buffer = malloc(capacity);
+    if (!rb->buffer) {
+        free(rb);
+        return NULL;
+    }
+    rb->capacity = capacity;
+    ring_buffer_reset(rb); // Initialize head, tail, size
+    return rb;
+}
+
+void ring_buffer_free(RingBuffer *rb) {
+    if (!rb) return;
+    free(rb->buffer);
+    free(rb);
+}
+
+void ring_buffer_reset(RingBuffer *rb) {
+    if (!rb) return;
+    rb->head = 0;
+    rb->tail = 0;
+    rb->size = 0;
+}
+
+size_t ring_buffer_get_size(const RingBuffer *rb) {
+    return rb ? rb->size : 0;
+}
+
+size_t ring_buffer_get_capacity(const RingBuffer *rb) {
+    return rb ? rb->capacity : 0;
+}
+int ring_buffer_is_empty(const RingBuffer *rb) {
+    return rb ? rb->size == 0 : 1;
+}
+
+int ring_buffer_is_full(const RingBuffer *rb) {
+    return rb ? rb->size == rb->capacity : 0;
+}
+
+
+size_t ring_buffer_write(RingBuffer *rb, const char *data, size_t data_len) {
+    if (!rb || !data || data_len == 0 || ring_buffer_is_full(rb)) return 0;
+
+    size_t bytes_to_write = data_len;
+    if (bytes_to_write > rb->capacity - rb->size) { // Ensure we don't overflow
+        bytes_to_write = rb->capacity - rb->size;
+    }
+    if (bytes_to_write == 0) return 0; // Buffer is full
+
+    size_t available_space_to_end = rb->capacity - rb->head;
+
+    if (bytes_to_write <= available_space_to_end) {
+        memcpy(rb->buffer + rb->head, data, bytes_to_write);
+        rb->head += bytes_to_write;
+        if (rb->head == rb->capacity) { // Wrap around if head reaches end
+            rb->head = 0;
+        }
+    } else { // Data wraps around
+        memcpy(rb->buffer + rb->head, data, available_space_to_end);
+        memcpy(rb->buffer, data + available_space_to_end, bytes_to_write - available_space_to_end);
+        rb->head = bytes_to_write - available_space_to_end;
+    }
+    rb->size += bytes_to_write;
+    return bytes_to_write;
+}
+
+
+size_t ring_buffer_read(RingBuffer *rb, char *dest, size_t dest_len) {
+    if (!rb || !dest || dest_len == 0 || ring_buffer_is_empty(rb)) return 0;
+
+    size_t bytes_to_read = dest_len;
+    if (bytes_to_read > rb->size) {
+        bytes_to_read = rb->size; // Don't read more than what's in buffer
+    }
+    if (bytes_to_read == 0) return 0;
+
+    size_t available_data_to_end = rb->capacity - rb->tail;
+
+    if (bytes_to_read <= available_data_to_end) {
+        memcpy(dest, rb->buffer + rb->tail, bytes_to_read);
+        rb->tail += bytes_to_read;
+        if (rb->tail == rb->capacity) { // Wrap around if tail reaches end
+            rb->tail = 0;
+        }
+    } else { // Data wraps around
+        memcpy(dest, rb->buffer + rb->tail, available_data_to_end);
+        memcpy(dest + available_data_to_end, rb->buffer, bytes_to_read - available_data_to_end);
+        rb->tail = bytes_to_read - available_data_to_end;
+    }
+    rb->size -= bytes_to_read;
+    return bytes_to_read;
+}
+
+size_t ring_buffer_peek(const RingBuffer *rb, char *dest, size_t dest_len) {
+    if (!rb || !dest || dest_len == 0 || ring_buffer_is_empty(rb)) return 0;
+
+    size_t bytes_to_peek = dest_len;
+    if (bytes_to_peek > rb->size) {
+        bytes_to_peek = rb->size;
+    }
+    if (bytes_to_peek == 0) return 0;
+
+    size_t available_data_to_end = rb->capacity - rb->tail;
+    size_t original_tail = rb->tail; // Keep original tail for peek operation
+
+    if (bytes_to_peek <= available_data_to_end) {
+        memcpy(dest, rb->buffer + rb->tail, bytes_to_peek);
+        // Do not advance tail for peek operation
+    } else {
+        memcpy(dest, rb->buffer + rb->tail, available_data_to_end);
+        memcpy(dest + available_data_to_end, rb->buffer, bytes_to_peek - available_data_to_end);
+    }
+
+    return bytes_to_peek; // Return how many bytes we peeked
+}
+
+char *ring_buffer_readline(RingBuffer *rb, char *line_buffer, size_t line_buffer_size) {
+    size_t bytes_in_rb = ring_buffer_get_size(rb);
+    if (bytes_in_rb == 0) return NULL;
+
+    size_t bytes_to_newline = 0;
+    size_t peeked_bytes;
+    char peek_buffer[BUFFER_SIZE]; // Temp buffer for peeking
+
+    while (bytes_to_newline < bytes_in_rb) {
+        peeked_bytes = ring_buffer_peek(rb, peek_buffer, bytes_to_newline + 1);
+        if (peeked_bytes <= bytes_to_newline) break; // Should not happen, but safety check
+        if (peek_buffer[bytes_to_newline] == '\n') break; // Found newline
+        bytes_to_newline++;
+    }
+
+    if (bytes_to_newline >= bytes_in_rb) return NULL; // No newline found in buffer yet
+
+    size_t line_len = bytes_to_newline; // Length excluding newline
+    if (line_len >= line_buffer_size) line_len = line_buffer_size - 1; // Prevent overflow
+    ring_buffer_read(rb, line_buffer, line_len); // Actually read the line
+    line_buffer[line_len] = '\0';
+
+    // Consume the newline character(s) - assuming \r\n
+    char newline_chars[2];
+    ring_buffer_read(rb, newline_chars, 2); // Try to read \r\n
+    if (newline_chars[0] != '\r' || newline_chars[1] != '\n') {
+        // Handle error if newline sequence is not as expected, or just consume what we can.
+    }
+
+    return line_buffer;
 }
