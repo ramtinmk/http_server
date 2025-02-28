@@ -66,7 +66,7 @@ make
 ---
 
 ### **Phase 3: Performance Optimization**
-6. **Zero-Copy File Transfer**  
+6. **Zero-Copy File Transfer**  ✅
    Implement using `sendfile()` system call:
    ```c
    int file_fd = open(filename, O_RDONLY);
