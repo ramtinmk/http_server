@@ -18,6 +18,8 @@
 #include <signal.h>
 #include <pthread.h>
 #include <fcntl.h>        // For open() flags like O_RDONLY
+#include <sys/time.h> // Required for struct timeval in select
+#include <errno.h> // For errno
 
 void sigchld_handler(int sig);
 static void parse_request_line(char *line, HTTPRequest *req);
@@ -43,6 +45,8 @@ int validate_request(HTTPRequest *req);
 
 // --- Thread Pool Configuration ---
 #define THREAD_POOL_SIZE 16
+
+#define IDLE_TIMEOUT_SEC 60 
 
 int main()
 {
@@ -364,17 +368,42 @@ void handle_client(int client_socket)
         request.keep_alive = 1; // Default to keep-alive unless client requests close
 
         char temp_buffer[BUFFER_SIZE]; // Temporary buffer for reading from socket
-        bytes_read = read(client_socket, temp_buffer, BUFFER_SIZE); // Read into temp buffer
-        if (bytes_read > 0) {
-            ring_buffer_write(request_rb, temp_buffer, bytes_read); // Write to ring buffer
-        }
-        if (bytes_read <= 0)
-        {
-            if (bytes_read < 0)
-                perror("read"); // Log read error if it occurred
-            break;                  // Connection closed or error, exit keep-alive loop
-        }
 
+         // --- Implement Timeout using select() ---
+        struct timeval tv;
+        tv.tv_sec = IDLE_TIMEOUT_SEC; // Set timeout seconds
+        tv.tv_usec = 0;          // Set timeout microseconds (0 for simplicity)
+
+        fd_set readfds;
+        FD_ZERO(&readfds);
+        FD_SET(client_socket, &readfds); // Watch client socket for readability
+
+        int select_result = select(client_socket + 1, &readfds, NULL, NULL, &tv); // Wait for socket to be ready to read, or timeout
+
+
+        if (select_result == -1) {
+            perror("select"); // Log select error
+            fprintf(stderr, "handle_client: select() error on socket %d, closing connection\n", client_socket);
+            break; // Select error, close connection
+        } else if (select_result == 0) {
+            // Timeout occurred
+            fprintf(stderr, "handle_client: Timeout on socket %d after %d seconds of inactivity. Closing connection.\n", client_socket, IDLE_TIMEOUT_SEC);
+            break; // Timeout, close connection
+        } else {
+            // Socket is ready to read (select_result > 0) - proceed with read()
+            bytes_read = read(client_socket, temp_buffer, BUFFER_SIZE);
+            fprintf(stderr, "handle_client: read() returned %zd bytes from socket %d\n", bytes_read, client_socket);
+            if (bytes_read > 0) {
+                ring_buffer_write(request_rb, temp_buffer, bytes_read);
+                fprintf(stderr, "handle_client: Wrote %zd bytes to request ring buffer\n", bytes_read);
+            }
+            if (bytes_read <= 0)
+            {
+                if (bytes_read < 0)
+                    perror("read");
+                fprintf(stderr, "handle_client: read() returned <= 0, connection closed or error on socket %d, exiting keep-alive loop\n", client_socket);
+                break;
+            }
         // Parse request line from ring buffer
         char *request_line = ring_buffer_readline(request_rb, line_buffer, sizeof(line_buffer));
         if (!request_line) {
@@ -491,6 +520,7 @@ void handle_client(int client_socket)
     printf("Keep-alive connection closed for client socket %d\n", client_socket);
     ring_buffer_free(request_rb);
     ring_buffer_free(response_rb);
+    }
 }
 
 int create_server_socket(void)

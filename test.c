@@ -188,6 +188,8 @@ void test_root_page(int test_number) { // Testing root path, might serve home.ht
     }
     close(client_socket);
 
+    sleep(0.01);
+
 }
     
 
@@ -331,7 +333,7 @@ void test_multithread_handling(int num_threads) {
 int main() {
     printf("Starting HTTP Server Tests...\n");
 
-    test_root_page(100);
+    test_root_page(1000);
     // test_home_page();
     // test_hello_page();
     // test_not_found_404();
