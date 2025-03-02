@@ -22,14 +22,16 @@ void test_root_page();
 void test_not_found_404();
 void test_not_implemented_501();
 void test_keep_alive_connection();
-void test_multithread_handling(int num_threads);
+int test_multithread_handling(int num_threads);
 int main();
 
 typedef struct {
     int thread_id;
     int client_socket;
-    const char* request;
-    char* response;
+    const char *request;
+    char *response;
+    int requests_per_thread; // Number of requests this thread should send
+    int successful_requests; // Counter for successful requests in this thread
 } ThreadArgs;
 
 // Function executed by each thread in multithreaded test
@@ -141,7 +143,7 @@ void test_hello_page() {
     int client_socket = create_and_connect_socket();
     if (client_socket == -1) return;
 
-    char request[] = "GET /hello HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+    char request[] = "GET /hello HTTP/1.1\r\nHost: localhost\r\nConnection: keep-alive\r\n\r\n";
     char *response = send_http_request(client_socket, request);
 
     if (response != NULL) {
@@ -169,7 +171,7 @@ void test_root_page(int test_number) { // Testing root path, might serve home.ht
     if (client_socket == -1) return;
 
     
-    char request[] = "GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+    char request[] = "GET / HTTP/1.1\r\nHost: localhost\r\nConnection: keep-alive\r\n\r\n";
     char *response = send_http_request(client_socket, request);
 
     if (response != NULL) {
@@ -282,7 +284,7 @@ void test_keep_alive_connection() {
     close(client_socket); // Explicitly close socket after Keep-Alive test
 }
 
-void test_multithread_handling(int num_threads) {
+int test_multithread_handling(int num_threads) {
     pthread_t threads[num_threads];
     ThreadArgs thread_args[num_threads];
 
@@ -325,10 +327,13 @@ void test_multithread_handling(int num_threads) {
 
     if (pass_count == num_threads) {
         printf("Multithread Test with %d threads: PASS - All threads received OK responses.\n", num_threads);
+        return 1;
     } else {
         printf("Multithread Test with %d threads: FAIL - %d/%d threads failed or received incorrect responses.\n", num_threads, num_threads - pass_count, num_threads);
+        return 0;
     }
 }
+
 
 int main() {
     printf("Starting HTTP Server Tests...\n");
@@ -344,9 +349,12 @@ int main() {
     // test_multithread_handling(1);     // Test with 1 thread (for baseline)
     // test_multithread_handling(4);     // Test with thread pool size threads
     // test_multithread_handling(10);    // Test with more threads than pool size
-    // test_multithread_handling(50);    // Test with significantly more threads (stress test - adjust if needed)
+    int res = 0 ;
+    for (int i=0;i<1000;i++){
+     res+=test_multithread_handling(16);
 
-
+    }    // Test with significantly more threads (stress test - adjust if needed)
+    printf("%d",res);
     printf("HTTP Server Tests Completed.\n");
     return 0;
 }
