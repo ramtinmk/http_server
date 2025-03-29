@@ -1,0 +1,46 @@
+# Specify the Docker Compose file format version. Version 3 is widely used.
+# Or use the newer Compose Specification format (no 'version' top-level key)
+# version: '3.8' # Optional for newer Docker Compose versions
+
+services:
+  # Define the first service (container). You can name it anything logical.
+  http_server:
+    # Specify a name for the container instance created by Compose.
+    # If omitted, Compose generates one like projectname-servicename-1.
+    container_name: my_custom_http_server
+
+    # Instructions on how to build the image for this service.
+    build:
+      # The directory containing the Dockerfile and source code.
+      # '.' means the current directory (where docker-compose.yml is).
+      context: .
+      # Specifies the Dockerfile to use within the context directory.
+      dockerfile: Dockerfile # Assumes your Alpine Dockerfile is named 'Dockerfile'
+
+    # Port mapping: HOST:CONTAINER
+    # Maps port 8080 on your local machine (host) to port 8080 inside the container
+    # (where your application is listening, based on the EXPOSE in the Dockerfile).
+    ports:
+      - "8080:8080" # Format is "HOST_PORT:CONTAINER_PORT"
+
+    # Restart policy: Tells Docker what to do if the container exits.
+    # 'unless-stopped': Restarts the container unless it was manually stopped.
+    # Other options: 'no', 'on-failure[:max-retries]', 'always'
+    restart: unless-stopped
+
+    # (Optional) Define Networks - Compose creates a default one if omitted.
+    # networks:
+    #  - app_network
+
+    # (Optional) Define Volumes - If your app needed persistent storage.
+    # volumes:
+    #  - ./config:/app/config # Example: map host directory to container directory
+
+# (Optional) Define custom networks if needed
+# networks:
+#   app_network:
+#     driver: bridge
+
+# (Optional) Define named volumes if needed
+# volumes:
+#   db_data:
