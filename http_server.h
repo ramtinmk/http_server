@@ -7,6 +7,16 @@
 #include <string.h>
 #include <unistd.h>
 #include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <sys/wait.h>
+#include <signal.h>
+#include <pthread.h>
+#include <fcntl.h>    // For open() flags like O_RDONLY
+#include <sys/time.h> // Required for struct timeval in select
+#include <errno.h>    // For errno
+#include <sys/stat.h>   // Needed for struct stat and fstat
+#include <sys/sendfile.h> // Needed for sendfile
 
 // --- Configuration and Constants ---
 #define PORT 8080

@@ -294,7 +294,7 @@ int test_multithread_handling(int num_threads) {
         int client_socket = create_and_connect_socket();
         if (client_socket == -1) {
             fprintf(stderr, "Failed to create client socket for thread %d, test aborted.\n", i);
-            return; // Abort test if socket creation fails
+            return -1;
         }
 
         thread_args[i].thread_id = i;

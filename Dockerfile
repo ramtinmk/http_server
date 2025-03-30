@@ -8,6 +8,8 @@ RUN apk add --no-cache \
     build-base \
     cmake \
     pkgconfig
+RUN apk add --no-cache musl-dev
+RUN apk add --no-cache coreutils bash
 
 # Set the working directory
 WORKDIR /app
@@ -36,7 +38,7 @@ WORKDIR /app
 COPY --from=builder /app/build/http_server /usr/bin/http_server
 
 # (Optional) If you also need the 'test' executable in the final image:
-# COPY --from=builder /app/build/test /usr/bin/test
+COPY --from=builder /app/build/test /usr/bin/test
 
 # Add non-root user/group for security
 RUN addgroup -S appgroup && adduser -S appuser -G appgroup

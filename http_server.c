@@ -7,19 +7,7 @@
 
 #include "http_server.h"
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <unistd.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <sys/wait.h>
-#include <signal.h>
-#include <pthread.h>
-#include <fcntl.h>    // For open() flags like O_RDONLY
-#include <sys/time.h> // Required for struct timeval in select
-#include <errno.h>    // For errno
+
 
 void sigchld_handler(int sig);
 static void parse_request_line(char *line, HTTPRequest *req);
