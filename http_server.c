@@ -20,6 +20,9 @@
 #include <fcntl.h>    // For open() flags like O_RDONLY
 #include <sys/time.h> // Required for struct timeval in select
 #include <errno.h>    // For errno
+//changes:
+#include <sys/stat.h>  // For struct stat, fstat()
+#include <unistd.h>    // For fstat() and file operations
 
 void sigchld_handler(int sig);
 static void parse_request_line(char *line, HTTPRequest *req);
@@ -546,15 +549,18 @@ void handle_client(int client_socket)
                 break;
             }
 
-            off_t offset = 0;
-            ssize_t sent_bytes = sendfile(client_socket, file_fd, &offset, file_size);
-            if (sent_bytes == -1)
-            {
-                perror("sendfile");
-                close(file_fd);
-                break;
+            char buffer[4096];
+            ssize_t bytes_read;
+            lseek(file_fd, 0, SEEK_SET); // Ensure we read from the start
+            
+            while ((bytes_read = read(file_fd, buffer, sizeof(buffer))) > 0) {
+                if (write(client_socket, buffer, bytes_read) < 0) {
+                    perror("write");
+                    break;
+                }
             }
-            close(file_fd); // Close file descriptor
+            
+            close(file_fd);  // Close file descriptor
 
             if (!request.keep_alive)
             {
