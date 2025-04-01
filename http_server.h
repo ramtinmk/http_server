@@ -17,11 +17,14 @@
 #include <errno.h>    // For errno
 #include <sys/stat.h>   // Needed for struct stat and fstat
 #include <sys/sendfile.h> // Needed for sendfile
+#include <zlib.h>   // For gzip compression
+#include <string.h> // For strstr, strcasecmp
 
 // --- Configuration and Constants ---
 #define PORT 8080
 #define BACKLOG 10
 #define BUFFER_SIZE 8092
+#define ZLIB_CHUNK_SIZE 16384
 
 // --- Response Templates ---
 #define RESPONSE_TEMPLATE \
@@ -42,11 +45,12 @@
 
 // --- Data Structures ---
 typedef struct {
-    char method[8];
+    char method[16];
     char path[1024];
-    char headers[32][2][256]; // [header_count][key/value]
+    char headers[32][2][256]; // Header name, Header value
     int header_count;
     int keep_alive;
+    int accepts_gzip; // <-- Add this flag
 } HTTPRequest;
 
 // --- Function Prototypes (Interface) ---

@@ -334,11 +334,120 @@ int test_multithread_handling(int num_threads) {
     }
 }
 
+int test_multithread_gzip_handling(int num_threads) {
+    pthread_t threads[num_threads];
+    ThreadArgs thread_args[num_threads];
+
+    printf("Starting Multithread GZIP Test with %d threads...\n", num_threads);
+
+    // --- Request that asks for gzip encoding ---
+    const char *gzip_request = "GET /home HTTP/1.1\r\n"
+                               "Host: localhost\r\n"
+                               "Accept-Encoding: gzip\r\n" // Ask for gzip
+                               "Connection: close\r\n"
+                               "\r\n";
+
+    int threads_created = 0; // Keep track of successfully created threads for joining
+    for (int i = 0; i < num_threads; i++) {
+        int client_socket = create_and_connect_socket();
+        if (client_socket == -1) {
+            fprintf(stderr, "GZIP TEST: Failed to create client socket for thread %d, test aborted.\n", i);
+            // Cleanup previously created threads before returning
+            for (int j = 0; j < threads_created; j++) {
+                 if (thread_args[j].client_socket != -1) { // Check if socket was valid before thread creation attempt
+                    // Join might be problematic if thread creation failed, but attempt cleanup
+                     pthread_join(threads[j], NULL); // Ignore join error here
+                     // Ensure socket associated with successfully created threads is closed within handler or join loop
+                 }
+            }
+            return -1; // Indicate test failure due to setup issue
+        }
+
+        thread_args[i].thread_id = i;
+        thread_args[i].client_socket = client_socket; // Store socket before creating thread
+        thread_args[i].request = gzip_request;      // Use the gzip request
+        thread_args[i].response = NULL;               // Initialize response to NULL
+
+        if (pthread_create(&threads[i], NULL, multithread_request_handler, &thread_args[i]) != 0) {
+            perror("pthread_create (GZIP TEST)");
+            close(client_socket); // Close socket if thread creation fails
+            thread_args[i].client_socket = -1; // Mark socket as closed/invalid for this arg
+            fprintf(stderr, "GZIP TEST: Failed to create thread %d, test may be incomplete.\n", i);
+            // Do not increment threads_created
+            // Continue to allow joining threads that *were* created
+        } else {
+            threads_created++; // Increment only if thread creation succeeded
+        }
+    }
+
+    // Wait for all successfully created threads to complete
+    printf("GZIP TEST: Waiting for %d threads to complete...\n", threads_created);
+    for (int i = 0; i < threads_created; i++) {
+         // Find the correct thread/args index. This assumes indices match,
+         // which might be wrong if creation failed mid-loop. A safer approach
+         // might be needed if failures are common or order matters significantly.
+         // For simplicity, assume the first 'threads_created' elements correspond.
+        if (thread_args[i].client_socket != -1) { // Only join threads we think were successfully created
+             if (pthread_join(threads[i], NULL) != 0) {
+                perror("pthread_join (GZIP TEST)");
+            }
+        }
+        // The socket should be closed by the handler or here after join if handler doesn't
+         if (thread_args[i].client_socket != -1) {
+             // close(thread_args[i].client_socket); // Ensure socket is closed (might be redundant if handler closes)
+             // The provided handler likely closes it, so commenting out here.
+         }
+    }
+    printf("GZIP TEST: All threads joined.\n");
+
+
+    int pass_count = 0;
+    for (int i = 0; i < threads_created; i++) {
+        // Check only args corresponding to successfully created threads
+        if (thread_args[i].client_socket == -1) continue; // Skip args for threads that failed creation
+
+        printf("GZIP TEST: Analyzing response for thread %d:\n", i);
+        if (thread_args[i].response != NULL) {
+            // Print first few lines for debugging if needed
+            // char head_buf[200];
+            // strncpy(head_buf, thread_args[i].response, 199);
+            // head_buf[199] = '\0';
+            // printf("----\n%s\n----\n", head_buf);
+
+            // --- Verify GZIP-specific headers ---
+            int ok_found = (strstr(thread_args[i].response, "HTTP/1.1 200 OK") != NULL);
+            // Use strcasestr if available for case-insensitivity, otherwise use strstr
+            int gzip_encoding_found = (strstr(thread_args[i].response, "Content-Encoding: gzip") != NULL || strstr(thread_args[i].response, "content-encoding: gzip") != NULL) ;
+            int chunked_encoding_found = (strstr(thread_args[i].response, "Transfer-Encoding: chunked") != NULL || strstr(thread_args[i].response, "transfer-encoding: chunked") != NULL);
+
+            if (ok_found && gzip_encoding_found && chunked_encoding_found) {
+                printf("  Thread %d: PASS (200 OK, gzip, chunked headers found)\n", i);
+                pass_count++;
+            } else {
+                printf("  Thread %d: FAIL (Headers incorrect: OK=%d, GzipEnc=%d, ChunkedEnc=%d)\n",
+                       i, ok_found, gzip_encoding_found, chunked_encoding_found);
+            }
+            free(thread_args[i].response); // Free response memory
+        } else {
+             printf("  Thread %d: FAIL (Response was NULL)\n", i);
+        }
+    }
+
+    printf("--- GZIP Test Summary ---\n");
+    if (pass_count == threads_created && threads_created == num_threads) {
+        printf("Multithread GZIP Test with %d threads: PASS - All threads created and received correct GZIP headers.\n", num_threads);
+        return 1; // Success
+    } else {
+        printf("Multithread GZIP Test with %d threads: FAIL - %d/%d expected responses failed verification (or %d threads failed creation).\n",
+               num_threads, threads_created - pass_count, threads_created, num_threads - threads_created);
+        return 0; // Failure
+    }
+}
 
 int main() {
     printf("Starting HTTP Server Tests...\n");
 
-    test_root_page(1000);
+    // test_root_page(1000);
     // test_home_page();
     // test_hello_page();
     // test_not_found_404();
@@ -351,7 +460,7 @@ int main() {
     // test_multithread_handling(10);    // Test with more threads than pool size
     int res = 0 ;
     for (int i=0;i<1000;i++){
-     res+=test_multithread_handling(16);
+     res+=test_multithread_gzip_handling(16);
 
     }    // Test with significantly more threads (stress test - adjust if needed)
     printf("%d",res);

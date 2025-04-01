@@ -75,11 +75,11 @@ make
    ```
 
 7. **Buffer Management**  
-   - Create ring buffer for request/response handling
-   - Implement dynamic buffer resizing
+   - Create ring buffer for request/response handling ✅
+   - Implement dynamic buffer resizing ✅
    - Add read/write timeout protection
 
-8. **HTTP Compression**  
+8. **HTTP Compression**  ✅
    - Add gzip compression using zlib
    - Handle `Accept-Encoding` header
    - Compress responses on-the-fly

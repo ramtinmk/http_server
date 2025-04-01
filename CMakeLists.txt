@@ -14,7 +14,11 @@ add_executable(http_server http_server.c)
 add_executable(test test.c)
 
 find_package(Threads REQUIRED)
-target_link_libraries(http_server PRIVATE Threads::Threads)
+find_package(ZLIB REQUIRED)
+target_link_libraries(http_server PRIVATE
+    pthread # Keep pthread if you already had it
+    ZLIB::ZLIB # Add this line
+)
 target_link_libraries(test PRIVATE Threads::Threads)
 
 
