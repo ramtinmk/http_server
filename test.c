@@ -460,7 +460,7 @@ int main() {
     // test_multithread_handling(10);    // Test with more threads than pool size
     int res = 0 ;
     for (int i=0;i<1000;i++){
-     res+=test_multithread_gzip_handling(16);
+     res+=test_multithread_handling(16);
 
     }    // Test with significantly more threads (stress test - adjust if needed)
     printf("%d",res);
