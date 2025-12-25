@@ -111,17 +111,17 @@ depend:
 .PHONY : depend
 
 #=============================================================================
-# Target rules for targets named test
+# Target rules for targets named run_tests
 
 # Build rule for target.
-test: cmake_check_build_system
-	$(MAKE) -f CMakeFiles/Makefile2 test
-.PHONY : test
+run_tests: cmake_check_build_system
+	$(MAKE) -f CMakeFiles/Makefile2 run_tests
+.PHONY : run_tests
 
 # fast build rule for target.
-test/fast:
-	$(MAKE) -f CMakeFiles/test.dir/build.make CMakeFiles/test.dir/build
-.PHONY : test/fast
+run_tests/fast:
+	$(MAKE) -f CMakeFiles/run_tests.dir/build.make CMakeFiles/run_tests.dir/build
+.PHONY : run_tests/fast
 
 #=============================================================================
 # Target rules for targets named http_server
@@ -136,59 +136,149 @@ http_server/fast:
 	$(MAKE) -f CMakeFiles/http_server.dir/build.make CMakeFiles/http_server.dir/build
 .PHONY : http_server/fast
 
-http_server.o: http_server.c.o
+src/http_server.o: src/http_server.c.o
 
-.PHONY : http_server.o
-
-# target to build an object file
-http_server.c.o:
-	$(MAKE) -f CMakeFiles/http_server.dir/build.make CMakeFiles/http_server.dir/http_server.c.o
-.PHONY : http_server.c.o
-
-http_server.i: http_server.c.i
-
-.PHONY : http_server.i
-
-# target to preprocess a source file
-http_server.c.i:
-	$(MAKE) -f CMakeFiles/http_server.dir/build.make CMakeFiles/http_server.dir/http_server.c.i
-.PHONY : http_server.c.i
-
-http_server.s: http_server.c.s
-
-.PHONY : http_server.s
-
-# target to generate assembly for a file
-http_server.c.s:
-	$(MAKE) -f CMakeFiles/http_server.dir/build.make CMakeFiles/http_server.dir/http_server.c.s
-.PHONY : http_server.c.s
-
-test.o: test.c.o
-
-.PHONY : test.o
+.PHONY : src/http_server.o
 
 # target to build an object file
-test.c.o:
-	$(MAKE) -f CMakeFiles/test.dir/build.make CMakeFiles/test.dir/test.c.o
-.PHONY : test.c.o
+src/http_server.c.o:
+	$(MAKE) -f CMakeFiles/run_tests.dir/build.make CMakeFiles/run_tests.dir/src/http_server.c.o
+	$(MAKE) -f CMakeFiles/http_server.dir/build.make CMakeFiles/http_server.dir/src/http_server.c.o
+.PHONY : src/http_server.c.o
 
-test.i: test.c.i
+src/http_server.i: src/http_server.c.i
 
-.PHONY : test.i
+.PHONY : src/http_server.i
 
 # target to preprocess a source file
-test.c.i:
-	$(MAKE) -f CMakeFiles/test.dir/build.make CMakeFiles/test.dir/test.c.i
-.PHONY : test.c.i
+src/http_server.c.i:
+	$(MAKE) -f CMakeFiles/run_tests.dir/build.make CMakeFiles/run_tests.dir/src/http_server.c.i
+	$(MAKE) -f CMakeFiles/http_server.dir/build.make CMakeFiles/http_server.dir/src/http_server.c.i
+.PHONY : src/http_server.c.i
 
-test.s: test.c.s
+src/http_server.s: src/http_server.c.s
 
-.PHONY : test.s
+.PHONY : src/http_server.s
 
 # target to generate assembly for a file
-test.c.s:
-	$(MAKE) -f CMakeFiles/test.dir/build.make CMakeFiles/test.dir/test.c.s
-.PHONY : test.c.s
+src/http_server.c.s:
+	$(MAKE) -f CMakeFiles/run_tests.dir/build.make CMakeFiles/run_tests.dir/src/http_server.c.s
+	$(MAKE) -f CMakeFiles/http_server.dir/build.make CMakeFiles/http_server.dir/src/http_server.c.s
+.PHONY : src/http_server.c.s
+
+src/main.o: src/main.c.o
+
+.PHONY : src/main.o
+
+# target to build an object file
+src/main.c.o:
+	$(MAKE) -f CMakeFiles/http_server.dir/build.make CMakeFiles/http_server.dir/src/main.c.o
+.PHONY : src/main.c.o
+
+src/main.i: src/main.c.i
+
+.PHONY : src/main.i
+
+# target to preprocess a source file
+src/main.c.i:
+	$(MAKE) -f CMakeFiles/http_server.dir/build.make CMakeFiles/http_server.dir/src/main.c.i
+.PHONY : src/main.c.i
+
+src/main.s: src/main.c.s
+
+.PHONY : src/main.s
+
+# target to generate assembly for a file
+src/main.c.s:
+	$(MAKE) -f CMakeFiles/http_server.dir/build.make CMakeFiles/http_server.dir/src/main.c.s
+.PHONY : src/main.c.s
+
+src/ring_buffer.o: src/ring_buffer.c.o
+
+.PHONY : src/ring_buffer.o
+
+# target to build an object file
+src/ring_buffer.c.o:
+	$(MAKE) -f CMakeFiles/run_tests.dir/build.make CMakeFiles/run_tests.dir/src/ring_buffer.c.o
+	$(MAKE) -f CMakeFiles/http_server.dir/build.make CMakeFiles/http_server.dir/src/ring_buffer.c.o
+.PHONY : src/ring_buffer.c.o
+
+src/ring_buffer.i: src/ring_buffer.c.i
+
+.PHONY : src/ring_buffer.i
+
+# target to preprocess a source file
+src/ring_buffer.c.i:
+	$(MAKE) -f CMakeFiles/run_tests.dir/build.make CMakeFiles/run_tests.dir/src/ring_buffer.c.i
+	$(MAKE) -f CMakeFiles/http_server.dir/build.make CMakeFiles/http_server.dir/src/ring_buffer.c.i
+.PHONY : src/ring_buffer.c.i
+
+src/ring_buffer.s: src/ring_buffer.c.s
+
+.PHONY : src/ring_buffer.s
+
+# target to generate assembly for a file
+src/ring_buffer.c.s:
+	$(MAKE) -f CMakeFiles/run_tests.dir/build.make CMakeFiles/run_tests.dir/src/ring_buffer.c.s
+	$(MAKE) -f CMakeFiles/http_server.dir/build.make CMakeFiles/http_server.dir/src/ring_buffer.c.s
+.PHONY : src/ring_buffer.c.s
+
+src/thread_pool.o: src/thread_pool.c.o
+
+.PHONY : src/thread_pool.o
+
+# target to build an object file
+src/thread_pool.c.o:
+	$(MAKE) -f CMakeFiles/run_tests.dir/build.make CMakeFiles/run_tests.dir/src/thread_pool.c.o
+	$(MAKE) -f CMakeFiles/http_server.dir/build.make CMakeFiles/http_server.dir/src/thread_pool.c.o
+.PHONY : src/thread_pool.c.o
+
+src/thread_pool.i: src/thread_pool.c.i
+
+.PHONY : src/thread_pool.i
+
+# target to preprocess a source file
+src/thread_pool.c.i:
+	$(MAKE) -f CMakeFiles/run_tests.dir/build.make CMakeFiles/run_tests.dir/src/thread_pool.c.i
+	$(MAKE) -f CMakeFiles/http_server.dir/build.make CMakeFiles/http_server.dir/src/thread_pool.c.i
+.PHONY : src/thread_pool.c.i
+
+src/thread_pool.s: src/thread_pool.c.s
+
+.PHONY : src/thread_pool.s
+
+# target to generate assembly for a file
+src/thread_pool.c.s:
+	$(MAKE) -f CMakeFiles/run_tests.dir/build.make CMakeFiles/run_tests.dir/src/thread_pool.c.s
+	$(MAKE) -f CMakeFiles/http_server.dir/build.make CMakeFiles/http_server.dir/src/thread_pool.c.s
+.PHONY : src/thread_pool.c.s
+
+tests/test.o: tests/test.c.o
+
+.PHONY : tests/test.o
+
+# target to build an object file
+tests/test.c.o:
+	$(MAKE) -f CMakeFiles/run_tests.dir/build.make CMakeFiles/run_tests.dir/tests/test.c.o
+.PHONY : tests/test.c.o
+
+tests/test.i: tests/test.c.i
+
+.PHONY : tests/test.i
+
+# target to preprocess a source file
+tests/test.c.i:
+	$(MAKE) -f CMakeFiles/run_tests.dir/build.make CMakeFiles/run_tests.dir/tests/test.c.i
+.PHONY : tests/test.c.i
+
+tests/test.s: tests/test.c.s
+
+.PHONY : tests/test.s
+
+# target to generate assembly for a file
+tests/test.c.s:
+	$(MAKE) -f CMakeFiles/run_tests.dir/build.make CMakeFiles/run_tests.dir/tests/test.c.s
+.PHONY : tests/test.c.s
 
 # Help Target
 help:
@@ -197,15 +287,24 @@ help:
 	@echo "... clean"
 	@echo "... depend"
 	@echo "... rebuild_cache"
+	@echo "... run_tests"
 	@echo "... edit_cache"
-	@echo "... test"
 	@echo "... http_server"
-	@echo "... http_server.o"
-	@echo "... http_server.i"
-	@echo "... http_server.s"
-	@echo "... test.o"
-	@echo "... test.i"
-	@echo "... test.s"
+	@echo "... src/http_server.o"
+	@echo "... src/http_server.i"
+	@echo "... src/http_server.s"
+	@echo "... src/main.o"
+	@echo "... src/main.i"
+	@echo "... src/main.s"
+	@echo "... src/ring_buffer.o"
+	@echo "... src/ring_buffer.i"
+	@echo "... src/ring_buffer.s"
+	@echo "... src/thread_pool.o"
+	@echo "... src/thread_pool.i"
+	@echo "... src/thread_pool.s"
+	@echo "... tests/test.o"
+	@echo "... tests/test.i"
+	@echo "... tests/test.s"
 .PHONY : help
 
 

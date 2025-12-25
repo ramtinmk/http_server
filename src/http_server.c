@@ -1,418 +1,68 @@
-/*
- * Simple HTTP Server for Educational Purposes
- *
- * This implementation demonstrates basic socket programming
- * and HTTP protocol handling. Not recommended for production use.
- */
-
 #include "http_server.h"
+#include "ring_buffer.h"
 
-void sigchld_handler(int sig);
-static void parse_request_line(char *line, HTTPRequest *req);
-static void parse_header_line(char *line, HTTPRequest *req);
 
-ThreadPool *create_thread_pool(int pool_size);
-void destroy_thread_pool(ThreadPool *pool);
-void add_task_to_queue(ThreadPool *pool, int client_socket);
-Task *get_task_from_queue(ThreadPool *pool); // Or Task* get_task_from_queue(...) depending on task structure return
-void *worker_thread_function(void *arg);
 
-// Add this enum definition near the top or in http_server.h if preferred
-typedef enum
-{
-    REQUEST_PROCESSED_OK,     // Successfully processed one request
-    NEED_MORE_DATA,           // Parsed partial request, need more data from socket
-    REQUEST_PARSE_ERROR,      // Malformed request or headers
-    REQUEST_PROCESS_ERROR,    // Error during file handling, compression, or sending response
-    CLIENT_CONNECTION_CLOSED, // Client closed connection (read returned 0) and buffer is handled
-    BUFFER_EMPTY              // Ring buffer was empty, nothing to process
-} RequestStatus;
+#define IDLE_TIMEOUT_SEC 60
 
-// Error responses
+
 const char *BAD_REQUEST_400 = ERROR_TEMPLATE("400 Bad Request", "Malformed request syntax");
 const char *NOT_FOUND_404 = ERROR_TEMPLATE("404 Not Found", "The requested resource was not found");
 const char *NOT_IMPLEMENTED_501 = ERROR_TEMPLATE("501 Not Implemented", "HTTP method not supported");
-
 // Supported methods
 const char *SUPPORTED_METHODS[] = {"GET", "HEAD"};
 const int SUPPORTED_METHOD_COUNT = 2;
 
-// Helper functions
-TaskPool* create_task_pool(int capacity) {
-    TaskPool *tp = malloc(sizeof(TaskPool));
-    
-    // Allocate ONE big block for all tasks (Arena-style locality)
-    tp->pool_storage = malloc(sizeof(Task) * capacity);
-    
-    // Allocate the stack that tracks which ones are free
-    tp->free_stack = malloc(sizeof(Task*) * capacity);
-    tp->capacity = capacity;
-    tp->top = -1;
-    pthread_mutex_init(&tp->lock, NULL);
 
-    // Fill stack: Initially, ALL tasks are free
-    for (int i = 0; i < capacity; i++) {
-        tp->top++;
-        tp->free_stack[tp->top] = &tp->pool_storage[i];
-    }
-    return tp;
-}
 
-Task* task_alloc(TaskPool *tp) {
-    pthread_mutex_lock(&tp->lock);
-    if (tp->top == -1) {
-        pthread_mutex_unlock(&tp->lock);
-        return NULL; // Pool empty! (In production, handle this gracefully)
-    }
-    Task *t = tp->free_stack[tp->top]; // Pop
-    tp->top--;
-    pthread_mutex_unlock(&tp->lock);
-    return t;
-}
-
-void task_free(TaskPool *tp, Task *t) {
-    pthread_mutex_lock(&tp->lock);
-    if (tp->top < tp->capacity - 1) {
-        tp->top++;
-        tp->free_stack[tp->top] = t; // Push back
-    }
-    pthread_mutex_unlock(&tp->lock);
-}
-
-// --- Buffer Pool Implementation ---
-BufferPool* create_buffer_pool(int capacity) {
-    BufferPool *bp = malloc(sizeof(BufferPool));
-    bp->pool_storage = malloc(sizeof(RingBuffer*) * capacity);
-    bp->capacity = capacity;
-    bp->top = -1;
-    pthread_mutex_init(&bp->lock, NULL);
-
-    for (int i = 0; i < capacity; i++) {
-        // Pre-allocate the actual RingBuffers here!
-        // We assume your ring_buffer_create uses malloc internally.
-        // We do this ONCE at startup.
-        bp->top++;
-        bp->pool_storage[bp->top] = ring_buffer_create(INITIAL_RING_BUFFER_CAPACITY);
-    }
-    return bp;
-}
-
-RingBuffer* buffer_acquire(BufferPool *bp) {
-    pthread_mutex_lock(&bp->lock);
-    if (bp->top == -1) {
-        pthread_mutex_unlock(&bp->lock);
-        // Fallback: If pool is empty, create a temporary one (slower path)
-        return ring_buffer_create(INITIAL_RING_BUFFER_CAPACITY); 
-    }
-    RingBuffer *rb = bp->pool_storage[bp->top];
-    bp->top--;
-    pthread_mutex_unlock(&bp->lock);
-    
-    // If you have a specific ring_buffer_reset() function, use that instead.
-
-    ring_buffer_reset(rb);
-    
-    return rb;
-}
-
-void buffer_release(BufferPool *bp, RingBuffer *rb) {
-    pthread_mutex_lock(&bp->lock);
-    if (bp->top < bp->capacity - 1) {
-        bp->top++;
-        bp->pool_storage[bp->top] = rb;
-    } else {
-        // Pool is full? This might be a temporary one we created. Free it.
-        ring_buffer_free(rb); 
-    }
-    pthread_mutex_unlock(&bp->lock);
-}
-
-int validate_request(HTTPRequest *req);
-static RequestStatus process_single_request(int client_socket, RingBuffer *request_rb, HTTPRequest *request, int *keep_alive_connection, int client_closed_flag);
-// --- Thread Pool Configuration ---
-#define THREAD_POOL_SIZE 16
-
-#define IDLE_TIMEOUT_SEC 60
-
-int main()
+int create_server_socket(void)
 {
-    int server_socket, client_socket;
-    struct sockaddr_in client_addr;
-    socklen_t addr_size = sizeof(client_addr);
+    int server_socket;
+    struct sockaddr_in server_addr;
 
-    // --- Remove SIGCHLD handler ---
-    /*
-    // Set up SIGCHLD handler to prevent zombie processes
-    struct sigaction sa;
-    sa.sa_handler = sigchld_handler;
-    sigemptyset(&sa.sa_mask);
-    sa.sa_flags = SA_RESTART;
-    if (sigaction(SIGCHLD, &sa, NULL) == -1)
+    // Create socket
+    if ((server_socket = socket(AF_INET, SOCK_STREAM, 0)) == -1)
     {
-        perror("sigaction");
+        perror("socket");
         exit(EXIT_FAILURE);
     }
-    */
 
-    // --- Initialize Thread Pool ---
-    ThreadPool *thread_pool = create_thread_pool(THREAD_POOL_SIZE);
-    if (thread_pool == NULL)
+    // Set socket options
+    int opt = 1;
+    if (setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) == -1)
     {
-        fprintf(stderr, "Failed to create thread pool\n");
+        perror("setsockopt");
         exit(EXIT_FAILURE);
     }
-    printf("Thread pool initialized with %d threads.\n", THREAD_POOL_SIZE);
 
-    // Create server socket
-    server_socket = create_server_socket();
-    printf("Server listening on port %d...\n", PORT);
+    // Configure server address
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(PORT);
+    server_addr.sin_addr.s_addr = INADDR_ANY;
 
-    while (1)
+    // Bind socket
+    if (bind(server_socket, (struct sockaddr *)&server_addr, sizeof(server_addr)) == -1)
     {
-        // Accept incoming connection
-        client_socket = accept(server_socket, (struct sockaddr *)&client_addr, &addr_size);
-        if (client_socket == -1)
-        {
-            perror("accept");
-            continue;
-        }
-
-        printf("Client connected: %s:%d\n",
-               inet_ntoa(client_addr.sin_addr),
-               ntohs(client_addr.sin_port));
-
-        // --- Submit task to thread pool instead of forking ---
-        add_task_to_queue(thread_pool, client_socket);
-
-        // --- Remove fork() child/parent process logic ---
-        /*
-        pid_t pid = fork();
-        if (pid == 0)
-        { // Child process
-            close(server_socket);
-            printf("Client connected: %s:%d\n",
-                    inet_ntoa(client_addr.sin_addr),
-                    ntohs(client_addr.sin_port));
-
-            handle_client(client_socket);
-
-            close(client_socket);
-            exit(EXIT_SUCCESS);
-        }
-        else if (pid > 0)
-        { // Parent process
-            close(client_socket);
-        }
-        else
-        {
-            perror("fork");
-        }
-        */
+        perror("bind");
+        exit(EXIT_FAILURE);
     }
 
-    close(server_socket);
+    // Start listening
+    if (listen(server_socket, BACKLOG) == -1)
+    {
+        perror("listen");
+        exit(EXIT_FAILURE);
+    }
 
-    // --- Destroy Thread Pool before exiting ---
-    destroy_thread_pool(thread_pool);
-    printf("Thread pool destroyed.\n");
-
-    return 0;
+    return server_socket;
 }
-
-// --- Implement Thread Pool Functions ---
-
-ThreadPool *create_thread_pool(int pool_size)
+void sigchld_handler(int sig)
 {
-    if (pool_size <= 0)
-    {
-        fprintf(stderr, "Error: Pool size must be greater than 0\n");
-        return NULL;
-    }
-
-    ThreadPool *pool = malloc(sizeof(ThreadPool));
-    if (!pool)
-    {
-        perror("Failed to allocate thread pool");
-        return NULL;
-    }
-
-    pool->pool_size = pool_size;
-    pool->threads = malloc(sizeof(pthread_t) * pool_size);
-    if (!pool->threads)
-    {
-        perror("Failed to allocate thread array");
-        free(pool);
-        return NULL;
-    }
-    pool->task_pool = create_task_pool(pool_size * 4); 
-    pool->buffer_pool = create_buffer_pool(pool_size);
-
-    if (!pool->task_pool || !pool->buffer_pool) {
-        // Handle error...
-        return NULL;
-    }
-
-    pool->task_queue_head = NULL;
-    pool->task_queue_tail = NULL;
-    if (pthread_mutex_init(&pool->queue_mutex, NULL) != 0)
-    {
-        perror("Mutex initialization failed");
-        free(pool->threads);
-        free(pool);
-        return NULL;
-    }
-    if (pthread_cond_init(&pool->queue_cond, NULL) != 0)
-    {
-        perror("Condition variable initialization failed");
-        pthread_mutex_destroy(&pool->queue_mutex);
-        free(pool->threads);
-        free(pool);
-        return NULL;
-    }
-    pool->shutdown = 0;
-
-    for (int i = 0; i < pool_size; i++)
-    {
-        if (pthread_create(&pool->threads[i], NULL, worker_thread_function, pool) != 0)
-        {
-            perror("Failed to create worker thread");
-            // In a real-world scenario, you'd want to handle thread creation failure more gracefully,
-            // potentially destroying already created threads and pool resources.
-            destroy_thread_pool(pool); // Attempt to cleanup partially created pool
-            return NULL;
-        }
-    }
-
-    return pool;
+    (void)sig; // Silence unused parameter warning
+    while (waitpid(-1, NULL, WNOHANG) > 0)
+        ;
 }
 
-void destroy_thread_pool(ThreadPool *pool)
-{
-    if (!pool)
-        return;
-
-    pthread_mutex_lock(&pool->queue_mutex);
-    pool->shutdown = 1;                        // Set shutdown flag
-    pthread_cond_broadcast(&pool->queue_cond); // Wake up all worker threads
-    pthread_mutex_unlock(&pool->queue_mutex);
-
-    for (int i = 0; i < pool->pool_size; i++)
-    {
-        if (pthread_join(pool->threads[i], NULL) != 0)
-        {
-            perror("Failed to join worker thread");
-        }
-    }
-
-    pthread_mutex_destroy(&pool->queue_mutex);
-    pthread_cond_destroy(&pool->queue_cond);
-
-    // Free task queue (important to free any remaining tasks if queue wasn't fully processed)
-    Task *current_task = pool->task_queue_head;
-    while (current_task != NULL)
-    {
-        Task *next_task = current_task->next;
-        free(current_task);
-        current_task = next_task;
-    }
-
-    free(pool->threads);
-    free(pool);
-}
-
-void add_task_to_queue(ThreadPool *pool, int client_socket)
-{
-    if (!pool)
-        return;
-
-    // Task *new_task = malloc(sizeof(Task));
-    Task *new_task = task_alloc(pool->task_pool);
-    if (!new_task)
-    {
-        perror("Failed to allocate task");
-        close(client_socket); // Important: close socket if task allocation fails
-        return;
-    }
-    new_task->client_socket = client_socket;
-    new_task->next = NULL;
-
-    pthread_mutex_lock(&pool->queue_mutex);
-    if (pool->task_queue_tail == NULL)
-    {
-        pool->task_queue_head = new_task;
-        pool->task_queue_tail = new_task;
-    }
-    else
-    {
-        pool->task_queue_tail->next = new_task;
-        pool->task_queue_tail = new_task;
-    }
-
-    pthread_cond_signal(&pool->queue_cond); // Signal a worker thread that a task is available
-    pthread_mutex_unlock(&pool->queue_mutex);
-}
-
-Task *get_task_from_queue(ThreadPool *pool)
-{
-    if (!pool)
-        return NULL;
-
-    pthread_mutex_lock(&pool->queue_mutex);
-
-    // Wait while queue is empty and server is not shutting down
-    while (pool->task_queue_head == NULL && !pool->shutdown)
-    {
-        pthread_cond_wait(&pool->queue_cond, &pool->queue_mutex);
-    }
-
-    if (pool->shutdown && pool->task_queue_head == NULL)
-    {
-        pthread_mutex_unlock(&pool->queue_mutex);
-        return NULL; // Signal for thread to exit
-    }
-
-    Task *task = pool->task_queue_head;
-    if (task != NULL)
-    {
-        pool->task_queue_head = task->next;
-        if (pool->task_queue_head == NULL)
-        {
-            pool->task_queue_tail = NULL; // Queue became empty
-        }
-    }
-
-    pthread_mutex_unlock(&pool->queue_mutex);
-    return task;
-}
-
-void *worker_thread_function(void *arg)
-{
-    ThreadPool *pool = (ThreadPool *)arg;
-
-    while (1)
-    {
-        Task *task = get_task_from_queue(pool);
-        if (task == NULL)
-        {
-            // Null task means shutdown signal, thread should exit
-            break;
-        }
-
-        int client_socket = task->client_socket;
-        // free(task); // Free task structure after getting client socket
-        task_free(pool->task_pool, task);
-
-        handle_client(client_socket, pool->buffer_pool); 
-
-        close(client_socket); // Close client socket after handling
-
-        // Example of optional delay (for demonstration purposes only, remove in production)
-        // sleep(1);
-    }
-
-    pthread_exit(NULL);
-    return NULL; // Never reached, but good practice to include
-}
 
 static void parse_request_line(char *line, HTTPRequest *req)
 {
@@ -432,6 +82,19 @@ static void parse_request_line(char *line, HTTPRequest *req)
     *path_end = '\0';
     strncpy(req->path, path_start, sizeof(req->path) - 1);
     req->path[sizeof(req->path) - 1] = '\0';
+}
+
+
+void print_http_request(const HTTPRequest *req)
+{
+    printf("Parsed HTTP Request:\n");
+    printf("  Method: %s\n", req->method);
+    printf("  Path: %s\n", req->path);
+    printf("  Headers:\n");
+    for (int i = 0; i < req->header_count; i++)
+    {
+        printf("    %s: %s\n", req->headers[i][0], req->headers[i][1]);
+    }
 }
 
 static void parse_header_line(char *line, HTTPRequest *req)
@@ -487,26 +150,61 @@ static void parse_header_line(char *line, HTTPRequest *req)
     }
 }
 
-void print_http_request(const HTTPRequest *req)
+// New helper functions
+void send_error_response(int client_socket, const char *response)
 {
-    printf("Parsed HTTP Request:\n");
-    printf("  Method: %s\n", req->method);
-    printf("  Path: %s\n", req->path);
-    printf("  Headers:\n");
-    for (int i = 0; i < req->header_count; i++)
+    if (write(client_socket, response, strlen(response)) < 0)
     {
-        printf("    %s: %s\n", req->headers[i][0], req->headers[i][1]);
+        perror("write error response");
     }
 }
-/**
- * @brief Main handler for a client connection.
- *
- * Manages the connection lifecycle, reads data into a ring buffer using select()
- * for timeouts, and calls process_single_request in a loop to handle pipelined
- * requests until the connection is closed or an error occurs.
- *
- * @param client_socket The client's socket file descriptor.
- */
+
+
+int method_is_supported(const char *method)
+{
+    for (int i = 0; i < SUPPORTED_METHOD_COUNT; i++)
+    {
+        if (strcmp(method, SUPPORTED_METHODS[i]) == 0)
+        {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+
+
+
+void *worker_thread_function(void *arg)
+{
+    ThreadPool *pool = (ThreadPool *)arg;
+
+    while (1)
+    {
+        Task *task = get_task_from_queue(pool);
+        if (task == NULL)
+        {
+            // Null task means shutdown signal, thread should exit
+            break;
+        }
+
+        int client_socket = task->client_socket;
+        // free(task); // Free task structure after getting client socket
+        task_free(pool->task_pool, task);
+
+        handle_client(client_socket, pool->buffer_pool);
+
+        close(client_socket); // Close client socket after handling
+
+        // Example of optional delay (for demonstration purposes only, remove in production)
+        // sleep(1);
+    }
+
+    pthread_exit(NULL);
+    return NULL; // Never reached, but good practice to include
+}
+
+
 void handle_client(int client_socket, BufferPool *bp)
 {
     // RingBuffer *request_rb = ring_buffer_create(INITIAL_RING_BUFFER_CAPACITY); // Use defined initial capacity
@@ -632,74 +330,8 @@ void handle_client(int client_socket, BufferPool *bp)
     // ring_buffer_free(response_rb); // If response_rb was used
 }
 
-int create_server_socket(void)
-{
-    int server_socket;
-    struct sockaddr_in server_addr;
 
-    // Create socket
-    if ((server_socket = socket(AF_INET, SOCK_STREAM, 0)) == -1)
-    {
-        perror("socket");
-        exit(EXIT_FAILURE);
-    }
 
-    // Set socket options
-    int opt = 1;
-    if (setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) == -1)
-    {
-        perror("setsockopt");
-        exit(EXIT_FAILURE);
-    }
-
-    // Configure server address
-    server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons(PORT);
-    server_addr.sin_addr.s_addr = INADDR_ANY;
-
-    // Bind socket
-    if (bind(server_socket, (struct sockaddr *)&server_addr, sizeof(server_addr)) == -1)
-    {
-        perror("bind");
-        exit(EXIT_FAILURE);
-    }
-
-    // Start listening
-    if (listen(server_socket, BACKLOG) == -1)
-    {
-        perror("listen");
-        exit(EXIT_FAILURE);
-    }
-
-    return server_socket;
-}
-void sigchld_handler(int sig)
-{
-    (void)sig; // Silence unused parameter warning
-    while (waitpid(-1, NULL, WNOHANG) > 0)
-        ;
-}
-
-// New helper functions
-void send_error_response(int client_socket, const char *response)
-{
-    if (write(client_socket, response, strlen(response)) < 0)
-    {
-        perror("write error response");
-    }
-}
-
-int method_is_supported(const char *method)
-{
-    for (int i = 0; i < SUPPORTED_METHOD_COUNT; i++)
-    {
-        if (strcmp(method, SUPPORTED_METHODS[i]) == 0)
-        {
-            return 1;
-        }
-    }
-    return 0;
-}
 
 // /**
 //  * @brief Attempts to parse and process a single HTTP request from the ring buffer.
@@ -1024,7 +656,6 @@ static RequestStatus process_single_request(int client_socket, RingBuffer *reque
             }
         }
     } // End if not HEAD
-
 cleanup_fd:
     close(file_fd); // Close the file descriptor
 

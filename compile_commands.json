@@ -1,0 +1,42 @@
+[
+{
+  "directory": "/home/ramtinmk/http_server_C",
+  "command": "/usr/bin/cc  -I/home/ramtinmk/http_server_C/include    -Wall -Wextra -pedantic -std=gnu11 -o CMakeFiles/run_tests.dir/tests/test.c.o   -c /home/ramtinmk/http_server_C/tests/test.c",
+  "file": "/home/ramtinmk/http_server_C/tests/test.c"
+},
+{
+  "directory": "/home/ramtinmk/http_server_C",
+  "command": "/usr/bin/cc  -I/home/ramtinmk/http_server_C/include    -Wall -Wextra -pedantic -std=gnu11 -o CMakeFiles/run_tests.dir/src/http_server.c.o   -c /home/ramtinmk/http_server_C/src/http_server.c",
+  "file": "/home/ramtinmk/http_server_C/src/http_server.c"
+},
+{
+  "directory": "/home/ramtinmk/http_server_C",
+  "command": "/usr/bin/cc  -I/home/ramtinmk/http_server_C/include    -Wall -Wextra -pedantic -std=gnu11 -o CMakeFiles/run_tests.dir/src/ring_buffer.c.o   -c /home/ramtinmk/http_server_C/src/ring_buffer.c",
+  "file": "/home/ramtinmk/http_server_C/src/ring_buffer.c"
+},
+{
+  "directory": "/home/ramtinmk/http_server_C",
+  "command": "/usr/bin/cc  -I/home/ramtinmk/http_server_C/include    -Wall -Wextra -pedantic -std=gnu11 -o CMakeFiles/run_tests.dir/src/thread_pool.c.o   -c /home/ramtinmk/http_server_C/src/thread_pool.c",
+  "file": "/home/ramtinmk/http_server_C/src/thread_pool.c"
+},
+{
+  "directory": "/home/ramtinmk/http_server_C",
+  "command": "/usr/bin/cc  -I/home/ramtinmk/http_server_C/include    -Wall -Wextra -pedantic -std=gnu11 -o CMakeFiles/http_server.dir/src/main.c.o   -c /home/ramtinmk/http_server_C/src/main.c",
+  "file": "/home/ramtinmk/http_server_C/src/main.c"
+},
+{
+  "directory": "/home/ramtinmk/http_server_C",
+  "command": "/usr/bin/cc  -I/home/ramtinmk/http_server_C/include    -Wall -Wextra -pedantic -std=gnu11 -o CMakeFiles/http_server.dir/src/http_server.c.o   -c /home/ramtinmk/http_server_C/src/http_server.c",
+  "file": "/home/ramtinmk/http_server_C/src/http_server.c"
+},
+{
+  "directory": "/home/ramtinmk/http_server_C",
+  "command": "/usr/bin/cc  -I/home/ramtinmk/http_server_C/include    -Wall -Wextra -pedantic -std=gnu11 -o CMakeFiles/http_server.dir/src/ring_buffer.c.o   -c /home/ramtinmk/http_server_C/src/ring_buffer.c",
+  "file": "/home/ramtinmk/http_server_C/src/ring_buffer.c"
+},
+{
+  "directory": "/home/ramtinmk/http_server_C",
+  "command": "/usr/bin/cc  -I/home/ramtinmk/http_server_C/include    -Wall -Wextra -pedantic -std=gnu11 -o CMakeFiles/http_server.dir/src/thread_pool.c.o   -c /home/ramtinmk/http_server_C/src/thread_pool.c",
+  "file": "/home/ramtinmk/http_server_C/src/thread_pool.c"
+}
+]
