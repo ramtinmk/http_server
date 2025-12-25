@@ -43,7 +43,48 @@
     "Connection: keep-alive\r\n\r\n" \
     "<html><head><title>" status "</title></head>" \
     "<body><h1>" status "</h1><p>" msg "</p></body></html>\r\n"
+// Forward declaration
+typedef struct ThreadPool ThreadPool;
+typedef struct Task Task;
 
+struct Task {
+    int client_socket;
+    // ... any other task specific data ...
+    struct Task *next; // For linked list queue (or use array/deque)
+};
+
+typedef struct {
+    Task *pool_storage;     // The big contiguous block of memory (The Arena)
+    Task **free_stack;      // Stack of pointers to available slots
+    int top;                // Stack pointer
+    int capacity;
+    pthread_mutex_t lock;
+} TaskPool;
+
+typedef struct {
+    RingBuffer **pool_storage; // Array of pointers to RingBuffers
+    int top;
+    int capacity;
+    pthread_mutex_t lock;
+} BufferPool;
+
+// 2. Add them to your existing ThreadPool struct
+struct ThreadPool {
+    int pool_size;
+    pthread_t *threads;
+    
+    // Standard Queue pointers
+    Task *task_queue_head;
+    Task *task_queue_tail;
+    
+    pthread_mutex_t queue_mutex;
+    pthread_cond_t queue_cond;
+    int shutdown;
+
+    // --- NEW: Memory Pools ---
+    TaskPool *task_pool;
+    BufferPool *buffer_pool;
+};
 
 // --- Data Structures ---
 typedef struct {
@@ -56,7 +97,7 @@ typedef struct {
 } HTTPRequest;
 
 // --- Function Prototypes (Interface) ---
-void handle_client(int client_socket);
+void handle_client(int client_socket, BufferPool *bp);
 int create_server_socket(void);
 void send_error_response(int client_socket, const char *response);
 int method_is_supported(const char *method);
@@ -66,26 +107,6 @@ extern const char *BAD_REQUEST_400;
 extern const char *NOT_FOUND_404;
 extern const char *NOT_IMPLEMENTED_501;
 
-// Forward declaration
-typedef struct ThreadPool ThreadPool;
-typedef struct Task Task;
-
-struct Task {
-    int client_socket;
-    // ... any other task specific data ...
-    struct Task *next; // For linked list queue (or use array/deque)
-};
-
-struct ThreadPool {
-    int pool_size;
-    pthread_t *threads;        // Array of thread IDs
-    Task *task_queue_head;     // Head of the task queue (if linked list)
-    Task *task_queue_tail;     // Tail of the task queue (if linked list)
-    pthread_mutex_t queue_mutex; // Mutex for task queue access
-    pthread_cond_t queue_cond;   // Condition variable for task queue
-    int shutdown;              // Flag to indicate shutdown
-    // ... other thread pool management data ...
-};
 
 // --- Ring Buffer Structure ---
 

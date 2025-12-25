@@ -448,8 +448,8 @@ int main() {
     printf("Starting HTTP Server Tests...\n");
 
     // test_root_page(1000);
-    // test_home_page();
-    // test_hello_page();
+    test_home_page();
+    test_hello_page();
     // test_not_found_404();
     // test_not_implemented_501();
     // test_keep_alive_connection();
@@ -460,7 +460,7 @@ int main() {
     // test_multithread_handling(10);    // Test with more threads than pool size
     int res = 0 ;
     for (int i=0;i<1000;i++){
-     res+=test_multithread_handling(16);
+     res+=test_multithread_handling(17);
 
     }    // Test with significantly more threads (stress test - adjust if needed)
     printf("%d",res);

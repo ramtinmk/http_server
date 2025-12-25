@@ -7,8 +7,6 @@
 
 #include "http_server.h"
 
-
-
 void sigchld_handler(int sig);
 static void parse_request_line(char *line, HTTPRequest *req);
 static void parse_header_line(char *line, HTTPRequest *req);
@@ -40,6 +38,95 @@ const char *SUPPORTED_METHODS[] = {"GET", "HEAD"};
 const int SUPPORTED_METHOD_COUNT = 2;
 
 // Helper functions
+TaskPool* create_task_pool(int capacity) {
+    TaskPool *tp = malloc(sizeof(TaskPool));
+    
+    // Allocate ONE big block for all tasks (Arena-style locality)
+    tp->pool_storage = malloc(sizeof(Task) * capacity);
+    
+    // Allocate the stack that tracks which ones are free
+    tp->free_stack = malloc(sizeof(Task*) * capacity);
+    tp->capacity = capacity;
+    tp->top = -1;
+    pthread_mutex_init(&tp->lock, NULL);
+
+    // Fill stack: Initially, ALL tasks are free
+    for (int i = 0; i < capacity; i++) {
+        tp->top++;
+        tp->free_stack[tp->top] = &tp->pool_storage[i];
+    }
+    return tp;
+}
+
+Task* task_alloc(TaskPool *tp) {
+    pthread_mutex_lock(&tp->lock);
+    if (tp->top == -1) {
+        pthread_mutex_unlock(&tp->lock);
+        return NULL; // Pool empty! (In production, handle this gracefully)
+    }
+    Task *t = tp->free_stack[tp->top]; // Pop
+    tp->top--;
+    pthread_mutex_unlock(&tp->lock);
+    return t;
+}
+
+void task_free(TaskPool *tp, Task *t) {
+    pthread_mutex_lock(&tp->lock);
+    if (tp->top < tp->capacity - 1) {
+        tp->top++;
+        tp->free_stack[tp->top] = t; // Push back
+    }
+    pthread_mutex_unlock(&tp->lock);
+}
+
+// --- Buffer Pool Implementation ---
+BufferPool* create_buffer_pool(int capacity) {
+    BufferPool *bp = malloc(sizeof(BufferPool));
+    bp->pool_storage = malloc(sizeof(RingBuffer*) * capacity);
+    bp->capacity = capacity;
+    bp->top = -1;
+    pthread_mutex_init(&bp->lock, NULL);
+
+    for (int i = 0; i < capacity; i++) {
+        // Pre-allocate the actual RingBuffers here!
+        // We assume your ring_buffer_create uses malloc internally.
+        // We do this ONCE at startup.
+        bp->top++;
+        bp->pool_storage[bp->top] = ring_buffer_create(INITIAL_RING_BUFFER_CAPACITY);
+    }
+    return bp;
+}
+
+RingBuffer* buffer_acquire(BufferPool *bp) {
+    pthread_mutex_lock(&bp->lock);
+    if (bp->top == -1) {
+        pthread_mutex_unlock(&bp->lock);
+        // Fallback: If pool is empty, create a temporary one (slower path)
+        return ring_buffer_create(INITIAL_RING_BUFFER_CAPACITY); 
+    }
+    RingBuffer *rb = bp->pool_storage[bp->top];
+    bp->top--;
+    pthread_mutex_unlock(&bp->lock);
+    
+    // If you have a specific ring_buffer_reset() function, use that instead.
+
+    ring_buffer_reset(rb);
+    
+    return rb;
+}
+
+void buffer_release(BufferPool *bp, RingBuffer *rb) {
+    pthread_mutex_lock(&bp->lock);
+    if (bp->top < bp->capacity - 1) {
+        bp->top++;
+        bp->pool_storage[bp->top] = rb;
+    } else {
+        // Pool is full? This might be a temporary one we created. Free it.
+        ring_buffer_free(rb); 
+    }
+    pthread_mutex_unlock(&bp->lock);
+}
+
 int validate_request(HTTPRequest *req);
 static RequestStatus process_single_request(int client_socket, RingBuffer *request_rb, HTTPRequest *request, int *keep_alive_connection, int client_closed_flag);
 // --- Thread Pool Configuration ---
@@ -157,6 +244,13 @@ ThreadPool *create_thread_pool(int pool_size)
         free(pool);
         return NULL;
     }
+    pool->task_pool = create_task_pool(pool_size * 4); 
+    pool->buffer_pool = create_buffer_pool(pool_size);
+
+    if (!pool->task_pool || !pool->buffer_pool) {
+        // Handle error...
+        return NULL;
+    }
 
     pool->task_queue_head = NULL;
     pool->task_queue_tail = NULL;
@@ -231,7 +325,8 @@ void add_task_to_queue(ThreadPool *pool, int client_socket)
     if (!pool)
         return;
 
-    Task *new_task = malloc(sizeof(Task));
+    // Task *new_task = malloc(sizeof(Task));
+    Task *new_task = task_alloc(pool->task_pool);
     if (!new_task)
     {
         perror("Failed to allocate task");
@@ -304,9 +399,10 @@ void *worker_thread_function(void *arg)
         }
 
         int client_socket = task->client_socket;
-        free(task); // Free task structure after getting client socket
+        // free(task); // Free task structure after getting client socket
+        task_free(pool->task_pool, task);
 
-        handle_client(client_socket); // Process the client request
+        handle_client(client_socket, pool->buffer_pool); 
 
         close(client_socket); // Close client socket after handling
 
@@ -411,9 +507,10 @@ void print_http_request(const HTTPRequest *req)
  *
  * @param client_socket The client's socket file descriptor.
  */
-void handle_client(int client_socket)
+void handle_client(int client_socket, BufferPool *bp)
 {
-    RingBuffer *request_rb = ring_buffer_create(INITIAL_RING_BUFFER_CAPACITY); // Use defined initial capacity
+    // RingBuffer *request_rb = ring_buffer_create(INITIAL_RING_BUFFER_CAPACITY); // Use defined initial capacity
+    RingBuffer *request_rb = buffer_acquire(bp);
     if (!request_rb)
     {
         perror("Failed to create request ring buffer");
@@ -530,7 +627,8 @@ void handle_client(int client_socket)
             client_socket, keep_alive_connection);
 
     // Cleanup
-    ring_buffer_free(request_rb);
+    // ring_buffer_free(request_rb);
+    buffer_release(bp, request_rb);
     // ring_buffer_free(response_rb); // If response_rb was used
 }
 
