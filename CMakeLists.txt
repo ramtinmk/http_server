@@ -48,13 +48,24 @@ target_link_libraries(http_server PRIVATE
     ZLIB::ZLIB
 )
 
-# --- 5. Target: Tests ---
-# Note: Ensure test.c is either in root or tests/ folder. 
-# Adjusted here to look in both for safety based on previous steps.
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/test.c")
-    set(TEST_FILE "tests/test.c")
-elseif(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test.c")
-    set(TEST_FILE "test.c")
+file(GLOB TEST_SOURCES "tests/*.c")
+
+# If we found test files, build the test runner
+if(TEST_SOURCES)
+    add_executable(run_tests 
+        ${TEST_SOURCES}   # main_test.c, test_ring_buffer.c, etc.
+        ${SOURCES}        # ring_buffer.c, etc. (from src/)
+    )
+
+    # Allow tests to find header files in tests/ (for test_utils.h)
+    target_include_directories(run_tests PRIVATE tests)
+
+    target_link_libraries(run_tests PRIVATE 
+        Threads::Threads 
+        ZLIB::ZLIB
+    )
+    
+    message(STATUS "Test runner configured with sources: ${TEST_SOURCES}")
 endif()
 
 if(DEFINED TEST_FILE)

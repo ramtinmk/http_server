@@ -253,32 +253,86 @@ src/thread_pool.c.s:
 	$(MAKE) -f CMakeFiles/http_server.dir/build.make CMakeFiles/http_server.dir/src/thread_pool.c.s
 .PHONY : src/thread_pool.c.s
 
-tests/test.o: tests/test.c.o
+tests/main_test.o: tests/main_test.c.o
 
-.PHONY : tests/test.o
+.PHONY : tests/main_test.o
 
 # target to build an object file
-tests/test.c.o:
-	$(MAKE) -f CMakeFiles/run_tests.dir/build.make CMakeFiles/run_tests.dir/tests/test.c.o
-.PHONY : tests/test.c.o
+tests/main_test.c.o:
+	$(MAKE) -f CMakeFiles/run_tests.dir/build.make CMakeFiles/run_tests.dir/tests/main_test.c.o
+.PHONY : tests/main_test.c.o
 
-tests/test.i: tests/test.c.i
+tests/main_test.i: tests/main_test.c.i
 
-.PHONY : tests/test.i
+.PHONY : tests/main_test.i
 
 # target to preprocess a source file
-tests/test.c.i:
-	$(MAKE) -f CMakeFiles/run_tests.dir/build.make CMakeFiles/run_tests.dir/tests/test.c.i
-.PHONY : tests/test.c.i
+tests/main_test.c.i:
+	$(MAKE) -f CMakeFiles/run_tests.dir/build.make CMakeFiles/run_tests.dir/tests/main_test.c.i
+.PHONY : tests/main_test.c.i
 
-tests/test.s: tests/test.c.s
+tests/main_test.s: tests/main_test.c.s
 
-.PHONY : tests/test.s
+.PHONY : tests/main_test.s
 
 # target to generate assembly for a file
-tests/test.c.s:
-	$(MAKE) -f CMakeFiles/run_tests.dir/build.make CMakeFiles/run_tests.dir/tests/test.c.s
-.PHONY : tests/test.c.s
+tests/main_test.c.s:
+	$(MAKE) -f CMakeFiles/run_tests.dir/build.make CMakeFiles/run_tests.dir/tests/main_test.c.s
+.PHONY : tests/main_test.c.s
+
+tests/server_test.o: tests/server_test.c.o
+
+.PHONY : tests/server_test.o
+
+# target to build an object file
+tests/server_test.c.o:
+	$(MAKE) -f CMakeFiles/run_tests.dir/build.make CMakeFiles/run_tests.dir/tests/server_test.c.o
+.PHONY : tests/server_test.c.o
+
+tests/server_test.i: tests/server_test.c.i
+
+.PHONY : tests/server_test.i
+
+# target to preprocess a source file
+tests/server_test.c.i:
+	$(MAKE) -f CMakeFiles/run_tests.dir/build.make CMakeFiles/run_tests.dir/tests/server_test.c.i
+.PHONY : tests/server_test.c.i
+
+tests/server_test.s: tests/server_test.c.s
+
+.PHONY : tests/server_test.s
+
+# target to generate assembly for a file
+tests/server_test.c.s:
+	$(MAKE) -f CMakeFiles/run_tests.dir/build.make CMakeFiles/run_tests.dir/tests/server_test.c.s
+.PHONY : tests/server_test.c.s
+
+tests/test_ring_buffer.o: tests/test_ring_buffer.c.o
+
+.PHONY : tests/test_ring_buffer.o
+
+# target to build an object file
+tests/test_ring_buffer.c.o:
+	$(MAKE) -f CMakeFiles/run_tests.dir/build.make CMakeFiles/run_tests.dir/tests/test_ring_buffer.c.o
+.PHONY : tests/test_ring_buffer.c.o
+
+tests/test_ring_buffer.i: tests/test_ring_buffer.c.i
+
+.PHONY : tests/test_ring_buffer.i
+
+# target to preprocess a source file
+tests/test_ring_buffer.c.i:
+	$(MAKE) -f CMakeFiles/run_tests.dir/build.make CMakeFiles/run_tests.dir/tests/test_ring_buffer.c.i
+.PHONY : tests/test_ring_buffer.c.i
+
+tests/test_ring_buffer.s: tests/test_ring_buffer.c.s
+
+.PHONY : tests/test_ring_buffer.s
+
+# target to generate assembly for a file
+tests/test_ring_buffer.c.s:
+	$(MAKE) -f CMakeFiles/run_tests.dir/build.make CMakeFiles/run_tests.dir/tests/test_ring_buffer.c.s
+.PHONY : tests/test_ring_buffer.c.s
 
 # Help Target
 help:
@@ -302,9 +356,15 @@ help:
 	@echo "... src/thread_pool.o"
 	@echo "... src/thread_pool.i"
 	@echo "... src/thread_pool.s"
-	@echo "... tests/test.o"
-	@echo "... tests/test.i"
-	@echo "... tests/test.s"
+	@echo "... tests/main_test.o"
+	@echo "... tests/main_test.i"
+	@echo "... tests/main_test.s"
+	@echo "... tests/server_test.o"
+	@echo "... tests/server_test.i"
+	@echo "... tests/server_test.s"
+	@echo "... tests/test_ring_buffer.o"
+	@echo "... tests/test_ring_buffer.i"
+	@echo "... tests/test_ring_buffer.s"
 .PHONY : help
 
 
