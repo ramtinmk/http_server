@@ -16,6 +16,11 @@
 },
 {
   "directory": "/home/ramtinmk/http_server_C",
+  "command": "/usr/bin/cc  -I/home/ramtinmk/http_server_C/include -I/home/ramtinmk/http_server_C/tests    -Wall -Wextra -pedantic -std=gnu11 -o CMakeFiles/run_tests.dir/tests/thread_pool_test.c.o   -c /home/ramtinmk/http_server_C/tests/thread_pool_test.c",
+  "file": "/home/ramtinmk/http_server_C/tests/thread_pool_test.c"
+},
+{
+  "directory": "/home/ramtinmk/http_server_C",
   "command": "/usr/bin/cc  -I/home/ramtinmk/http_server_C/include -I/home/ramtinmk/http_server_C/tests    -Wall -Wextra -pedantic -std=gnu11 -o CMakeFiles/run_tests.dir/src/http_server.c.o   -c /home/ramtinmk/http_server_C/src/http_server.c",
   "file": "/home/ramtinmk/http_server_C/src/http_server.c"
 },

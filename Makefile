@@ -334,6 +334,33 @@ tests/test_ring_buffer.c.s:
 	$(MAKE) -f CMakeFiles/run_tests.dir/build.make CMakeFiles/run_tests.dir/tests/test_ring_buffer.c.s
 .PHONY : tests/test_ring_buffer.c.s
 
+tests/thread_pool_test.o: tests/thread_pool_test.c.o
+
+.PHONY : tests/thread_pool_test.o
+
+# target to build an object file
+tests/thread_pool_test.c.o:
+	$(MAKE) -f CMakeFiles/run_tests.dir/build.make CMakeFiles/run_tests.dir/tests/thread_pool_test.c.o
+.PHONY : tests/thread_pool_test.c.o
+
+tests/thread_pool_test.i: tests/thread_pool_test.c.i
+
+.PHONY : tests/thread_pool_test.i
+
+# target to preprocess a source file
+tests/thread_pool_test.c.i:
+	$(MAKE) -f CMakeFiles/run_tests.dir/build.make CMakeFiles/run_tests.dir/tests/thread_pool_test.c.i
+.PHONY : tests/thread_pool_test.c.i
+
+tests/thread_pool_test.s: tests/thread_pool_test.c.s
+
+.PHONY : tests/thread_pool_test.s
+
+# target to generate assembly for a file
+tests/thread_pool_test.c.s:
+	$(MAKE) -f CMakeFiles/run_tests.dir/build.make CMakeFiles/run_tests.dir/tests/thread_pool_test.c.s
+.PHONY : tests/thread_pool_test.c.s
+
 # Help Target
 help:
 	@echo "The following are some of the valid targets for this Makefile:"
@@ -365,6 +392,9 @@ help:
 	@echo "... tests/test_ring_buffer.o"
 	@echo "... tests/test_ring_buffer.i"
 	@echo "... tests/test_ring_buffer.s"
+	@echo "... tests/thread_pool_test.o"
+	@echo "... tests/thread_pool_test.i"
+	@echo "... tests/thread_pool_test.s"
 .PHONY : help
 
 

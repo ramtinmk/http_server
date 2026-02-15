@@ -68,7 +68,7 @@ ThreadPool *create_thread_pool(int pool_size)
         free(pool);
         return NULL;
     }
-    pool->task_pool = create_task_pool(pool_size * 4);
+    pool->task_pool = create_task_pool(pool_size * 16);
     pool->buffer_pool = create_buffer_pool(pool_size);
 
     if (!pool->task_pool || !pool->buffer_pool)
@@ -197,8 +197,9 @@ void add_task_to_queue(ThreadPool *pool, int client_socket)
     Task *new_task = task_alloc(pool->task_pool);
     if (!new_task)
     {
-        perror("Failed to allocate task");
-        close(client_socket); // Important: close socket if task allocation fails
+        // Change perror to fprintf because errno is not set by task_alloc
+        fprintf(stderr, "Error: Task pool exhausted. Dropping connection on socket %d\n", client_socket);
+        close(client_socket); 
         return;
     }
     new_task->client_socket = client_socket;

@@ -11,7 +11,7 @@
 #include "test_utils.h"
 #include "test_ring_buffer.h"
 #include "server_test.h"
-
+#include "thread_pool_test.h"
 
 // Define globals
 int tests_run = 0;
@@ -47,6 +47,10 @@ int main(int argc, char **argv) {
     // Runs if no suite specified, OR if argv[1] contains "server"
     if (!suite_arg || strstr(suite_arg, "server")) {
         run_server_tests();
+    }
+
+    if (!suite_arg || strstr(suite_arg, "thread_pool")) {
+        run_thread_pool_suite();
     }
 
     // --- Summary ---
