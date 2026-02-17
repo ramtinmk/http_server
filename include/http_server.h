@@ -76,6 +76,15 @@ typedef struct {
     int accepts_gzip; // <-- Add this flag
 } HTTPRequest;
 
+// Return codes for the state machine
+typedef enum {
+    REQ_OK,             // Request fully processed
+    REQ_NEED_DATA,      // Not enough data for headers yet
+    REQ_FATAL_ERROR,    // Protocol error, close connection
+    REQ_CLIENT_CLOSED   // Client disconnected gracefully
+} ProcessResult;
+
+
 struct BufferPool; 
 
 // --- Function Prototypes (Interface) ---
@@ -84,7 +93,7 @@ int create_server_socket(void);
 void send_error_response(int client_socket, const char *response);
 int method_is_supported(const char *method);
 void *worker_thread_function(void *arg);
-static RequestStatus process_single_request(int client_socket, RingBuffer *request_rb, HTTPRequest *request, int *keep_alive_connection, int client_closed_flag);
+static ProcessResult process_single_request(int client_socket, RingBuffer *rb, int *keep_alive);
 
 // static void parse_header_line(char *line, HTTPRequest *req);
 void print_http_request(const HTTPRequest *req);

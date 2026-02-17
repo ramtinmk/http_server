@@ -243,7 +243,7 @@ void test_keep_alive() {
 // --- Multithreaded Tests (Wrappers) ---
 
 void test_multithread_load() {
-    int num_threads = 10;
+    int num_threads = 17;
     pthread_t threads[num_threads];
     ThreadArgs args[num_threads];
 
