@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h> // Added for timing
 #include "ring_buffer.h"
 #include "test_utils.h"
 #include "test_ring_buffer.h"
@@ -16,7 +17,7 @@ void verify_buffer_content(RingBuffer *rb, const char *expected) {
     TEST_ASSERT(strncmp(buf, expected, len) == 0);
 }
 
-// --- Test Cases ---
+// --- Functional Test Cases ---
 
 void test_create_and_destroy() {
     RingBuffer *rb = ring_buffer_create(100);
@@ -99,7 +100,6 @@ void test_auto_resize_with_wrap() {
     RingBuffer *rb = ring_buffer_create(4);
     
     printf("       -> Setup: Create wrapped state [EF..CD]\n");
-    // Write 4, Read 2, Write 2. Logical: CDEF. Physical: EFCD
     ring_buffer_write(rb, "ABCD", 4); 
     char tmp[2];
     ring_buffer_read(rb, tmp, 2);     
@@ -236,10 +236,81 @@ void test_reset() {
     ring_buffer_free(rb);
 }
 
+// --- Efficiency Tests ---
+
+void test_efficiency_readline_streaming() {
+    // Scenario: Simulate continuous processing of HTTP headers.
+    // We write a line, then immediately read it. This causes the ring buffer
+    // to wrap around constantly, aggressively testing the "wrap logic" and memchr.
+    
+    RingBuffer *rb = ring_buffer_create(4096);
+    const char *header = "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64)\r\n";
+    size_t header_len = strlen(header);
+    char read_buf[256];
+    
+    const int ITERATIONS = 1000000;
+    
+    printf("       -> Processing %d headers (~%zu MB)...\n", ITERATIONS, (header_len * ITERATIONS)/(1024*1024));
+    
+    clock_t start = clock();
+    
+    for(int i = 0; i < ITERATIONS; i++) {
+        // Write line
+        ring_buffer_write(rb, header, header_len);
+        
+        // Read line
+        char *res = ring_buffer_readline(rb, read_buf, sizeof(read_buf));
+        
+        if (!res) {
+            fprintf(stderr, "Efficiency test failed at iteration %d\n", i);
+            exit(EXIT_FAILURE);
+        }
+    }
+    
+    clock_t end = clock();
+    double time_spent = (double)(end - start) / CLOCKS_PER_SEC;
+    double throughput = ((double)(header_len * ITERATIONS) / (1024.0 * 1024.0)) / time_spent;
+    
+    printf("       -> Time: %.3fs | Throughput: %.2f MB/s\n", time_spent, throughput);
+    
+    ring_buffer_free(rb);
+}
+
+void test_efficiency_bulk_resize() {
+    // Scenario: Write 10MB of data into a small buffer. 
+    // This forces multiple resize operations (malloc + memcpy linearization).
+    
+    size_t initial_cap = 128;
+    size_t data_size = 10 * 1024 * 1024; // 10 MB
+    
+    RingBuffer *rb = ring_buffer_create(initial_cap);
+    char *dummy_data = malloc(data_size);
+    memset(dummy_data, 'A', data_size); // Fill with 'A'
+    
+    printf("       -> Writing 10MB to 128B buffer (forces resize)...\n");
+    
+    clock_t start = clock();
+    
+    size_t written = ring_buffer_write(rb, dummy_data, data_size);
+    
+    clock_t end = clock();
+    double time_spent = (double)(end - start) / CLOCKS_PER_SEC;
+    
+    TEST_ASSERT(written == data_size);
+    TEST_ASSERT(ring_buffer_get_size(rb) == data_size);
+    TEST_ASSERT(ring_buffer_get_capacity(rb) >= data_size);
+    
+    printf("       -> Time: %.3fs | Final Capacity: %zu bytes\n", time_spent, ring_buffer_get_capacity(rb));
+    
+    free(dummy_data);
+    ring_buffer_free(rb);
+}
+
 // --- Public Entry Point with Descriptions ---
 void run_ring_buffer_tests(void) {
     printf("=== Ring Buffer Suite ===\n\n");
     
+    // Logic Tests
     RUN_TEST(test_create_and_destroy,       "Verify creation, capacity, and cleanup");
     RUN_TEST(test_basic_read_write,         "Simple FIFO write and read operations");
     RUN_TEST(test_wrap_around,              "Write/Read logic when data wraps physical end");
@@ -252,4 +323,9 @@ void run_ring_buffer_tests(void) {
     RUN_TEST(test_readline_truncation,      "Handle destination buffer smaller than line");
     RUN_TEST(test_readline_no_newline,      "Return NULL if no newline exists");
     RUN_TEST(test_reset,                    "Clear buffer state");
+
+    // Performance Tests
+    printf("\n--- Efficiency Tests ---\n");
+    RUN_TEST(test_efficiency_readline_streaming, "Throughput: Stream 1M headers (Write/Read cycle)");
+    RUN_TEST(test_efficiency_bulk_resize,        "Throughput: Bulk write causing exponential resize");
 }

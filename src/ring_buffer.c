@@ -1,403 +1,299 @@
 #include "ring_buffer.h"
+#include <stdlib.h>
+#include <string.h>
+#include <stdio.h>
+#include <errno.h>
+#include <stdint.h>
 
+// --- Configuration ---
+// Maximum allowed size (e.g., 16MB). Prevents memory exhaustion attacks.
+#define MAX_RING_BUFFER_CAPACITY (1024 * 1024 * 16) 
+#define DEFAULT_INITIAL_CAPACITY 1024
 
-// --- Ring Buffer Function Implementations ---
-static int ring_buffer_resize(RingBuffer *rb, size_t new_capacity)
-{
-    if (!rb || new_capacity <= rb->capacity || new_capacity < rb->size)
-    {
-        // Invalid arguments or no resize needed/possible
-        return -1; // Or maybe 0 if new_capacity <= capacity? Let's stick to -1 for error.
-    }
+// --- Helper Functions ---
 
-    // Optional: Check against a maximum capacity limit
-    /*
-    if (new_capacity > MAX_RING_BUFFER_CAPACITY) {
-        fprintf(stderr, "Error: RingBuffer resize requested capacity %zu exceeds maximum %d\n",
-                new_capacity, MAX_RING_BUFFER_CAPACITY);
-        errno = ENOMEM; // Indicate memory limit reached
-        return -1;
-    }
-    */
-
-    char *new_buffer = malloc(new_capacity);
-    if (!new_buffer)
-    {
-        perror("Failed to allocate memory for RingBuffer resize");
-        return -1;
-    }
-
-    // Copy data from old buffer to new buffer, linearizing it
-    size_t bytes_to_copy_part1 = 0;
-    size_t bytes_to_copy_part2 = 0;
-
-    if (rb->size > 0)
-    {
-        if (rb->head > rb->tail)
-        {
-            // Data is contiguous
-            bytes_to_copy_part1 = rb->size;
-            memcpy(new_buffer, rb->buffer + rb->tail, bytes_to_copy_part1);
-        }
-        else
-        {
-            // Data wraps around
-            bytes_to_copy_part1 = rb->capacity - rb->tail;
-            memcpy(new_buffer, rb->buffer + rb->tail, bytes_to_copy_part1);
-
-            bytes_to_copy_part2 = rb->head;
-            memcpy(new_buffer + bytes_to_copy_part1, rb->buffer, bytes_to_copy_part2);
-        }
-    }
-
-    // Free the old buffer
-    free(rb->buffer);
-
-    // Update RingBuffer structure
-    rb->buffer = new_buffer;
-    rb->capacity = new_capacity;
-    rb->tail = 0;        // Data is now linear, starting at index 0
-    rb->head = rb->size; // Head is positioned after the last byte of existing data
-
-    // fprintf(stderr, "DEBUG: RingBuffer resized to capacity %zu\n", new_capacity); // Optional debug print
-
-    return 0; // Success
+static inline size_t min_size(size_t a, size_t b) {
+    return (a < b) ? a : b;
 }
 
-RingBuffer *ring_buffer_create(size_t initial_capacity)
-{
-    // Use INITIAL_RING_BUFFER_CAPACITY if initial_capacity is 0 or too small
-    if (initial_capacity == 0)
-        initial_capacity = INITIAL_RING_BUFFER_CAPACITY;
+// Resizes the buffer.
+// Strategy: Linearize the data (unwrap it) into the new buffer.
+static int ring_buffer_resize(RingBuffer *rb, size_t new_capacity) {
+    if (!rb) return -1;
+    
+    // Safety check: Don't shrink below current data size
+    if (new_capacity < rb->size) return -1;
+
+    // Safety check: Hard limit on memory usage
+    if (new_capacity > MAX_RING_BUFFER_CAPACITY) {
+        // fprintf(stderr, "Error: RingBuffer max capacity reached.\n");
+        errno = ENOMEM;
+        return -1;
+    }
+
+    char *new_buffer = malloc(new_capacity);
+    if (!new_buffer) {
+        return -1;
+    }
+
+    // Copy data to new buffer, linearizing it (Tail -> End, Start -> Head)
+    if (rb->size > 0) {
+        size_t to_end = rb->capacity - rb->tail;
+        if (rb->head > rb->tail) {
+            // Data is contiguous
+            memcpy(new_buffer, rb->buffer + rb->tail, rb->size);
+        } else {
+            // Data wraps around
+            memcpy(new_buffer, rb->buffer + rb->tail, to_end);
+            memcpy(new_buffer + to_end, rb->buffer, rb->head);
+        }
+    }
+
+    free(rb->buffer);
+    rb->buffer = new_buffer;
+    rb->capacity = new_capacity;
+    rb->tail = 0;
+    rb->head = rb->size; // Head points exactly after the last byte
+    
+    return 0;
+}
+
+// Internal helper to advance tail without reading data (used by readline)
+static void ring_buffer_skip(RingBuffer *rb, size_t len) {
+    if (!rb || len == 0 || rb->size == 0) return;
+    
+    if (len > rb->size) len = rb->size;
+
+    rb->tail += len;
+    // Handle wrap-around
+    if (rb->tail >= rb->capacity) {
+        rb->tail -= rb->capacity;
+    }
+    rb->size -= len;
+}
+
+// --- Lifecycle Functions ---
+
+RingBuffer *ring_buffer_create(size_t initial_capacity) {
+    if (initial_capacity == 0) initial_capacity = DEFAULT_INITIAL_CAPACITY;
 
     RingBuffer *rb = malloc(sizeof(RingBuffer));
-    if (!rb)
-    {
-        perror("Failed to allocate RingBuffer struct");
-        return NULL;
-    }
+    if (!rb) return NULL;
+
     rb->buffer = malloc(initial_capacity);
-    if (!rb->buffer)
-    {
-        perror("Failed to allocate RingBuffer internal buffer");
+    if (!rb->buffer) {
         free(rb);
         return NULL;
     }
+
     rb->capacity = initial_capacity;
-    ring_buffer_reset(rb); // Initialize head, tail, size
+    ring_buffer_reset(rb);
     return rb;
 }
 
-// --- Modified ring_buffer_write ---
-size_t ring_buffer_write(RingBuffer *rb, const char *data, size_t data_len)
-{
-    if (!rb || !data || data_len == 0)
-        return 0;
-
-    size_t available_space = rb->capacity - rb->size;
-
-    // Check if resizing is needed
-    if (data_len > available_space)
-    {
-        // Calculate new capacity: at least double, but ensure enough space for new data
-        size_t needed_capacity = rb->size + data_len;
-        size_t new_capacity = rb->capacity;
-        do
-        {
-            new_capacity *= 2; // Double the capacity
-            // Handle potential overflow if capacity becomes huge, though unlikely with size_t
-            if (new_capacity < rb->capacity)
-            {                                   // Check for overflow
-                new_capacity = needed_capacity; // Fallback if doubling overflows
-                if (new_capacity < rb->size || new_capacity < data_len)
-                { // Check needed_capacity didn't overflow
-                    fprintf(stderr, "Error: RingBuffer capacity overflow during resize calculation.\n");
-                    errno = EOVERFLOW;
-                    return 0; // Cannot resize sufficiently
-                }
-                // If needed_capacity is valid but doubling overflowed, use needed_capacity if it's larger than current capacity
-                if (new_capacity <= rb->capacity)
-                {
-                    fprintf(stderr, "Error: RingBuffer cannot grow large enough.\n");
-                    errno = ENOMEM;
-                    return 0;
-                }
-                break; // Use the calculated needed_capacity (if valid & larger)
-            }
-        } while (new_capacity < needed_capacity);
-
-        // Attempt to resize
-        if (ring_buffer_resize(rb, new_capacity) != 0)
-        {
-            // Resizing failed (e.g., out of memory)
-            // Try to write whatever fits in the *current* available space
-            size_t bytes_to_write = available_space;
-            if (bytes_to_write == 0)
-                return 0; // Buffer is completely full, resize failed
-
-            // Proceed with writing partial data (existing logic)
-            size_t available_space_to_end = rb->capacity - rb->head;
-
-            if (bytes_to_write <= available_space_to_end)
-            {
-                memcpy(rb->buffer + rb->head, data, bytes_to_write);
-                rb->head = (rb->head + bytes_to_write) % rb->capacity; // Use modulo for safety
-            }
-            else
-            {
-                memcpy(rb->buffer + rb->head, data, available_space_to_end);
-                memcpy(rb->buffer, data + available_space_to_end, bytes_to_write - available_space_to_end);
-                rb->head = bytes_to_write - available_space_to_end;
-            }
-            rb->size += bytes_to_write;
-            fprintf(stderr, "Warning: RingBuffer resize failed, wrote partial data (%zu bytes)\n", bytes_to_write);
-            return bytes_to_write; // Return the amount actually written
-        }
-        // Resizing succeeded, available_space is now updated implicitly by the change in rb->capacity
-        // The write logic below will now handle the full data_len
+void ring_buffer_free(RingBuffer *rb) {
+    if (rb) {
+        free(rb->buffer);
+        free(rb);
     }
+}
 
-    // --- Original write logic (now guaranteed to have enough space) ---
-    size_t bytes_to_write = data_len; // We know we have space now
+void ring_buffer_reset(RingBuffer *rb) {
+    if (rb) {
+        rb->head = 0;
+        rb->tail = 0;
+        rb->size = 0;
+    }
+}
 
-    size_t available_space_to_end = rb->capacity - rb->head;
+// --- Core Operations ---
 
-    if (bytes_to_write <= available_space_to_end)
-    {
-        memcpy(rb->buffer + rb->head, data, bytes_to_write);
-        rb->head += bytes_to_write;
-        if (rb->head == rb->capacity)
-        { // Wrap around if head reaches end
-            rb->head = 0;
+size_t ring_buffer_write(RingBuffer *rb, const char *data, size_t data_len) {
+    if (!rb || !data || data_len == 0) return 0;
+
+    size_t available = rb->capacity - rb->size;
+
+    // 1. Resize if necessary
+    if (data_len > available) {
+        size_t new_cap = rb->capacity;
+        size_t required = rb->size + data_len;
+
+        // Exponential growth strategy (Doubling)
+        while (new_cap < required) {
+            new_cap *= 2;
+            // Overflow check for size_t wrapping
+            if (new_cap < rb->capacity) {
+                new_cap = MAX_RING_BUFFER_CAPACITY + 1; // Force failure in next check
+                break;
+            }
+        }
+
+        // Try to resize. If it fails (OOM or Max Limit), return 0.
+        // We do NOT write partial data. Atomic failure is safer for HTTP.
+        if (ring_buffer_resize(rb, new_cap) != 0) {
+            return 0; 
         }
     }
-    else
-    { // Data wraps around
-        memcpy(rb->buffer + rb->head, data, available_space_to_end);
-        memcpy(rb->buffer, data + available_space_to_end, bytes_to_write - available_space_to_end);
-        rb->head = bytes_to_write - available_space_to_end;
+
+    // 2. Write data (Guaranteed to fit now)
+    size_t to_end = rb->capacity - rb->head;
+
+    if (data_len <= to_end) {
+        // Continuous write
+        memcpy(rb->buffer + rb->head, data, data_len);
+        rb->head += data_len;
+        if (rb->head == rb->capacity) rb->head = 0;
+    } else {
+        // Wrap-around write
+        memcpy(rb->buffer + rb->head, data, to_end);
+        memcpy(rb->buffer, data + to_end, data_len - to_end);
+        rb->head = data_len - to_end;
     }
-    rb->size += bytes_to_write;
-    return bytes_to_write;
+
+    rb->size += data_len;
+    return data_len;
 }
 
-void ring_buffer_free(RingBuffer *rb)
-{
-    if (!rb)
-        return;
-    free(rb->buffer);
-    free(rb);
-}
+size_t ring_buffer_read(RingBuffer *rb, char *dest, size_t dest_len) {
+    if (!rb || !dest || dest_len == 0 || rb->size == 0) return 0;
 
-void ring_buffer_reset(RingBuffer *rb)
-{
-    if (!rb)
-        return;
-    rb->head = 0;
-    rb->tail = 0;
-    rb->size = 0;
-}
+    // Cap read length to available data
+    size_t bytes_to_read = min_size(dest_len, rb->size);
+    size_t to_end = rb->capacity - rb->tail;
 
-size_t ring_buffer_get_size(const RingBuffer *rb)
-{
-    return rb ? rb->size : 0;
-}
-
-size_t ring_buffer_get_capacity(const RingBuffer *rb)
-{
-    return rb ? rb->capacity : 0;
-}
-int ring_buffer_is_empty(const RingBuffer *rb)
-{
-    return rb ? rb->size == 0 : 1;
-}
-
-int ring_buffer_is_full(const RingBuffer *rb)
-{
-    return rb ? rb->size == rb->capacity : 0;
-}
-
-size_t ring_buffer_read(RingBuffer *rb, char *dest, size_t dest_len)
-{
-    if (!rb || !dest || dest_len == 0 || ring_buffer_is_empty(rb))
-        return 0;
-
-    size_t bytes_to_read = dest_len;
-    if (bytes_to_read > rb->size)
-    {
-        bytes_to_read = rb->size; // Don't read more than what's in buffer
-    }
-    if (bytes_to_read == 0)
-        return 0;
-
-    size_t available_data_to_end = rb->capacity - rb->tail;
-
-    if (bytes_to_read <= available_data_to_end)
-    {
+    if (bytes_to_read <= to_end) {
+        // Continuous read
         memcpy(dest, rb->buffer + rb->tail, bytes_to_read);
         rb->tail += bytes_to_read;
-        if (rb->tail == rb->capacity)
-        { // Wrap around if tail reaches end
-            rb->tail = 0;
-        }
+        if (rb->tail == rb->capacity) rb->tail = 0;
+    } else {
+        // Wrap-around read
+        memcpy(dest, rb->buffer + rb->tail, to_end);
+        memcpy(dest + to_end, rb->buffer, bytes_to_read - to_end);
+        rb->tail = bytes_to_read - to_end;
     }
-    else
-    { // Data wraps around
-        memcpy(dest, rb->buffer + rb->tail, available_data_to_end);
-        memcpy(dest + available_data_to_end, rb->buffer, bytes_to_read - available_data_to_end);
-        rb->tail = bytes_to_read - available_data_to_end;
-    }
+
     rb->size -= bytes_to_read;
     return bytes_to_read;
 }
 
-size_t ring_buffer_peek(const RingBuffer *rb, char *dest, size_t dest_len)
-{
-    if (!rb || !dest || dest_len == 0 || ring_buffer_is_empty(rb))
-        return 0;
+size_t ring_buffer_peek(const RingBuffer *rb, char *dest, size_t dest_len) {
+    if (!rb || !dest || dest_len == 0 || rb->size == 0) return 0;
 
-    size_t bytes_to_peek = dest_len;
-    if (bytes_to_peek > rb->size)
-    {
-        bytes_to_peek = rb->size;
-    }
-    if (bytes_to_peek == 0)
-        return 0;
+    size_t bytes_to_peek = min_size(dest_len, rb->size);
+    size_t to_end = rb->capacity - rb->tail;
 
-    size_t available_data_to_end = rb->capacity - rb->tail;
-
-    if (bytes_to_peek <= available_data_to_end)
-    {
+    if (bytes_to_peek <= to_end) {
         memcpy(dest, rb->buffer + rb->tail, bytes_to_peek);
-        // Do not advance tail for peek operation
-    }
-    else
-    {
-        memcpy(dest, rb->buffer + rb->tail, available_data_to_end);
-        memcpy(dest + available_data_to_end, rb->buffer, bytes_to_peek - available_data_to_end);
+    } else {
+        memcpy(dest, rb->buffer + rb->tail, to_end);
+        memcpy(dest + to_end, rb->buffer, bytes_to_peek - to_end);
     }
 
-    return bytes_to_peek; // Return how many bytes we peeked
+    return bytes_to_peek;
 }
 
-char *ring_buffer_readline(RingBuffer *rb, char *line_buffer, size_t line_buffer_size)
-{
-    // --- Argument Validation ---
-    if (!rb || !line_buffer || line_buffer_size == 0)
-    {
-        return NULL; // Invalid arguments
-    }
-    line_buffer[0] = '\0'; // Ensure buffer is empty initially or on early return
+// --- Specialized HTTP Operations ---
 
-    size_t bytes_in_rb = ring_buffer_get_size(rb);
-    if (bytes_in_rb == 0)
-    {
-        return NULL; // Empty buffer, no line possible
-    }
-
-    // --- Efficiently Find Newline Offset ---
-    size_t newline_offset = (size_t)-1; // Sentinel for not found
-    for (size_t i = 0; i < bytes_in_rb; ++i)
-    {
-        // Calculate index without modifying rb->tail yet
-        size_t current_idx = (rb->tail + i) % rb->capacity;
-        if (rb->buffer[current_idx] == '\n')
-        {
-            newline_offset = i;
-            break;
-        }
-    }
-
-    // If no newline was found in the available data
-    if (newline_offset == (size_t)-1)
-    {
+char *ring_buffer_readline(RingBuffer *rb, char *line_buffer, size_t line_buffer_size) {
+    if (!rb || !line_buffer || line_buffer_size == 0 || rb->size == 0) {
+        if (line_buffer && line_buffer_size > 0) line_buffer[0] = '\0';
         return NULL;
     }
 
-    // --- Determine Actual Line Length and Ending Type ---
-    // newline_offset is the index relative to tail where '\n' is.
-    size_t actual_line_len = newline_offset; // Length initially excludes \n
-    int cr_found = 0;
-    size_t ending_len = 1; // Bytes to consume for line ending (\n)
+    // We scan for '\n'.
+    // Optimization: Use memchr instead of looping byte-by-byte.
+    // Because the buffer wraps, we might need two scans.
 
-    // Check if the character *before* '\n' is '\r'
-    if (newline_offset > 0)
-    {
-        size_t prev_idx = (rb->tail + newline_offset - 1) % rb->capacity;
-        if (rb->buffer[prev_idx] == '\r')
-        {
-            cr_found = 1;
-            actual_line_len = newline_offset - 1; // Actual line content excludes \r too
-            ending_len = 2;                       // Line ending is \r\n
+    size_t to_end = rb->capacity - rb->tail;
+    size_t search_len_1 = min_size(rb->size, to_end);
+    
+    // 1. Scan from Tail to End of Buffer
+    void *found_ptr = memchr(rb->buffer + rb->tail, '\n', search_len_1);
+    size_t newline_offset = 0;
+    int found = 0;
+
+    if (found_ptr) {
+        newline_offset = (char*)found_ptr - (rb->buffer + rb->tail);
+        found = 1;
+    } 
+    // 2. If not found and data wraps, scan from Start to Head
+    else if (rb->size > to_end) {
+        size_t search_len_2 = rb->size - to_end;
+        found_ptr = memchr(rb->buffer, '\n', search_len_2);
+        if (found_ptr) {
+            // Offset is part1 length + distance into part2
+            newline_offset = to_end + ((char*)found_ptr - rb->buffer);
+            found = 1;
         }
     }
 
-    // --- Read Actual Line Content (up to buffer size limit) ---
-    size_t len_to_copy = actual_line_len;
-    if (len_to_copy >= line_buffer_size)
-    {
-        // fprintf(stderr, "Warning: ring_buffer_readline truncated line (len %zu) to fit buffer (size %zu)\n",
-        //         actual_line_len, line_buffer_size);
-        len_to_copy = line_buffer_size - 1; // Leave space for null terminator
+    if (!found) {
+        return NULL; // No complete line found
     }
 
-    // Use ring_buffer_read to get the actual line content.
-    // This advances rb->tail past the content.
-    size_t bytes_read = ring_buffer_read(rb, line_buffer, len_to_copy);
-    if (bytes_read != len_to_copy)
-    {
-        // This indicates an internal error in ring_buffer_read or the logic here.
-        fprintf(stderr, "Error: ring_buffer_readline failed to read expected line content (%zu != %zu).\n", bytes_read, len_to_copy);
-        // State is potentially inconsistent. Returning NULL is safest.
-        // We might have partially read data, leaving the buffer state difficult to recover.
-        return NULL;
-    }
-    line_buffer[len_to_copy] = '\0'; // Null-terminate the string in the destination buffer.
+    // Total bytes to remove from ring buffer (chars + \n)
+    size_t total_bytes_to_consume = newline_offset + 1;
 
-    // --- Consume Remaining Part of Line (if truncated) and the Line Ending ---
-
-    // Bytes of the *actual line* that were not copied because the buffer was too small
-    size_t remaining_line_bytes_to_discard = actual_line_len - len_to_copy;
-
-    // Total bytes remaining in the buffer that belong to this line (truncated part + ending)
-    size_t total_bytes_to_consume = remaining_line_bytes_to_discard + ending_len;
-
-    // Consume these bytes efficiently
-    if (total_bytes_to_consume > 0)
-    {
-        // Optimization: Can we just advance head/tail directly if possible?
-        // ring_buffer_read internally advances tail and decreases size.
-        // We can just read into a small discard buffer or potentially optimize within ring_buffer_read itself if needed.
-        char discard_buffer[16]; // Small temporary buffer
-        size_t consumed_count = 0;
-        while (consumed_count < total_bytes_to_consume)
-        {
-            size_t amount_to_consume_now = total_bytes_to_consume - consumed_count;
-            if (amount_to_consume_now > sizeof(discard_buffer))
-            {
-                amount_to_consume_now = sizeof(discard_buffer);
-            }
-            size_t just_consumed = ring_buffer_read(rb, discard_buffer, amount_to_consume_now);
-
-            // If ring_buffer_read returns 0 before consuming all expected bytes,
-            // it means the buffer became empty unexpectedly (error).
-            if (just_consumed == 0 && (consumed_count < total_bytes_to_consume))
-            {
-                fprintf(stderr, "Error: ring_buffer_readline buffer became empty while consuming line remainder/ending (consumed %zu/%zu).\n",
-                        consumed_count, total_bytes_to_consume);
-                // The buffer state is now likely corrupt relative to expectations.
-                return NULL; // Indicate error
-            }
-            consumed_count += just_consumed;
+    // Calculate effective string length (excluding \n and potential \r)
+    size_t content_len = newline_offset;
+    
+    // Check for \r (Carriage Return) before \n
+    if (newline_offset > 0) {
+        // Need to peek the character before the newline.
+        // Since newline_offset is relative to tail, (tail + offset - 1) handles wrap logic.
+        size_t prev_idx = rb->tail + newline_offset - 1;
+        if (prev_idx >= rb->capacity) prev_idx -= rb->capacity; // Wrap correction
+        
+        if (rb->buffer[prev_idx] == '\r') {
+            content_len--;
         }
-        // Optional check: Verify total consumed amount
-        if (consumed_count != total_bytes_to_consume)
-        {
-            fprintf(stderr, "Warning: ring_buffer_readline consumed %zu bytes, expected to consume %zu for remainder+ending.\n",
-                    consumed_count, total_bytes_to_consume);
-            // Proceed, but log this potential issue.
-        }
+    } else {
+        // Special case: newline is at offset 0. 
+        // Logic dictates we check the LAST byte of the PREVIOUS write? 
+        // No, standard readline assumes the \r is currently in the buffer.
+        // If the buffer starts with \n, content_len is 0.
     }
 
-    return line_buffer; // Success
+    // How much to copy to user buffer? (Protect against overflow)
+    size_t bytes_to_copy = content_len;
+    if (bytes_to_copy >= line_buffer_size) {
+        bytes_to_copy = line_buffer_size - 1;
+    }
+
+    // Reuse PEEK logic to copy the specific line content
+    // We cannot use ring_buffer_read yet because we want to discard the *full* line (incl \r\n),
+    // even if we only copy a truncated portion to line_buffer.
+    
+    size_t part1_len = min_size(bytes_to_copy, rb->capacity - rb->tail);
+    memcpy(line_buffer, rb->buffer + rb->tail, part1_len);
+    
+    if (bytes_to_copy > part1_len) {
+        memcpy(line_buffer + part1_len, rb->buffer, bytes_to_copy - part1_len);
+    }
+    
+    line_buffer[bytes_to_copy] = '\0';
+
+    // Discard the processed line from the ring buffer
+    ring_buffer_skip(rb, total_bytes_to_consume);
+
+    return line_buffer;
+}
+
+// --- Getters ---
+
+size_t ring_buffer_get_size(const RingBuffer *rb) {
+    return rb ? rb->size : 0;
+}
+
+size_t ring_buffer_get_capacity(const RingBuffer *rb) {
+    return rb ? rb->capacity : 0;
+}
+
+int ring_buffer_is_empty(const RingBuffer *rb) {
+    return (!rb || rb->size == 0);
+}
+
+int ring_buffer_is_full(const RingBuffer *rb) {
+    return (rb && rb->size == rb->capacity);
 }
