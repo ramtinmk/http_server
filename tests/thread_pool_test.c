@@ -34,11 +34,8 @@ void test_task_pool_allocation() {
     Task *reallocated = task_alloc(tp);
     TEST_ASSERT(reallocated == tasks[5]);
 
-    // Cleanup (Arena style)
-    free(tp->pool_storage);
-    free(tp->free_stack);
-    pthread_mutex_destroy(&tp->lock);
-    free(tp);
+    // Cleanup
+    destroy_task_pool(tp);
 }
 
 void test_task_pool_thread_safety() {
@@ -53,9 +50,7 @@ void test_task_pool_thread_safety() {
     TEST_ASSERT(tp->top == -1);
 
     // Cleanup
-    free(tp->pool_storage);
-    free(tp->free_stack);
-    free(tp);
+    destroy_task_pool(tp);
 }
 
 // --- Thread Pool Lifecycle & Queue Tests ---
@@ -143,14 +138,14 @@ void test_pool_stress_tasks() {
 
     // Wait for queue to drain
     int timeout = 0;
-    while (timeout < 100) {
+    while (timeout < 1000) {
         pthread_mutex_lock(&pool->queue_mutex);
         if (pool->task_queue_head == NULL) {
             pthread_mutex_unlock(&pool->queue_mutex);
             break;
         }
         pthread_mutex_unlock(&pool->queue_mutex);
-        usleep(100);
+        usleep(1000);
         timeout++;
     }
 
@@ -173,7 +168,7 @@ void run_thread_pool_suite() {
     
     // Queue & Execution Logic
     RUN_TEST(test_queue_logic_internal,     "Queue: Logic check");
-    // RUN_TEST(test_pool_stress_tasks,        "ThreadPool: Stress 100 tasks / 8 workers");
+    RUN_TEST(test_pool_stress_tasks,        "ThreadPool: Stress 100 tasks / 8 workers");
 
     // Utilities
     RUN_TEST(test_set_nonblocking_logic,    "Utils: Set non-blocking flags");

@@ -293,7 +293,10 @@ void test_gzip_concurrency() {
         args[i].request = gzip_req;
         args[i].response = NULL;
 
-        pthread_create(&threads[i], NULL, multithread_worker, &args[i]);
+        if (pthread_create(&threads[i], NULL, multithread_worker, &args[i]) != 0) {
+            close(args[i].client_socket);
+            TEST_ASSERT(0 && "Thread creation failed");
+        }
     }
 
     for (int i = 0; i < num_threads; i++) {
