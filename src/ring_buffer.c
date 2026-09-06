@@ -26,7 +26,6 @@ static int ring_buffer_resize(RingBuffer *rb, size_t new_capacity) {
 
     // Safety check: Hard limit on memory usage
     if (new_capacity > MAX_RING_BUFFER_CAPACITY) {
-        // fprintf(stderr, "Error: RingBuffer max capacity reached.\n");
         errno = ENOMEM;
         return -1;
     }
@@ -37,15 +36,12 @@ static int ring_buffer_resize(RingBuffer *rb, size_t new_capacity) {
     }
 
     // Copy data to new buffer, linearizing it (Tail -> End, Start -> Head)
-    if (rb->size > 0) {
+    if (rb->size > 0 && rb->buffer) {
         size_t to_end = rb->capacity - rb->tail;
-        if (rb->head > rb->tail) {
-            // Data is contiguous
-            memcpy(new_buffer, rb->buffer + rb->tail, rb->size);
-        } else {
-            // Data wraps around
-            memcpy(new_buffer, rb->buffer + rb->tail, to_end);
-            memcpy(new_buffer + to_end, rb->buffer, rb->head);
+        size_t part1 = min_size(rb->size, to_end);
+        memcpy(new_buffer, rb->buffer + rb->tail, part1);
+        if (rb->size > part1) {
+            memcpy(new_buffer + part1, rb->buffer, rb->size - part1);
         }
     }
 
@@ -53,7 +49,7 @@ static int ring_buffer_resize(RingBuffer *rb, size_t new_capacity) {
     rb->buffer = new_buffer;
     rb->capacity = new_capacity;
     rb->tail = 0;
-    rb->head = rb->size; // Head points exactly after the last byte
+    rb->head = (rb->size == new_capacity) ? 0 : rb->size;
     
     return 0;
 }
@@ -76,6 +72,9 @@ static void ring_buffer_skip(RingBuffer *rb, size_t len) {
 
 RingBuffer *ring_buffer_create(size_t initial_capacity) {
     if (initial_capacity == 0) initial_capacity = DEFAULT_INITIAL_CAPACITY;
+    if (initial_capacity > MAX_RING_BUFFER_CAPACITY) {
+        initial_capacity = MAX_RING_BUFFER_CAPACITY;
+    }
 
     RingBuffer *rb = malloc(sizeof(RingBuffer));
     if (!rb) return NULL;
@@ -115,21 +114,28 @@ size_t ring_buffer_write(RingBuffer *rb, const char *data, size_t data_len) {
 
     // 1. Resize if necessary
     if (data_len > available) {
-        size_t new_cap = rb->capacity;
+        size_t new_cap = rb->capacity ? rb->capacity : DEFAULT_INITIAL_CAPACITY;
         size_t required = rb->size + data_len;
+
+        if (required > MAX_RING_BUFFER_CAPACITY) {
+            errno = ENOMEM;
+            return 0;
+        }
 
         // Exponential growth strategy (Doubling)
         while (new_cap < required) {
-            new_cap *= 2;
-            // Overflow check for size_t wrapping
-            if (new_cap < rb->capacity) {
-                new_cap = MAX_RING_BUFFER_CAPACITY + 1; // Force failure in next check
+            if (new_cap > MAX_RING_BUFFER_CAPACITY / 2) {
+                new_cap = MAX_RING_BUFFER_CAPACITY;
                 break;
             }
+            new_cap *= 2;
+        }
+
+        if (new_cap < required) {
+            new_cap = required;
         }
 
         // Try to resize. If it fails (OOM or Max Limit), return 0.
-        // We do NOT write partial data. Atomic failure is safer for HTTP.
         if (ring_buffer_resize(rb, new_cap) != 0) {
             return 0; 
         }
