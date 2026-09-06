@@ -60,15 +60,20 @@ struct ThreadPool {
 ThreadPool *create_thread_pool(int pool_size);
 void destroy_thread_pool(ThreadPool *pool);
 void add_task_to_queue(ThreadPool *pool, int client_socket);
-Task *get_task_from_queue(ThreadPool *pool); // Or Task* get_task_from_queue(...) depending on task structure return
-void *worker_thread_function(void *arg);
-TaskPool *create_task_pool(int capacity);
-void buffer_release(BufferPool *bp, RingBuffer *rb);
-RingBuffer *buffer_acquire(BufferPool *bp);
-void add_task_to_queue(ThreadPool *pool, int client_socket);
 Task *get_task_from_queue(ThreadPool *pool);
+void *worker_thread_function(void *arg);
+
+TaskPool *create_task_pool(int capacity);
+void destroy_task_pool(TaskPool *tp);
 Task *task_alloc(TaskPool *tp);
 void task_free(TaskPool *tp, Task *t);
+
+BufferPool *create_buffer_pool(int capacity);
+void destroy_buffer_pool(BufferPool *bp);
+RingBuffer *buffer_acquire(BufferPool *bp);
+void buffer_release(BufferPool *bp, RingBuffer *rb);
+
+int set_nonblocking(int fd);
 
 
 
