@@ -3,6 +3,7 @@
 #include <signal.h>
 #include <sys/sendfile.h>
 #include <sys/stat.h>
+#include <sys/uio.h>
 #include <fcntl.h>
 #include <errno.h>
 #include <time.h>
@@ -10,9 +11,6 @@
 
 // --- Configuration ---
 #define IDLE_TIMEOUT_SEC 60
-#define MAX_HEADERS 64
-#define MAX_HEADER_LEN 1024
-#define ZLIB_CHUNK_SIZE 16384
 #define READ_BUFFER_SIZE 8192
 
 // Error Templates
@@ -27,13 +25,59 @@ const int SUPPORTED_METHOD_COUNT = 2;
 
 // --- Helper Functions ---
 
+// Reliable send helper that loops until full buffer is sent or an error occurs
+static ssize_t send_all(int sockfd, const void *buf, size_t len) {
+    size_t total_sent = 0;
+    const char *ptr = (const char *)buf;
+    while (total_sent < len) {
+        ssize_t sent = send(sockfd, ptr + total_sent, len - total_sent, MSG_NOSIGNAL);
+        if (sent < 0) {
+            if (errno == EINTR) continue;
+            return -1;
+        }
+        if (sent == 0) break;
+        total_sent += sent;
+    }
+    return (ssize_t)total_sent;
+}
+
+// Reliable scatter-gather send that loops until all iovecs are sent
+static ssize_t sendmsg_all(int sockfd, struct iovec *iov, int iovcnt) {
+    while (iovcnt > 0) {
+        struct msghdr msg;
+        memset(&msg, 0, sizeof(msg));
+        msg.msg_iov = iov;
+        msg.msg_iovlen = iovcnt;
+
+        ssize_t sent = sendmsg(sockfd, &msg, MSG_NOSIGNAL);
+        if (sent < 0) {
+            if (errno == EINTR) continue;
+            return -1;
+        }
+        if (sent == 0) return 0;
+
+        size_t rem = (size_t)sent;
+        while (iovcnt > 0 && rem >= iov->iov_len) {
+            rem -= iov->iov_len;
+            iov++;
+            iovcnt--;
+        }
+        if (iovcnt > 0 && rem > 0) {
+            iov->iov_base = (char *)iov->iov_base + rem;
+            iov->iov_len -= rem;
+        }
+    }
+    return 0;
+}
+
 // Wrapper to send data without crashing on SIGPIPE
 ssize_t send_data(int sockfd, const void *buf, size_t len) {
-    return send(sockfd, buf, len, MSG_NOSIGNAL);
+    return send_all(sockfd, buf, len);
 }
 
 void send_error_response(int client_socket, const char *response) {
-    send_data(client_socket, response, strlen(response));
+    if (!response) return;
+    send_all(client_socket, response, strlen(response));
 }
 
 // Efficiently set timeout using kernel socket options
@@ -42,7 +86,9 @@ void set_socket_timeout(int sockfd, int seconds) {
     tv.tv_sec = seconds;
     tv.tv_usec = 0;
     if (setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof tv) < 0) {
-        perror("setsockopt timeout");
+        if (errno != EBADF && errno != ENOTSOCK) {
+            perror("setsockopt timeout");
+        }
     }
 }
 
@@ -90,52 +136,69 @@ void sigchld_handler(int sig) {
 // --- Parsing Logic ---
 
 static void parse_request_line(char *line, HTTPRequest *req) {
-    if (!line) return;
+    if (!line || !req) return;
     
     char *method_end = strchr(line, ' ');
     if (!method_end) return;
     *method_end = '\0';
     
     strncpy(req->method, line, sizeof(req->method) - 1);
+    req->method[sizeof(req->method) - 1] = '\0';
     
     char *path_start = method_end + 1;
+    while (*path_start == ' ') path_start++;
+
     char *path_end = strchr(path_start, ' ');
     if (!path_end) {
         // HTTP/0.9 or missing version, assume rest is path
         strncpy(req->path, path_start, sizeof(req->path) - 1);
+        req->path[sizeof(req->path) - 1] = '\0';
     } else {
         *path_end = '\0';
         strncpy(req->path, path_start, sizeof(req->path) - 1);
+        req->path[sizeof(req->path) - 1] = '\0';
+
+        char *version = path_end + 1;
+        while (*version == ' ') version++;
+        if (strncasecmp(version, "HTTP/1.0", 8) == 0) {
+            req->keep_alive = 0;
+        }
     }
 }
 
 static void parse_header_line(char *line, HTTPRequest *req) {
-    if (!line || req->header_count >= MAX_HEADERS) return;
+    if (!line || !req || req->header_count >= MAX_HEADERS) return;
 
     char *colon = strchr(line, ':');
     if (!colon) return;
     *colon = '\0';
+
+    char *name = line;
+    while (*name == ' ' || *name == '\t') name++;
     
     char *value = colon + 1;
     while (*value == ' ' || *value == '\t') value++; // Trim leading
 
-    // Trim trailing (CR/LF)
+    // Trim trailing (CR/LF/whitespace)
     size_t len = strlen(value);
-    while (len > 0 && (value[len-1] == '\r' || value[len-1] == '\n' || value[len-1] == ' ')) {
+    while (len > 0 && (value[len-1] == '\r' || value[len-1] == '\n' || value[len-1] == ' ' || value[len-1] == '\t')) {
         value[len-1] = '\0';
         len--;
     }
 
-    // Store (simplified for this example)
-    strncpy(req->headers[req->header_count][0], line, 255);
-    strncpy(req->headers[req->header_count][1], value, 255);
+    strncpy(req->headers[req->header_count][0], name, sizeof(req->headers[0][0]) - 1);
+    req->headers[req->header_count][0][sizeof(req->headers[0][0]) - 1] = '\0';
+
+    strncpy(req->headers[req->header_count][1], value, sizeof(req->headers[0][1]) - 1);
+    req->headers[req->header_count][1][sizeof(req->headers[0][1]) - 1] = '\0';
+
     req->header_count++;
 
     // Logic Hooks
-    if (strcasecmp(line, "Accept-Encoding") == 0) {
+    if (strcasecmp(name, "Accept-Encoding") == 0) {
         if (strstr(value, "gzip")) req->accepts_gzip = 1;
     }
-    if (strcasecmp(line, "Connection") == 0) {
+    if (strcasecmp(name, "Connection") == 0) {
         if (strcasecmp(value, "close") == 0) req->keep_alive = 0;
         else if (strcasecmp(value, "keep-alive") == 0) req->keep_alive = 1;
     }
@@ -148,8 +211,16 @@ int method_is_supported(const char *method) {
     return 0;
 }
 
-// --- Core Request Processor ---
+void print_http_request(const HTTPRequest *req) {
+    if (!req) return;
+    printf("HTTPRequest: %s %s (keep_alive=%d, gzip=%d, headers=%d)\n",
+           req->method, req->path, req->keep_alive, req->accepts_gzip, req->header_count);
+    for (int i = 0; i < req->header_count; i++) {
+        printf("  %s: %s\n", req->headers[i][0], req->headers[i][1]);
+    }
+}
 
+// --- Core Request Processor ---
 
 static ProcessResult process_single_request(int client_socket, RingBuffer *rb, int *keep_alive) {
     if (ring_buffer_is_empty(rb)) return REQ_NEED_DATA;
@@ -181,10 +252,6 @@ static ProcessResult process_single_request(int client_socket, RingBuffer *rb, i
 
     // 2. Parse Headers
     while (1) {
-        // Snapshot before each header line to ensure atomic rollback of the *current* line check
-        // Actually, for simplicity, if we run out of data mid-headers, 
-        // we roll back to the start of the REQUEST.
-        
         line = ring_buffer_readline(rb, line_buf, sizeof(line_buf));
         if (!line) {
             // Incomplete headers. Rollback entire transaction.
@@ -225,14 +292,17 @@ static ProcessResult process_single_request(int client_socket, RingBuffer *rb, i
 
     int fd = open(filepath, O_RDONLY);
     if (fd < 0) {
-        // Try to be helpful: if file missing, 404. If perm error, 500.
         if (errno == ENOENT) send_error_response(client_socket, NOT_FOUND_404);
         else send_error_response(client_socket, ERROR_TEMPLATE("500 Internal Error", "File Access Error"));
         return REQ_OK;
     }
 
     struct stat st;
-    fstat(fd, &st);
+    if (fstat(fd, &st) < 0 || S_ISDIR(st.st_mode)) {
+        close(fd);
+        send_error_response(client_socket, NOT_FOUND_404);
+        return REQ_OK;
+    }
     long file_size = st.st_size;
     int use_gzip = req.accepts_gzip && (strcmp(req.method, "HEAD") != 0);
 
@@ -270,7 +340,7 @@ static ProcessResult process_single_request(int client_socket, RingBuffer *rb, i
         unsigned char in[ZLIB_CHUNK_SIZE];
         unsigned char out[ZLIB_CHUNK_SIZE];
         z_stream z;
-        z.zalloc = Z_NULL; z.zfree = Z_NULL; z.opaque = Z_NULL;
+        memset(&z, 0, sizeof(z));
         
         if (deflateInit2(&z, Z_DEFAULT_COMPRESSION, Z_DEFLATED, 15+16, 8, Z_DEFAULT_STRATEGY) != Z_OK) {
             close(fd);
@@ -281,40 +351,63 @@ static ProcessResult process_single_request(int client_socket, RingBuffer *rb, i
         int z_ret;
         do {
             ssize_t r = read(fd, in, sizeof(in));
-            if (r < 0) { deflateEnd(&z); close(fd); return REQ_FATAL_ERROR; }
+            if (r < 0) {
+                deflateEnd(&z);
+                close(fd);
+                return REQ_FATAL_ERROR;
+            }
             
             flush = (r == 0) ? Z_FINISH : Z_NO_FLUSH;
-            z.avail_in = r;
+            z.avail_in = (uInt)r;
             z.next_in = in;
 
             do {
                 z.avail_out = sizeof(out);
                 z.next_out = out;
                 z_ret = deflate(&z, flush);
+                if (z_ret == Z_STREAM_ERROR) {
+                    deflateEnd(&z);
+                    close(fd);
+                    return REQ_FATAL_ERROR;
+                }
                 
                 size_t have = sizeof(out) - z.avail_out;
                 if (have > 0) {
                     char chunk_head[32];
-                    snprintf(chunk_head, sizeof(chunk_head), "%zx\r\n", have);
-                    if (send_data(client_socket, chunk_head, strlen(chunk_head)) < 0 ||
-                        send_data(client_socket, out, have) < 0 ||
-                        send_data(client_socket, "\r\n", 2) < 0) {
-                        deflateEnd(&z); close(fd); return REQ_CLIENT_CLOSED;
+                    int head_len = snprintf(chunk_head, sizeof(chunk_head), "%zx\r\n", have);
+
+                    struct iovec iov[3];
+                    iov[0].iov_base = chunk_head;
+                    iov[0].iov_len = head_len;
+                    iov[1].iov_base = (void *)out;
+                    iov[1].iov_len = have;
+                    iov[2].iov_base = (void *)"\r\n";
+                    iov[2].iov_len = 2;
+
+                    if (sendmsg_all(client_socket, iov, 3) < 0) {
+                        deflateEnd(&z);
+                        close(fd);
+                        return REQ_CLIENT_CLOSED;
                     }
                 }
             } while (z.avail_out == 0);
         } while (flush != Z_FINISH);
         
         deflateEnd(&z);
-        send_data(client_socket, "0\r\n\r\n", 5);
+        if (send_all(client_socket, "0\r\n\r\n", 5) < 0) {
+            close(fd);
+            return REQ_CLIENT_CLOSED;
+        }
     } else {
         // --- SENDFILE (Zero Copy) ---
         off_t off = 0;
-        ssize_t sent = sendfile(client_socket, fd, &off, file_size);
-        if (sent < 0) {
-            close(fd);
-            // EPIPE means client closed, otherwise internal error
-            return (errno == EPIPE) ? REQ_CLIENT_CLOSED : REQ_FATAL_ERROR;
+        while (off < file_size) {
+            ssize_t sent = sendfile(client_socket, fd, &off, file_size - off);
+            if (sent < 0) {
+                close(fd);
+                return (errno == EPIPE || errno == ECONNRESET) ? REQ_CLIENT_CLOSED : REQ_FATAL_ERROR;
+            }
+            if (sent == 0) break;
         }
     }
 
@@ -331,22 +424,26 @@ void *worker_thread_function(void *arg) {
         Task *task = get_task_from_queue(pool);
         if (!task) break;
 
-        handle_client(task->client_socket, pool->buffer_pool);
+        if (task->client_socket >= 0) {
+            handle_client(task->client_socket, pool->buffer_pool);
+            close(task->client_socket);
+        }
         
-        close(task->client_socket); // Ensure socket is closed
         task_free(pool->task_pool, task);
     }
     pthread_exit(NULL);
 }
 
 void handle_client(int client_socket, BufferPool *bp) {
+    if (client_socket < 0 || !bp) return;
+
     RingBuffer *rb = buffer_acquire(bp);
     if (!rb) {
         fprintf(stderr, "Server overloaded: No buffers available.\n");
         return;
     }
 
-    // Set timeout (No more select loop)
+    // Set timeout
     set_socket_timeout(client_socket, IDLE_TIMEOUT_SEC);
 
     int keep_alive = 1;
@@ -369,7 +466,6 @@ void handle_client(int client_socket, BufferPool *bp) {
         if (!keep_alive) break;
 
         // 2. Read More Data
-        // If we are here, it means we returned REQ_NEED_DATA (buffer incomplete/empty)
         ssize_t bytes = recv(client_socket, read_buffer, sizeof(read_buffer), 0);
 
         if (bytes > 0) {
@@ -387,8 +483,10 @@ void handle_client(int client_socket, BufferPool *bp) {
             if (errno == EAGAIN || errno == EWOULDBLOCK) {
                 // Timeout
                 keep_alive = 0; 
-            } else if (errno != EINTR) {
+            } else if (errno != EINTR && errno != EBADF && errno != ENOTSOCK && errno != ECONNRESET) {
                 perror("recv");
+                keep_alive = 0;
+            } else {
                 keep_alive = 0;
             }
         }

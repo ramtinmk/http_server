@@ -28,6 +28,8 @@
 #define BACKLOG 10
 #define BUFFER_SIZE 8092
 #define ZLIB_CHUNK_SIZE 16384
+#define MAX_HEADERS 64
+#define MAX_HEADER_LEN 1024
 
 // --- Response Templates ---
 #define RESPONSE_TEMPLATE \
@@ -41,10 +43,10 @@
 #define ERROR_TEMPLATE(status, msg) \
     "HTTP/1.1 " status "\r\n" \
     "Content-Type: text/html\r\n" \
-    "Connection: keep-alive\r\n\r\n" \
+    "Connection: close\r\n\r\n" \
     "<html><head><title>" status "</title></head>" \
     "<body><h1>" status "</h1><p>" msg "</p></body></html>\r\n"
-// Add this enum definition near the top or in http_server.h if preferred
+
 typedef enum
 {
     REQUEST_PROCESSED_OK,     // Successfully processed one request
@@ -56,24 +58,22 @@ typedef enum
 } RequestStatus;
 
 // Error responses
-
-
-
 extern const char *BAD_REQUEST_400;
 extern const char *NOT_FOUND_404;
 extern const char *NOT_IMPLEMENTED_501;
+extern const char *PAYLOAD_TOO_LARGE_413;
+extern const char *HEADER_FIELDS_TOO_LARGE_431;
 extern const char *SUPPORTED_METHODS[];
 extern const int SUPPORTED_METHOD_COUNT;
-
 
 // --- Data Structures ---
 typedef struct {
     char method[16];
     char path[1024];
-    char headers[32][2][256]; // Header name, Header value
+    char headers[MAX_HEADERS][2][256]; // Header name, Header value
     int header_count;
     int keep_alive;
-    int accepts_gzip; // <-- Add this flag
+    int accepts_gzip;
 } HTTPRequest;
 
 // Return codes for the state machine
@@ -84,7 +84,6 @@ typedef enum {
     REQ_CLIENT_CLOSED   // Client disconnected gracefully
 } ProcessResult;
 
-
 struct BufferPool; 
 
 // --- Function Prototypes (Interface) ---
@@ -93,12 +92,7 @@ int create_server_socket(void);
 void send_error_response(int client_socket, const char *response);
 int method_is_supported(const char *method);
 void *worker_thread_function(void *arg);
-static ProcessResult process_single_request(int client_socket, RingBuffer *rb, int *keep_alive);
-
-// static void parse_header_line(char *line, HTTPRequest *req);
 void print_http_request(const HTTPRequest *req);
-// static void parse_request_line(char *line, HTTPRequest *req);
-int create_server_socket(void);
 void sigchld_handler(int sig);
 
 typedef enum {
