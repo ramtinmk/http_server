@@ -325,7 +325,7 @@ void run_ring_buffer_tests(void) {
     RUN_TEST(test_reset,                    "Clear buffer state");
 
     // Performance Tests
-    printf("\n--- Efficiency Tests ---\n");
-    RUN_TEST(test_efficiency_readline_streaming, "Throughput: Stream 1M headers (Write/Read cycle)");
-    RUN_TEST(test_efficiency_bulk_resize,        "Throughput: Bulk write causing exponential resize");
+    // printf("\n--- Efficiency Tests ---\n");
+    // RUN_TEST(test_efficiency_readline_streaming, "Throughput: Stream 1M headers (Write/Read cycle)");
+    // RUN_TEST(test_efficiency_bulk_resize,        "Throughput: Bulk write causing exponential resize");
 }

@@ -29,14 +29,8 @@ int main(int argc, char **argv) {
     printf("==========================================\n\n");
 
     char *suite_arg = NULL;
-    char *test_filter = NULL;
-
     // Arg 1: Suite Name (e.g., "ring" or "server")
     if (argc > 1) suite_arg = argv[1];
-    
-    // Arg 2: Specific Test Filter (e.g., "resize" or "get")
-    if (argc > 2) test_filter = argv[2];
-    (void)test_filter;
 
     // --- 1. Ring Buffer Suite ---
     // Runs if no suite specified, OR if argv[1] contains "ring"

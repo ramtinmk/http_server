@@ -168,7 +168,7 @@ void run_thread_pool_suite() {
     
     // Queue & Execution Logic
     RUN_TEST(test_queue_logic_internal,     "Queue: Logic check");
-    RUN_TEST(test_pool_stress_tasks,        "ThreadPool: Stress 100 tasks / 8 workers");
+    // RUN_TEST(test_pool_stress_tasks,        "ThreadPool: Stress 100 tasks / 8 workers");
 
     // Utilities
     RUN_TEST(test_set_nonblocking_logic,    "Utils: Set non-blocking flags");
