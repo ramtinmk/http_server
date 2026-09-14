@@ -3,6 +3,8 @@ cmake_minimum_required(VERSION 3.16)
 # Project Configuration
 project(HTTPServer VERSION 1.0 LANGUAGES C)
 
+include(CTest)
+
 # Use C11
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -66,6 +68,9 @@ if(TEST_SOURCES)
     )
     
     message(STATUS "Test runner configured with sources: ${TEST_SOURCES}")
+
+    add_test(NAME ring_buffer_tests COMMAND $<TARGET_FILE:run_tests> ring)
+    add_test(NAME thread_pool_tests COMMAND $<TARGET_FILE:run_tests> thread_pool)
 endif()
 
 if(DEFINED TEST_FILE)
@@ -79,3 +84,26 @@ if(DEFINED TEST_FILE)
         ZLIB::ZLIB
     )
 endif()
+
+# Dependency-free request-rate benchmark. These targets start the server in
+# the repository root so relative static-file paths behave like production.
+find_package(Python3 COMPONENTS Interpreter REQUIRED)
+
+add_custom_target(benchmark
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/http_benchmark.py
+            --start-server --rate 100 --duration 5 --concurrency 16
+    DEPENDS http_server
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    USES_TERMINAL
+    COMMENT "Running HTTP benchmark (100 req/s for 5 seconds)"
+)
+
+add_custom_target(stress
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/http_benchmark.py
+            --start-server --rate 5000 --duration 10 --concurrency 32
+            --timeout 30 --min-rps 400
+    DEPENDS http_server
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    USES_TERMINAL
+    COMMENT "Running HTTP request-rate stress test (5000 req/s for 10 seconds)"
+)

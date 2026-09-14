@@ -24,8 +24,39 @@ A simple HTTP server implementation for educational purposes demonstrating:
 
 ```
 make
-./http_server
+./bin/http_server
 ```
+
+## Tests and Benchmarking
+
+The unit suites do not require a running server:
+
+```
+./bin/run_tests ring
+./bin/run_tests thread_pool
+ctest --output-on-failure
+```
+
+The server suite requires `./bin/http_server` to be running from the project
+root. Request-rate benchmark targets start and stop their own server:
+
+```
+make benchmark
+make stress
+```
+
+The benchmark uses only Python's standard library and validates response
+framing, status codes, and non-empty successful bodies. It reports throughput
+and p50/p95/p99 latency. For custom runs, use for example:
+
+```
+python3 scripts/http_benchmark.py --start-server --rate 1000 --duration 30 \
+  --concurrency 32 --path /home --min-rps 800
+```
+
+Use `--keep-alive` to benchmark persistent connections. A nonzero exit status
+means that a request failed, returned a non-200 status, or missed the minimum
+throughput threshold.
 ### **Phase 1: Protocol Compliance**
 1. **Proper HTTP Header Parsing**   ✅
    - Parse full request headers into key-value pairs
@@ -149,4 +180,3 @@ make
 
 3. **Production Engineering**  
    - Complete Phase 6 → Learn deployment concerns
-
