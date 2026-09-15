@@ -9,6 +9,7 @@ connection, which measures the server's accept and worker-pool path. Use
 
 import argparse
 import collections
+import csv
 import math
 import os
 import signal
@@ -29,6 +30,41 @@ def percentile(values, fraction):
     ordered = sorted(values)
     index = min(len(ordered) - 1, int(math.ceil(fraction * len(ordered))) - 1)
     return ordered[index]
+
+
+def git_commit_id():
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    try:
+        return subprocess.check_output(
+            ["git", "-C", repo_root, "rev-parse", "HEAD"],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+    except (OSError, subprocess.CalledProcessError):
+        return "unknown"
+
+
+def log_result(path, commit_id, rps, completed, errors, elapsed):
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    write_header = not os.path.exists(path) or os.path.getsize(path) == 0
+    with open(path, "a", newline="") as output:
+        writer = csv.DictWriter(
+            output,
+            fieldnames=("timestamp_utc", "commit_id", "throughput_rps",
+                        "completed", "errors", "elapsed_seconds"),
+        )
+        if write_header:
+            writer.writeheader()
+        writer.writerow({
+            "timestamp_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "commit_id": commit_id,
+            "throughput_rps": "%.2f" % rps,
+            "completed": completed,
+            "errors": errors,
+            "elapsed_seconds": "%.3f" % elapsed,
+        })
 
 
 def read_exact(sock, size):
@@ -221,6 +257,15 @@ def run(args):
     if errors:
         print("sample_error=%s" % errors[0])
 
+    if args.log_file:
+        try:
+            log_result(args.log_file, git_commit_id(), rps, completed,
+                       len(errors), elapsed)
+            print("result_log=%s" % args.log_file)
+        except OSError as exc:
+            print("FAIL: could not write result log: %s" % exc, file=sys.stderr)
+            return 2
+
     if state["startup_error"] or errors or statuses.get(200, 0) != completed:
         return 1
     if args.min_rps and rps < args.min_rps:
@@ -253,6 +298,7 @@ def main():
     parser.add_argument("--concurrency", type=int, default=16)
     parser.add_argument("--timeout", type=float, default=5.0)
     parser.add_argument("--min-rps", type=float, default=0.0)
+    parser.add_argument("--log-file", help="append results and commit ID to CSV")
     parser.add_argument("--keep-alive", action="store_true")
     parser.add_argument("--start-server", action="store_true")
     parser.add_argument("--server", default="./bin/http_server")
