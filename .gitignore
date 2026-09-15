@@ -51,8 +51,10 @@ Module.symvers
 Mkfile.old
 dkms.conf
 
-http_server
-
-test
+/bin
 
 CMakeFiles
+
+# Python bytecode
+__pycache__/
+*.py[cod]

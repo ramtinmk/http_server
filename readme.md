@@ -24,8 +24,52 @@ A simple HTTP server implementation for educational purposes demonstrating:
 
 ```
 make
-./http_server
+./bin/http_server
 ```
+
+## Tests and Benchmarking
+
+The unit suites do not require a running server:
+
+```
+./bin/run_tests ring
+./bin/run_tests thread_pool
+ctest --output-on-failure
+```
+
+The server suite requires `./bin/http_server` to be running from the project
+root. Request-rate benchmark targets start and stop their own server:
+
+```
+make benchmark         # 1,000 req/s new-connection smoke test
+make stress            # 5,000 req/s new-connection, logs stress_results.csv
+make benchmark-matrix  # every scenario from docs/scaling-plan.md
+```
+
+The benchmark implements the measurement contract in `docs/scaling-plan.md`.
+Each run records the offered rate, completed/successful/failed requests,
+status-code distribution, latency percentiles, connection and keep-alive
+request rates, server CPU/RSS/open file descriptors, thread-pool queue depth,
+active workers, rejected tasks, context switches, and TCP retransmits. Results
+are appended to `benchmarks/*.csv`; JSON Lines is written when `--log-file`
+ends in `.json`/`.jsonl`. Server-side counters are exposed through the
+`HTTP_SERVER_METRICS_FILE` environment variable and access logging is disabled
+while the benchmark owns the server (`HTTP_SERVER_ACCESS_LOG=0`).
+
+The selectable scenarios are `new-connection-1000`, `new-connection-5000`,
+`keep-alive-5000`, `mixed-paths-5000`, `gzip-500`, `error-paths`, and
+`slow-clients`. Custom runs can combine `--rate`, `--duration`, `--path`
+(repeatable for a path mix), `--keep-alive`, `--gzip`, and `--expect-status`:
+
+```
+python3 scripts/http_benchmark.py --start-server --scenario mixed-paths-5000 \
+  --duration 30 --concurrency 32
+```
+
+The benchmark uses only Python's standard library and validates response
+framing (Content-Length, chunked, or `Connection: close`) and expected status
+codes. A nonzero exit status means that a request failed, returned an
+unexpected status, or missed the minimum throughput threshold.
 ### **Phase 1: Protocol Compliance**
 1. **Proper HTTP Header Parsing**   ✅
    - Parse full request headers into key-value pairs
@@ -149,4 +193,3 @@ make
 
 3. **Production Engineering**  
    - Complete Phase 6 → Learn deployment concerns
-

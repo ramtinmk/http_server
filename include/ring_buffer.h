@@ -10,13 +10,15 @@
 // --- Configuration ---
 #define INITIAL_RING_BUFFER_CAPACITY 8092
 
-typedef struct {
+typedef struct RingBuffer RingBuffer;
+
+struct RingBuffer{
     char *buffer;
     size_t capacity;
     size_t head; // Write position
     size_t tail; // Read position
     size_t size; // Current data size in buffer
-} RingBuffer;
+};
 
 RingBuffer *ring_buffer_create(size_t capacity);
 void ring_buffer_free(RingBuffer *rb);
