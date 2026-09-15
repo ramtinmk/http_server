@@ -1,5 +1,6 @@
 #include "thread_pool.h"
 #include "http_server.h"
+#include "metrics.h"
 
 TaskPool *create_task_pool(int capacity)
 {
@@ -284,6 +285,7 @@ void add_task_to_queue(ThreadPool *pool, int client_socket)
     Task *new_task = task_alloc(pool->task_pool);
     if (!new_task)
     {
+        metrics_task_rejected();
         fprintf(stderr, "Error: Task pool exhausted. Dropping connection on socket %d\n", client_socket);
         if (client_socket >= 0) close(client_socket); 
         return;
@@ -303,6 +305,7 @@ void add_task_to_queue(ThreadPool *pool, int client_socket)
         pool->task_queue_tail = new_task;
     }
 
+    metrics_queue_enqueued();
     pthread_cond_signal(&pool->queue_cond);
     pthread_mutex_unlock(&pool->queue_mutex);
 }
@@ -333,6 +336,7 @@ Task *get_task_from_queue(ThreadPool *pool)
         {
             pool->task_queue_tail = NULL;
         }
+        metrics_queue_dequeued();
     }
 
     pthread_mutex_unlock(&pool->queue_mutex);

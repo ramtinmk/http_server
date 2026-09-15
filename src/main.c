@@ -3,6 +3,7 @@
  */
 #include "http_server.h"
 #include "thread_pool.h"
+#include "metrics.h"
 #include <signal.h>
 #include <errno.h>
 
@@ -19,6 +20,16 @@ int main(void)
     int server_socket, client_socket;
     struct sockaddr_in client_addr;
     socklen_t addr_size = sizeof(client_addr);
+
+    // Access logging is disabled during throughput measurements.
+    const char *access_log_env = getenv("HTTP_SERVER_ACCESS_LOG");
+    int access_log = !(access_log_env && strcmp(access_log_env, "0") == 0);
+
+    // Optional structured metrics snapshots for the benchmark harness.
+    const char *metrics_path = getenv("HTTP_SERVER_METRICS_FILE");
+    if (metrics_path && *metrics_path) {
+        metrics_reporter_start(metrics_path, 250);
+    }
 
     // Set up graceful shutdown handlers
     struct sigaction sa;
@@ -57,9 +68,12 @@ int main(void)
             continue;
         }
 
-        printf("Client connected: %s:%d\n",
-               inet_ntoa(client_addr.sin_addr),
-               ntohs(client_addr.sin_port));
+        metrics_connection_accepted();
+        if (access_log) {
+            printf("Client connected: %s:%d\n",
+                   inet_ntoa(client_addr.sin_addr),
+                   ntohs(client_addr.sin_port));
+        }
 
         add_task_to_queue(thread_pool, client_socket);
     }
@@ -69,6 +83,7 @@ int main(void)
 
     // Destroy Thread Pool before exiting
     destroy_thread_pool(thread_pool);
+    metrics_reporter_stop();
     printf("Thread pool destroyed.\n");
 
     return 0;

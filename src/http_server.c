@@ -1,5 +1,6 @@
 #include "http_server.h"
 #include "ring_buffer.h"
+#include "metrics.h"
 #include <signal.h>
 #include <sys/sendfile.h>
 #include <sys/stat.h>
@@ -247,6 +248,7 @@ static ProcessResult process_single_request(int client_socket, RingBuffer *rb, i
     parse_request_line(line, &req);
     if (strlen(req.method) == 0 || strlen(req.path) == 0) {
         send_error_response(client_socket, BAD_REQUEST_400);
+        metrics_response(400);
         return REQ_FATAL_ERROR;
     }
 
@@ -264,6 +266,7 @@ static ProcessResult process_single_request(int client_socket, RingBuffer *rb, i
 
         if (req.header_count >= MAX_HEADERS) {
             send_error_response(client_socket, HEADER_FIELDS_TOO_LARGE_431);
+            metrics_response(431);
             return REQ_FATAL_ERROR;
         }
         parse_header_line(line, &req);
@@ -276,6 +279,7 @@ static ProcessResult process_single_request(int client_socket, RingBuffer *rb, i
 
     if (!method_is_supported(req.method)) {
         send_error_response(client_socket, NOT_IMPLEMENTED_501);
+        metrics_response(501);
         return REQ_FATAL_ERROR;
     }
 
@@ -287,13 +291,19 @@ static ProcessResult process_single_request(int client_socket, RingBuffer *rb, i
         snprintf(filepath, sizeof(filepath), "hello.html");
     } else {
         send_error_response(client_socket, NOT_FOUND_404);
+        metrics_response(404);
         return REQ_OK; // 404 is a valid HTTP response, keep connection alive
     }
 
     int fd = open(filepath, O_RDONLY);
     if (fd < 0) {
-        if (errno == ENOENT) send_error_response(client_socket, NOT_FOUND_404);
-        else send_error_response(client_socket, ERROR_TEMPLATE("500 Internal Error", "File Access Error"));
+        int open_errno = errno;
+        if (open_errno == ENOENT) send_error_response(client_socket, NOT_FOUND_404);
+        else {
+            send_error_response(client_socket, ERROR_TEMPLATE("500 Internal Error", "File Access Error"));
+            metrics_request_failed();
+        }
+        metrics_response(open_errno == ENOENT ? 404 : 500);
         return REQ_OK;
     }
 
@@ -301,6 +311,7 @@ static ProcessResult process_single_request(int client_socket, RingBuffer *rb, i
     if (fstat(fd, &st) < 0 || S_ISDIR(st.st_mode)) {
         close(fd);
         send_error_response(client_socket, NOT_FOUND_404);
+        metrics_response(404);
         return REQ_OK;
     }
     long file_size = st.st_size;
@@ -326,8 +337,10 @@ static ProcessResult process_single_request(int client_socket, RingBuffer *rb, i
 
     if (send_data(client_socket, header_buf, strlen(header_buf)) < 0) {
         close(fd);
+        metrics_request_failed();
         return REQ_CLIENT_CLOSED;
     }
+    metrics_response(200);
 
     // 5. Send Body
     if (strcmp(req.method, "HEAD") == 0) {
@@ -344,6 +357,7 @@ static ProcessResult process_single_request(int client_socket, RingBuffer *rb, i
         
         if (deflateInit2(&z, Z_DEFAULT_COMPRESSION, Z_DEFLATED, 15+16, 8, Z_DEFAULT_STRATEGY) != Z_OK) {
             close(fd);
+            metrics_request_failed();
             return REQ_FATAL_ERROR;
         }
 
@@ -354,6 +368,7 @@ static ProcessResult process_single_request(int client_socket, RingBuffer *rb, i
             if (r < 0) {
                 deflateEnd(&z);
                 close(fd);
+                metrics_request_failed();
                 return REQ_FATAL_ERROR;
             }
             
@@ -368,6 +383,7 @@ static ProcessResult process_single_request(int client_socket, RingBuffer *rb, i
                 if (z_ret == Z_STREAM_ERROR) {
                     deflateEnd(&z);
                     close(fd);
+                    metrics_request_failed();
                     return REQ_FATAL_ERROR;
                 }
                 
@@ -387,6 +403,7 @@ static ProcessResult process_single_request(int client_socket, RingBuffer *rb, i
                     if (sendmsg_all(client_socket, iov, 3) < 0) {
                         deflateEnd(&z);
                         close(fd);
+                        metrics_request_failed();
                         return REQ_CLIENT_CLOSED;
                     }
                 }
@@ -396,6 +413,7 @@ static ProcessResult process_single_request(int client_socket, RingBuffer *rb, i
         deflateEnd(&z);
         if (send_all(client_socket, "0\r\n\r\n", 5) < 0) {
             close(fd);
+            metrics_request_failed();
             return REQ_CLIENT_CLOSED;
         }
     } else {
@@ -405,6 +423,7 @@ static ProcessResult process_single_request(int client_socket, RingBuffer *rb, i
             ssize_t sent = sendfile(client_socket, fd, &off, file_size - off);
             if (sent < 0) {
                 close(fd);
+                metrics_request_failed();
                 return (errno == EPIPE || errno == ECONNRESET) ? REQ_CLIENT_CLOSED : REQ_FATAL_ERROR;
             }
             if (sent == 0) break;
@@ -425,8 +444,10 @@ void *worker_thread_function(void *arg) {
         if (!task) break;
 
         if (task->client_socket >= 0) {
+            metrics_worker_busy();
             handle_client(task->client_socket, pool->buffer_pool);
             close(task->client_socket);
+            metrics_worker_idle();
         }
         
         task_free(pool->task_pool, task);
@@ -473,6 +494,7 @@ void handle_client(int client_socket, BufferPool *bp) {
             if (written < (size_t)bytes) {
                 // Buffer overflow or OOM
                 send_error_response(client_socket, PAYLOAD_TOO_LARGE_413);
+                metrics_response(413);
                 keep_alive = 0;
             }
         } else if (bytes == 0) {
