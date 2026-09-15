@@ -109,6 +109,7 @@ add_custom_target(stress
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/http_benchmark.py
             --start-server --rate 5000 --duration 10 --concurrency 32
             --timeout 30 --min-rps 400
+            --log-file ${CMAKE_SOURCE_DIR}/benchmarks/stress_results.csv
     DEPENDS http_server
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     USES_TERMINAL

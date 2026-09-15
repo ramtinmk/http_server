@@ -45,6 +45,10 @@ make benchmark
 make stress
 ```
 
+Each `make stress` run appends its measured successful throughput and the full
+Git commit ID to `benchmarks/stress_results.csv`. Custom runs can use
+`--log-file path/to/results.csv` to record the same CSV format.
+
 The benchmark uses only Python's standard library and validates response
 framing, status codes, and non-empty successful bodies. It reports throughput
 and p50/p95/p99 latency. For custom runs, use for example:
