@@ -98,20 +98,35 @@ find_package(Python3 COMPONENTS Interpreter REQUIRED)
 
 add_custom_target(benchmark
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/http_benchmark.py
-            --start-server --rate 100 --duration 5 --concurrency 16
+            --start-server --scenario new-connection-1000
+            --duration 5 --concurrency 16
     DEPENDS http_server
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     USES_TERMINAL
-    COMMENT "Running HTTP benchmark (100 req/s for 5 seconds)"
+    COMMENT "Running HTTP benchmark (1000 req/s for 5 seconds)"
 )
 
+# Canonical 5,000 req/s new-connection stress run described by
+# docs/scaling-plan.md (50,000 offered requests).
 add_custom_target(stress
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/http_benchmark.py
-            --start-server --rate 5000 --duration 10 --concurrency 32
+            --start-server --scenario new-connection-5000
+            --duration 10 --concurrency 32
             --timeout 30 --min-rps 400
             --log-file ${CMAKE_SOURCE_DIR}/benchmarks/stress_results.csv
     DEPENDS http_server
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     USES_TERMINAL
     COMMENT "Running HTTP request-rate stress test (5000 req/s for 10 seconds)"
+)
+
+# Runs every scenario from the measurement contract and appends each result to
+# a single CSV for phase-over-phase comparison.
+add_custom_target(benchmark-matrix
+    COMMAND bash ${CMAKE_SOURCE_DIR}/scripts/run_benchmark_matrix.sh
+            ${CMAKE_SOURCE_DIR}/benchmarks/benchmark_matrix.csv 5
+    DEPENDS http_server
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    USES_TERMINAL
+    COMMENT "Running the scaling-plan benchmark matrix"
 )

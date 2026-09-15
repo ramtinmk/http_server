@@ -41,26 +41,35 @@ The server suite requires `./bin/http_server` to be running from the project
 root. Request-rate benchmark targets start and stop their own server:
 
 ```
-make benchmark
-make stress
+make benchmark         # 1,000 req/s new-connection smoke test
+make stress            # 5,000 req/s new-connection, logs stress_results.csv
+make benchmark-matrix  # every scenario from docs/scaling-plan.md
 ```
 
-Each `make stress` run appends its measured successful throughput and the full
-Git commit ID to `benchmarks/stress_results.csv`. Custom runs can use
-`--log-file path/to/results.csv` to record the same CSV format.
+The benchmark implements the measurement contract in `docs/scaling-plan.md`.
+Each run records the offered rate, completed/successful/failed requests,
+status-code distribution, latency percentiles, connection and keep-alive
+request rates, server CPU/RSS/open file descriptors, thread-pool queue depth,
+active workers, rejected tasks, context switches, and TCP retransmits. Results
+are appended to `benchmarks/*.csv`; JSON Lines is written when `--log-file`
+ends in `.json`/`.jsonl`. Server-side counters are exposed through the
+`HTTP_SERVER_METRICS_FILE` environment variable and access logging is disabled
+while the benchmark owns the server (`HTTP_SERVER_ACCESS_LOG=0`).
+
+The selectable scenarios are `new-connection-1000`, `new-connection-5000`,
+`keep-alive-5000`, `mixed-paths-5000`, `gzip-500`, `error-paths`, and
+`slow-clients`. Custom runs can combine `--rate`, `--duration`, `--path`
+(repeatable for a path mix), `--keep-alive`, `--gzip`, and `--expect-status`:
+
+```
+python3 scripts/http_benchmark.py --start-server --scenario mixed-paths-5000 \
+  --duration 30 --concurrency 32
+```
 
 The benchmark uses only Python's standard library and validates response
-framing, status codes, and non-empty successful bodies. It reports throughput
-and p50/p95/p99 latency. For custom runs, use for example:
-
-```
-python3 scripts/http_benchmark.py --start-server --rate 1000 --duration 30 \
-  --concurrency 32 --path /home --min-rps 800
-```
-
-Use `--keep-alive` to benchmark persistent connections. A nonzero exit status
-means that a request failed, returned a non-200 status, or missed the minimum
-throughput threshold.
+framing (Content-Length, chunked, or `Connection: close`) and expected status
+codes. A nonzero exit status means that a request failed, returned an
+unexpected status, or missed the minimum throughput threshold.
 ### **Phase 1: Protocol Compliance**
 1. **Proper HTTP Header Parsing**   ✅
    - Parse full request headers into key-value pairs

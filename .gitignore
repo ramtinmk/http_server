@@ -54,3 +54,7 @@ dkms.conf
 /bin
 
 CMakeFiles
+
+# Python bytecode
+__pycache__/
+*.py[cod]
