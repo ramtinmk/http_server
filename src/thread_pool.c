@@ -4,10 +4,12 @@
 
 TaskPool *create_task_pool(int capacity)
 {
-    if (capacity <= 0) return NULL;
+    if (capacity <= 0) { return NULL;
+}
 
     TaskPool *tp = malloc(sizeof(TaskPool));
-    if (!tp) return NULL;
+    if (!tp) { return NULL;
+}
 
     tp->pool_storage = malloc(sizeof(Task) * capacity);
     tp->free_stack = malloc(sizeof(Task *) * capacity);
@@ -39,7 +41,8 @@ TaskPool *create_task_pool(int capacity)
 
 void destroy_task_pool(TaskPool *tp)
 {
-    if (!tp) return;
+    if (!tp) { return;
+}
     pthread_mutex_destroy(&tp->lock);
     free(tp->pool_storage);
     free(tp->free_stack);
@@ -49,10 +52,12 @@ void destroy_task_pool(TaskPool *tp)
 // --- Buffer Pool Implementation ---
 BufferPool *create_buffer_pool(int capacity)
 {
-    if (capacity <= 0) return NULL;
+    if (capacity <= 0) { return NULL;
+}
 
     BufferPool *bp = malloc(sizeof(BufferPool));
-    if (!bp) return NULL;
+    if (!bp) { return NULL;
+}
 
     bp->pool_storage = malloc(sizeof(RingBuffer *) * capacity);
     if (!bp->pool_storage)
@@ -86,7 +91,8 @@ BufferPool *create_buffer_pool(int capacity)
 
 void destroy_buffer_pool(BufferPool *bp)
 {
-    if (!bp) return;
+    if (!bp) { return;
+}
     pthread_mutex_lock(&bp->lock);
     for (int i = 0; i <= bp->top; i++)
     {
@@ -184,8 +190,9 @@ ThreadPool *create_thread_pool(int pool_size)
 
 void destroy_thread_pool(ThreadPool *pool)
 {
-    if (!pool)
+    if (!pool) {
         return;
+}
 
     pthread_mutex_lock(&pool->queue_mutex);
     pool->shutdown = 1;
@@ -222,7 +229,8 @@ void destroy_thread_pool(ThreadPool *pool)
 
 RingBuffer *buffer_acquire(BufferPool *bp)
 {
-    if (!bp) return NULL;
+    if (!bp) { return NULL;
+}
 
     pthread_mutex_lock(&bp->lock);
     if (bp->top == -1)
@@ -240,7 +248,8 @@ RingBuffer *buffer_acquire(BufferPool *bp)
 
 void buffer_release(BufferPool *bp, RingBuffer *rb)
 {
-    if (!rb) return;
+    if (!rb) { return;
+}
     if (!bp)
     {
         ring_buffer_free(rb);
@@ -278,7 +287,8 @@ void add_task_to_queue(ThreadPool *pool, int client_socket)
 {
     if (!pool)
     {
-        if (client_socket >= 0) close(client_socket);
+        if (client_socket >= 0) { close(client_socket);
+}
         return;
     }
 
@@ -287,7 +297,8 @@ void add_task_to_queue(ThreadPool *pool, int client_socket)
     {
         metrics_task_rejected();
         fprintf(stderr, "Error: Task pool exhausted. Dropping connection on socket %d\n", client_socket);
-        if (client_socket >= 0) close(client_socket); 
+        if (client_socket >= 0) { close(client_socket); 
+}
         return;
     }
     new_task->client_socket = client_socket;
@@ -312,8 +323,9 @@ void add_task_to_queue(ThreadPool *pool, int client_socket)
 
 Task *get_task_from_queue(ThreadPool *pool)
 {
-    if (!pool)
+    if (!pool) {
         return NULL;
+}
 
     pthread_mutex_lock(&pool->queue_mutex);
 
@@ -345,13 +357,15 @@ Task *get_task_from_queue(ThreadPool *pool)
 
 int set_nonblocking(int fd) {
     int flags = fcntl(fd, F_GETFL, 0);
-    if (flags == -1) return -1;
+    if (flags == -1) { return -1;
+}
     return fcntl(fd, F_SETFL, flags | O_NONBLOCK);
 }
 
 void task_free(TaskPool *tp, Task *t)
 {
-    if (!tp || !t) return;
+    if (!tp || !t) { return;
+}
 
     pthread_mutex_lock(&tp->lock);
     if (tp->top < tp->capacity - 1)
@@ -364,7 +378,8 @@ void task_free(TaskPool *tp, Task *t)
 
 Task *task_alloc(TaskPool *tp)
 {
-    if (!tp) return NULL;
+    if (!tp) { return NULL;
+}
 
     pthread_mutex_lock(&tp->lock);
     if (tp->top == -1)

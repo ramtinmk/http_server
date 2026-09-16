@@ -19,10 +19,12 @@ static inline size_t min_size(size_t a, size_t b) {
 // Resizes the buffer.
 // Strategy: Linearize the data (unwrap it) into the new buffer.
 static int ring_buffer_resize(RingBuffer *rb, size_t new_capacity) {
-    if (!rb) return -1;
+    if (!rb) { return -1;
+}
     
     // Safety check: Don't shrink below current data size
-    if (new_capacity < rb->size) return -1;
+    if (new_capacity < rb->size) { return -1;
+}
 
     // Safety check: Hard limit on memory usage
     if (new_capacity > MAX_RING_BUFFER_CAPACITY) {
@@ -56,9 +58,11 @@ static int ring_buffer_resize(RingBuffer *rb, size_t new_capacity) {
 
 // Internal helper to advance tail without reading data (used by readline)
 static void ring_buffer_skip(RingBuffer *rb, size_t len) {
-    if (!rb || len == 0 || rb->size == 0) return;
+    if (!rb || len == 0 || rb->size == 0) { return;
+}
     
-    if (len > rb->size) len = rb->size;
+    if (len > rb->size) { len = rb->size;
+}
 
     rb->tail += len;
     // Handle wrap-around
@@ -71,13 +75,15 @@ static void ring_buffer_skip(RingBuffer *rb, size_t len) {
 // --- Lifecycle Functions ---
 
 RingBuffer *ring_buffer_create(size_t initial_capacity) {
-    if (initial_capacity == 0) initial_capacity = DEFAULT_INITIAL_CAPACITY;
+    if (initial_capacity == 0) { initial_capacity = DEFAULT_INITIAL_CAPACITY;
+}
     if (initial_capacity > MAX_RING_BUFFER_CAPACITY) {
         initial_capacity = MAX_RING_BUFFER_CAPACITY;
     }
 
     RingBuffer *rb = malloc(sizeof(RingBuffer));
-    if (!rb) return NULL;
+    if (!rb) { return NULL;
+}
 
     rb->buffer = malloc(initial_capacity);
     if (!rb->buffer) {
@@ -108,7 +114,8 @@ void ring_buffer_reset(RingBuffer *rb) {
 // --- Core Operations ---
 
 size_t ring_buffer_write(RingBuffer *rb, const char *data, size_t data_len) {
-    if (!rb || !data || data_len == 0) return 0;
+    if (!rb || !data || data_len == 0) { return 0;
+}
 
     size_t available = rb->capacity - rb->size;
 
@@ -148,7 +155,8 @@ size_t ring_buffer_write(RingBuffer *rb, const char *data, size_t data_len) {
         // Continuous write
         memcpy(rb->buffer + rb->head, data, data_len);
         rb->head += data_len;
-        if (rb->head == rb->capacity) rb->head = 0;
+        if (rb->head == rb->capacity) { rb->head = 0;
+}
     } else {
         // Wrap-around write
         memcpy(rb->buffer + rb->head, data, to_end);
@@ -161,7 +169,8 @@ size_t ring_buffer_write(RingBuffer *rb, const char *data, size_t data_len) {
 }
 
 size_t ring_buffer_read(RingBuffer *rb, char *dest, size_t dest_len) {
-    if (!rb || !dest || dest_len == 0 || rb->size == 0) return 0;
+    if (!rb || !dest || dest_len == 0 || rb->size == 0) { return 0;
+}
 
     // Cap read length to available data
     size_t bytes_to_read = min_size(dest_len, rb->size);
@@ -171,7 +180,8 @@ size_t ring_buffer_read(RingBuffer *rb, char *dest, size_t dest_len) {
         // Continuous read
         memcpy(dest, rb->buffer + rb->tail, bytes_to_read);
         rb->tail += bytes_to_read;
-        if (rb->tail == rb->capacity) rb->tail = 0;
+        if (rb->tail == rb->capacity) { rb->tail = 0;
+}
     } else {
         // Wrap-around read
         memcpy(dest, rb->buffer + rb->tail, to_end);
@@ -184,7 +194,8 @@ size_t ring_buffer_read(RingBuffer *rb, char *dest, size_t dest_len) {
 }
 
 size_t ring_buffer_peek(const RingBuffer *rb, char *dest, size_t dest_len) {
-    if (!rb || !dest || dest_len == 0 || rb->size == 0) return 0;
+    if (!rb || !dest || dest_len == 0 || rb->size == 0) { return 0;
+}
 
     size_t bytes_to_peek = min_size(dest_len, rb->size);
     size_t to_end = rb->capacity - rb->tail;
@@ -203,7 +214,8 @@ size_t ring_buffer_peek(const RingBuffer *rb, char *dest, size_t dest_len) {
 
 char *ring_buffer_readline(RingBuffer *rb, char *line_buffer, size_t line_buffer_size) {
     if (!rb || !line_buffer || line_buffer_size == 0 || rb->size == 0) {
-        if (line_buffer && line_buffer_size > 0) line_buffer[0] = '\0';
+        if (line_buffer && line_buffer_size > 0) { line_buffer[0] = '\0';
+}
         return NULL;
     }
 
@@ -249,7 +261,8 @@ char *ring_buffer_readline(RingBuffer *rb, char *line_buffer, size_t line_buffer
         // Need to peek the character before the newline.
         // Since newline_offset is relative to tail, (tail + offset - 1) handles wrap logic.
         size_t prev_idx = rb->tail + newline_offset - 1;
-        if (prev_idx >= rb->capacity) prev_idx -= rb->capacity; // Wrap correction
+        if (prev_idx >= rb->capacity) { prev_idx -= rb->capacity; // Wrap correction
+}
         
         if (rb->buffer[prev_idx] == '\r') {
             content_len--;

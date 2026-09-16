@@ -33,10 +33,12 @@ static ssize_t send_all(int sockfd, const void *buf, size_t len) {
     while (total_sent < len) {
         ssize_t sent = send(sockfd, ptr + total_sent, len - total_sent, MSG_NOSIGNAL);
         if (sent < 0) {
-            if (errno == EINTR) continue;
+            if (errno == EINTR) { continue;
+}
             return -1;
         }
-        if (sent == 0) break;
+        if (sent == 0) { break;
+}
         total_sent += sent;
     }
     return (ssize_t)total_sent;
@@ -52,10 +54,12 @@ static ssize_t sendmsg_all(int sockfd, struct iovec *iov, int iovcnt) {
 
         ssize_t sent = sendmsg(sockfd, &msg, MSG_NOSIGNAL);
         if (sent < 0) {
-            if (errno == EINTR) continue;
+            if (errno == EINTR) { continue;
+}
             return -1;
         }
-        if (sent == 0) return 0;
+        if (sent == 0) { return 0;
+}
 
         size_t rem = (size_t)sent;
         while (iovcnt > 0 && rem >= iov->iov_len) {
@@ -77,7 +81,8 @@ ssize_t send_data(int sockfd, const void *buf, size_t len) {
 }
 
 void send_error_response(int client_socket, const char *response) {
-    if (!response) return;
+    if (!response) { return;
+}
     send_all(client_socket, response, strlen(response));
 }
 
@@ -131,23 +136,27 @@ int create_server_socket(void) {
 
 void sigchld_handler(int sig) {
     (void)sig;
-    while (waitpid(-1, NULL, WNOHANG) > 0);
+    while (waitpid(-1, NULL, WNOHANG) > 0) {;
+}
 }
 
 // --- Parsing Logic ---
 
 static void parse_request_line(char *line, HTTPRequest *req) {
-    if (!line || !req) return;
+    if (!line || !req) { return;
+}
     
     char *method_end = strchr(line, ' ');
-    if (!method_end) return;
+    if (!method_end) { return;
+}
     *method_end = '\0';
     
     strncpy(req->method, line, sizeof(req->method) - 1);
     req->method[sizeof(req->method) - 1] = '\0';
     
     char *path_start = method_end + 1;
-    while (*path_start == ' ') path_start++;
+    while (*path_start == ' ') { path_start++;
+}
 
     char *path_end = strchr(path_start, ' ');
     if (!path_end) {
@@ -160,7 +169,8 @@ static void parse_request_line(char *line, HTTPRequest *req) {
         req->path[sizeof(req->path) - 1] = '\0';
 
         char *version = path_end + 1;
-        while (*version == ' ') version++;
+        while (*version == ' ') { version++;
+}
         if (strncasecmp(version, "HTTP/1.0", 8) == 0) {
             req->keep_alive = 0;
         }
@@ -168,17 +178,21 @@ static void parse_request_line(char *line, HTTPRequest *req) {
 }
 
 static void parse_header_line(char *line, HTTPRequest *req) {
-    if (!line || !req || req->header_count >= MAX_HEADERS) return;
+    if (!line || !req || req->header_count >= MAX_HEADERS) { return;
+}
 
     char *colon = strchr(line, ':');
-    if (!colon) return;
+    if (!colon) { return;
+}
     *colon = '\0';
 
     char *name = line;
-    while (*name == ' ' || *name == '\t') name++;
+    while (*name == ' ' || *name == '\t') { name++;
+}
     
     char *value = colon + 1;
-    while (*value == ' ' || *value == '\t') value++; // Trim leading
+    while (*value == ' ' || *value == '\t') { value++; // Trim leading
+}
 
     // Trim trailing (CR/LF/whitespace)
     size_t len = strlen(value);
@@ -197,23 +211,27 @@ static void parse_header_line(char *line, HTTPRequest *req) {
 
     // Logic Hooks
     if (strcasecmp(name, "Accept-Encoding") == 0) {
-        if (strstr(value, "gzip")) req->accepts_gzip = 1;
+        if (strstr(value, "gzip")) { req->accepts_gzip = 1;
+}
     }
     if (strcasecmp(name, "Connection") == 0) {
-        if (strcasecmp(value, "close") == 0) req->keep_alive = 0;
-        else if (strcasecmp(value, "keep-alive") == 0) req->keep_alive = 1;
+        if (strcasecmp(value, "close") == 0) { req->keep_alive = 0;
+        } else if (strcasecmp(value, "keep-alive") == 0) { req->keep_alive = 1;
+}
     }
 }
 
 int method_is_supported(const char *method) {
     for (int i = 0; i < SUPPORTED_METHOD_COUNT; i++) {
-        if (strcmp(method, SUPPORTED_METHODS[i]) == 0) return 1;
+        if (strcmp(method, SUPPORTED_METHODS[i]) == 0) { return 1;
+}
     }
     return 0;
 }
 
 void print_http_request(const HTTPRequest *req) {
-    if (!req) return;
+    if (!req) { return;
+}
     printf("HTTPRequest: %s %s (keep_alive=%d, gzip=%d, headers=%d)\n",
            req->method, req->path, req->keep_alive, req->accepts_gzip, req->header_count);
     for (int i = 0; i < req->header_count; i++) {
@@ -224,7 +242,8 @@ void print_http_request(const HTTPRequest *req) {
 // --- Core Request Processor ---
 
 static ProcessResult process_single_request(int client_socket, RingBuffer *rb, int *keep_alive) {
-    if (ring_buffer_is_empty(rb)) return REQ_NEED_DATA;
+    if (ring_buffer_is_empty(rb)) { return REQ_NEED_DATA;
+}
 
     // --- TRANSACTION START ---
     // Save state. If we fail to find a full header set, we ROLLBACK.
@@ -262,7 +281,8 @@ static ProcessResult process_single_request(int client_socket, RingBuffer *rb, i
             return REQ_NEED_DATA;
         }
 
-        if (line[0] == '\0') break; // Empty line = End of Headers
+        if (line[0] == '\0') { break; // Empty line = End of Headers
+}
 
         if (req.header_count >= MAX_HEADERS) {
             send_error_response(client_socket, HEADER_FIELDS_TOO_LARGE_431);
@@ -298,8 +318,8 @@ static ProcessResult process_single_request(int client_socket, RingBuffer *rb, i
     int fd = open(filepath, O_RDONLY);
     if (fd < 0) {
         int open_errno = errno;
-        if (open_errno == ENOENT) send_error_response(client_socket, NOT_FOUND_404);
-        else {
+        if (open_errno == ENOENT) { send_error_response(client_socket, NOT_FOUND_404);
+        } else {
             send_error_response(client_socket, ERROR_TEMPLATE("500 Internal Error", "File Access Error"));
             metrics_request_failed();
         }
@@ -426,7 +446,8 @@ static ProcessResult process_single_request(int client_socket, RingBuffer *rb, i
                 metrics_request_failed();
                 return (errno == EPIPE || errno == ECONNRESET) ? REQ_CLIENT_CLOSED : REQ_FATAL_ERROR;
             }
-            if (sent == 0) break;
+            if (sent == 0) { break;
+}
         }
     }
 
@@ -441,7 +462,8 @@ void *worker_thread_function(void *arg) {
 
     while (1) {
         Task *task = get_task_from_queue(pool);
-        if (!task) break;
+        if (!task) { break;
+}
 
         if (task->client_socket >= 0) {
             metrics_worker_busy();
@@ -456,7 +478,8 @@ void *worker_thread_function(void *arg) {
 }
 
 void handle_client(int client_socket, BufferPool *bp) {
-    if (client_socket < 0 || !bp) return;
+    if (client_socket < 0 || !bp) { return;
+}
 
     RingBuffer *rb = buffer_acquire(bp);
     if (!rb) {
@@ -484,7 +507,8 @@ void handle_client(int client_socket, BufferPool *bp) {
             // If REQ_OK, we loop again to see if another request is waiting
         } while (res == REQ_OK && !ring_buffer_is_empty(rb));
 
-        if (!keep_alive) break;
+        if (!keep_alive) { break;
+}
 
         // 2. Read More Data
         ssize_t bytes = recv(client_socket, read_buffer, sizeof(read_buffer), 0);

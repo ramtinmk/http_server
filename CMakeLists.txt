@@ -130,3 +130,37 @@ add_custom_target(benchmark-matrix
     USES_TERMINAL
     COMMENT "Running the scaling-plan benchmark matrix"
 )
+
+# --- Linting with clang-tidy ---
+find_program(CLANG_TIDY_EXE NAMES clang-tidy clang-tidy-18 clang-tidy-17 clang-tidy-16)
+
+if(CLANG_TIDY_EXE)
+    set(LINT_SOURCES ${SOURCES} ${SERVER_MAIN})
+
+    # Report only — no changes to source files
+    add_custom_target(lint
+        COMMAND ${CLANG_TIDY_EXE}
+            --config-file=${CMAKE_SOURCE_DIR}/.clang-tidy
+            -p ${CMAKE_SOURCE_DIR}
+            ${LINT_SOURCES}
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        COMMENT "Running clang-tidy (report only)..."
+        VERBATIM
+    )
+
+    # Apply all auto-fixable suggestions in-place
+    add_custom_target(lint-fix
+        COMMAND ${CLANG_TIDY_EXE}
+            --config-file=${CMAKE_SOURCE_DIR}/.clang-tidy
+            -p ${CMAKE_SOURCE_DIR}
+            --fix
+            --fix-errors
+            ${LINT_SOURCES}
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        COMMENT "Running clang-tidy with auto-fix..."
+        VERBATIM
+    )
+    message(STATUS "clang-tidy found: ${CLANG_TIDY_EXE} — run 'make lint' or 'make lint-fix'")
+else()
+    message(WARNING "clang-tidy not found; install with: apt install clang-tidy")
+endif()

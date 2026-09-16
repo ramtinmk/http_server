@@ -1,0 +1,40 @@
+# clang-tidy configuration for C_http_server
+# Run manually: clang-tidy -p . src/*.c
+# Or via CMake:  cmake --build . --target lint
+
+Checks: >-
+  clang-analyzer-*,
+  bugprone-assignment-in-if-condition,
+  bugprone-branch-clone,
+  bugprone-implicit-widening-of-multiplication-result,
+  bugprone-integer-division,
+  bugprone-macro-parentheses,
+  bugprone-misplaced-widening-cast,
+  bugprone-not-null-terminated-result,
+  bugprone-reserved-identifier,
+  bugprone-signal-handler,
+  bugprone-signed-char-misuse,
+  bugprone-sizeof-expression,
+  bugprone-suspicious-semicolon,
+  bugprone-too-small-loop-variable,
+  bugprone-undefined-memory-manipulation,
+  cert-err34-c,
+  misc-misplaced-const,
+  misc-redundant-expression,
+  performance-no-int-to-ptr,
+  readability-braces-around-statements,
+  readability-else-after-return,
+  readability-misleading-indentation,
+  readability-misplaced-array-index,
+  readability-redundant-control-flow,
+  -bugprone-easily-swappable-parameters,
+  -clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling
+
+WarningsAsErrors: ''
+
+# Only report issues in project headers, not system headers
+HeaderFilterRegex: 'include/.*\.h$'
+
+CheckOptions:
+  - key: readability-braces-around-statements.ShortStatementLines
+    value: '0'
