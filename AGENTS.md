@@ -16,7 +16,7 @@ Test runner binary: `./bin/run_tests`
   - Ring buffer suite: `./bin/run_tests ring`
   - Thread pool suite: `./bin/run_tests thread_pool`
 - **Server integration suite** (`./bin/run_tests server` or bare `./bin/run_tests`):
-  - **Prerequisite**: Requires `./bin/http_server` actively running on `127.0.0.1:8080`.
+  - **Prerequisite**: Requires `./bin/http_server` actively running on `127.0.0.1:8081`.
   - Test command sequence:
     ```bash
     ./bin/http_server &
@@ -29,7 +29,7 @@ Test runner binary: `./bin/run_tests`
 ## Runtime Quirks & Architecture
 
 - **Working directory requirement**: Always run `./bin/http_server` from the repository root. Static routes look up `home.html` and `hello.html` via relative paths from CWD.
-- **Port**: Default is `8080` (configured via `PORT` macro in `include/http_server.h`).
+- **Port**: Default is `8081` (configured via `PORT` macro in `include/http_server.h`).
 - **Signal handling**: `SIGPIPE` is ignored globally (`SIG_IGN`) and sends use `MSG_NOSIGNAL` to prevent crashes on abruptly disconnected clients.
 - **Core modules**:
   - `src/main.c`: Server socket setup, accept loop, and task dispatch to thread pool.

@@ -178,7 +178,7 @@ unexpected status, or missed the minimum throughput threshold.
 16. **Benchmarking**  
     - Compare with nginx using `wrk`:
     ```bash
-    wrk -t12 -c400 -d30s http://localhost:8080/
+    wrk -t12 -c400 -d30s http://localhost:8081/
     ```
     - Profile with `perf`/`valgrind`
 

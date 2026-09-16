@@ -24,7 +24,7 @@
 #include "thread_pool.h"
 
 // --- Configuration and Constants ---
-#define PORT 8080
+#define PORT 8081
 #define BACKLOG 10
 #define BUFFER_SIZE 8092
 #define ZLIB_CHUNK_SIZE 16384

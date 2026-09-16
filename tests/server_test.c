@@ -16,7 +16,7 @@
 
 // --- Configuration ---
 #define SERVER_IP "127.0.0.1"
-#define SERVER_PORT 8080
+#define SERVER_PORT 8081
 #define BUFFER_SIZE 4096
 #define RESPONSE_TIMEOUT_MS 5000
 

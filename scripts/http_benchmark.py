@@ -735,7 +735,7 @@ def build_specs(args):
 def parse_args(argv):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=8080)
+    parser.add_argument("--port", type=int, default=8081)
     parser.add_argument("--scenario", choices=sorted(SCENARIOS.keys()),
                         help="run one of the scenarios from the measurement contract")
     parser.add_argument("--path", dest="paths", action="append",

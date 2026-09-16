@@ -46,8 +46,8 @@ RUN addgroup -S appgroup && adduser -S appuser -G appgroup
 # Switch to non-root user
 USER appuser
 
-# Expose the port your http_server listens on (Replace 8080 if different)
-EXPOSE 8080
+# Expose the port your http_server listens on (Replace 8081 if different)
+EXPOSE 8081
 
 # Set the default command to run when the container starts
 CMD ["http_server"]
