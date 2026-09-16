@@ -58,3 +58,12 @@ CMakeFiles
 # Python bytecode
 __pycache__/
 *.py[cod]
+
+# CMake-generated files (contain absolute source paths; never commit these)
+CMakeCache.txt
+cmake_install.cmake
+CTestTestfile.cmake
+DartConfiguration.tcl
+Makefile
+compile_commands.json
+Testing/
