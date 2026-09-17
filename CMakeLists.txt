@@ -32,6 +32,8 @@ endif()
 # --- 3. Source Management ---
 include_directories(include)
 
+find_package(Python3 COMPONENTS Interpreter REQUIRED)
+
 # Automatically find all .c files in src/
 file(GLOB SOURCES "src/*.c")
 
@@ -80,6 +82,15 @@ if(TEST_SOURCES)
     )
 endif()
 
+add_test(
+    NAME benchmark_python_tests
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/test_http_benchmark.py
+)
+set_tests_properties(
+    benchmark_python_tests
+    PROPERTIES WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+)
+
 if(DEFINED TEST_FILE)
     add_executable(run_tests 
         ${TEST_FILE}
@@ -94,8 +105,6 @@ endif()
 
 # Dependency-free request-rate benchmark. These targets start the server in
 # the repository root so relative static-file paths behave like production.
-find_package(Python3 COMPONENTS Interpreter REQUIRED)
-
 add_custom_target(benchmark
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/http_benchmark.py
             --start-server --scenario new-connection-1000
@@ -107,12 +116,15 @@ add_custom_target(benchmark
 )
 
 # Canonical 5,000 req/s new-connection stress run described by
-# docs/scaling-plan.md (50,000 offered requests).
+# docs/scaling-plan.md (50,000 offered requests). The acceptance gate uses
+# hardware_agnostic_rps (successful requests per server CPU-second), not raw
+# wall-clock throughput, so it remains meaningful across host hardware.
 add_custom_target(stress
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/http_benchmark.py
             --start-server --scenario new-connection-5000
             --duration 10 --concurrency 32
-            --timeout 30 --min-rps 400
+            --timeout 30 --calibrate on
+            --min-hardware-agnostic-rps 1000
             --log-file ${CMAKE_SOURCE_DIR}/benchmarks/stress_results.csv
     DEPENDS http_server
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
