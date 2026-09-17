@@ -45,7 +45,11 @@ CALIBRATION_PAYLOAD_MIN = 1024
 
 CSV_FIELDS = (
     "timestamp_utc", "commit_id", "scenario", "host", "port", "mode",
-    "target_rate", "duration_seconds", "concurrency", "requests_planned",
+    "target_rate", "warmup_seconds", "steady_state_seconds",
+    "duration_seconds", "drain_seconds", "concurrency", "requests_planned",
+    "warmup_requests_offered", "steady_requests_offered",
+    "unoffered_requests", "steady_responses_completed", "drain_responses_completed",
+    "total_responses_completed", "total_failed", "per_second_rates",
     "responses_received", "successful", "failed", "throughput_rps",
     "successful_rps", "offered_rps", "connection_rate", "keepalive_request_rate",
     "requests_per_connection", "status_200", "status_400", "status_404",
@@ -617,9 +621,7 @@ def send_request(args, spec, sock=None, counters=None):
 
 
 def worker(args, state, results, worker_id):
-    latencies = []
-    statuses = collections.Counter()
-    errors = collections.Counter()
+    events = []
     counters = {"connections": 0}
     sock = None
     specs = state["specs"]
@@ -639,23 +641,28 @@ def worker(args, state, results, worker_id):
                 break
             request_number = state["next_request"]
             state["next_request"] += 1
-        if args.rate > 0:
-            due = state["start"] + request_number / args.rate
-            delay = due - time.monotonic()
-            if delay > 0:
-                time.sleep(delay)
+        due = state["start"] + request_number / args.rate if args.rate > 0 else time.monotonic()
+        # Do not turn a slow server into a burst-and-catch-up pass. Requests
+        # whose fixed-rate due time is outside the measurement window are not
+        # offered; requests already in flight are allowed to drain.
+        if due >= state["steady_end"]:
+            break
+        delay = due - time.monotonic()
+        if delay > 0:
+            time.sleep(delay)
 
         spec = specs[request_number % len(specs)]
         started = time.monotonic()
+        status = None
+        error = None
         try:
             status, body = send_request(args, spec, sock, counters)
-            statuses[status] += 1
             if status not in spec["expect"]:
-                errors["status"] += 1
+                error = "status"
             elif status == 200 and not body:
-                errors["framing"] += 1
+                error = "framing"
         except RequestError as exc:
-            errors[exc.category] += 1
+            error = exc.category
             if sock is not None:
                 sock.close()
                 sock = None
@@ -665,21 +672,26 @@ def worker(args, state, results, worker_id):
                     sock.settimeout(args.timeout)
                 except OSError:
                     pass
-        except OSError as exc:
-            errors["other"] += 1
+        except OSError:
+            error = "other"
             if sock is not None:
                 try:
                     sock.close()
                 except OSError:
                     pass
                 sock = None
-        latencies.append((time.monotonic() - started) * 1000.0)
+        completed = time.monotonic()
+        events.append({
+            "started": started, "completed": completed,
+            "status": status, "error": error,
+            "latency_ms": (completed - started) * 1000.0,
+        })
 
     if sock is not None:
         sock.close()
 
     with state["results_lock"]:
-        results.append((latencies, statuses, errors, counters["connections"]))
+        results.append((events, counters["connections"]))
 
 
 # --- Server process monitoring (CPU, RSS, fds, context switches) ------------
@@ -860,12 +872,15 @@ def read_server_metrics(path):
 
 
 def run_load(args, specs, slow_clients=0):
+    start = time.monotonic()
     state = {
         "lock": threading.Lock(),
         "results_lock": threading.Lock(),
         "next_request": 0,
         "request_limit": args.requests,
-        "start": time.monotonic(),
+        "start": start,
+        "warmup_end": start + args.warmup,
+        "steady_end": start + args.warmup + args.duration,
         "startup_error": None,
         "specs": specs,
     }
@@ -910,21 +925,50 @@ def run_load(args, specs, slow_clients=0):
         except OSError:
             pass
 
-    latencies = [latency for result in results for latency in result[0]]
-    statuses = collections.Counter()
-    errors = collections.Counter()
-    connections = 0
-    for _, result_statuses, result_errors, result_connections in results:
-        statuses.update(result_statuses)
-        errors.update(result_errors)
-        connections += result_connections
+    all_events = [event for result in results for event in result[0]]
+    steady_events = [event for event in all_events
+                     if state["warmup_end"] <= event["started"] < state["steady_end"]
+                     and event["completed"] < state["steady_end"]]
+    drain_events = [event for event in all_events
+                    if event["started"] < state["steady_end"]
+                    and event["completed"] >= state["steady_end"]]
+    warmup_events = [event for event in all_events
+                     if event["started"] < state["warmup_end"]]
+
+    def event_summary(events):
+        statuses = collections.Counter(event["status"] for event in events
+                                       if event["status"] is not None)
+        errors = collections.Counter(event["error"] for event in events
+                                     if event["error"] is not None)
+        return statuses, errors
+
+    statuses, errors = event_summary(steady_events)
+    total_statuses, total_errors = event_summary(all_events)
+    connections = sum(result[1] for result in results)
+    per_second = {}
+    for event in all_events:
+        if state["warmup_end"] <= event["started"] < state["steady_end"]:
+            second = int(event["started"] - state["warmup_end"])
+            bucket = per_second.setdefault(second, {"offered": 0, "completed": 0})
+            bucket["offered"] += 1
+            if event["completed"] < state["steady_end"]:
+                bucket["completed"] += 1
 
     return {
         "elapsed": elapsed,
-        "latencies": latencies,
+        "latencies": [event["latency_ms"] for event in steady_events],
         "statuses": statuses,
         "errors": errors,
+        "total_statuses": total_statuses,
+        "total_errors": total_errors,
         "connections": connections,
+        "warmup_offered": len(warmup_events),
+        "steady_offered": len([event for event in all_events
+                                if state["warmup_end"] <= event["started"] < state["steady_end"]]),
+        "steady_completed": len(steady_events),
+        "drain_completed": len(drain_events),
+        "per_second": per_second,
+        "drain_seconds": max(0.0, time.monotonic() - state["steady_end"]),
         "startup_error": state["startup_error"],
         "idle_connections": len(idle),
     }
@@ -947,6 +991,7 @@ def classify_limiter(client_cpu_seconds, server_cpu_seconds, elapsed):
 def summarize(args, spec_names, outcome, server_summary, server_metrics,
               hardware=None, calibration=None):
     elapsed = outcome["elapsed"]
+    steady_elapsed = max(0.000001, args.duration)
     latencies = outcome["latencies"]
     statuses = outcome["statuses"]
     errors = outcome["errors"]
@@ -986,18 +1031,39 @@ def summarize(args, spec_names, outcome, server_summary, server_metrics,
     result["port"] = args.port
     result["mode"] = "keep-alive" if args.keep_alive else "new-connection"
     result["target_rate"] = args.rate
-    result["duration_seconds"] = round(elapsed, 3)
+    result["warmup_seconds"] = round(args.warmup, 3)
+    result["steady_state_seconds"] = round(args.duration, 3)
+    result["duration_seconds"] = round(args.duration, 3)
+    result["drain_seconds"] = round(outcome["drain_seconds"], 3)
     result["concurrency"] = args.concurrency
     result["requests_planned"] = args.requests
+    result["warmup_requests_offered"] = outcome["warmup_offered"]
+    result["steady_requests_offered"] = outcome["steady_offered"]
+    result["unoffered_requests"] = max(
+        0, args.requests - outcome["warmup_offered"] - outcome["steady_offered"]
+    )
+    result["steady_responses_completed"] = outcome["steady_completed"]
+    result["drain_responses_completed"] = outcome["drain_completed"]
+    result["total_responses_completed"] = sum(outcome["total_statuses"].values())
+    result["total_failed"] = (
+        sum(outcome["total_errors"].values()) + sum(
+            count for status, count in outcome["total_statuses"].items()
+            if status not in expected
+        )
+    )
+    result["per_second_rates"] = json.dumps({
+        str(second): outcome["per_second"][second]
+        for second in sorted(outcome["per_second"])
+    }, sort_keys=True, separators=(",", ":"))
     result["responses_received"] = responses_received
     result["successful"] = successful
     result["failed"] = failed
-    result["throughput_rps"] = round(responses_received / elapsed, 2)
-    result["successful_rps"] = round(successful / elapsed, 2)
+    result["throughput_rps"] = round(responses_received / steady_elapsed, 2)
+    result["successful_rps"] = round(successful / steady_elapsed, 2)
     result["offered_rps"] = args.rate
-    result["connection_rate"] = round(connections / elapsed, 2)
+    result["connection_rate"] = round(connections / steady_elapsed, 2)
     if args.keep_alive and connections:
-        result["keepalive_request_rate"] = round(successful / elapsed, 2)
+        result["keepalive_request_rate"] = round(successful / steady_elapsed, 2)
         result["requests_per_connection"] = round(responses_received / connections, 2)
     else:
         result["keepalive_request_rate"] = 0.0
@@ -1189,11 +1255,14 @@ def parse_args(argv):
     parser.add_argument("--path", dest="paths", action="append",
                         help="request path; repeat for a path mix")
     parser.add_argument("--method", default=None, help="HTTP method (default GET)")
-    parser.add_argument("--duration", type=float, default=None)
+    parser.add_argument("--duration", type=float, default=None,
+                        help="steady-state measurement duration in seconds")
+    parser.add_argument("--warmup", type=float, default=None,
+                        help="fixed-rate warmup duration in seconds (default 10)")
     parser.add_argument("--rate", type=float, default=None,
                         help="target request rate; 0 means closed-loop")
     parser.add_argument("--requests", type=int, default=0,
-                        help="total requests (defaults to ceil(rate * duration))")
+                        help="total requests (defaults to warmup plus steady rate window)")
     parser.add_argument("--concurrency", type=int, default=None)
     parser.add_argument("--timeout", type=float, default=10.0)
     parser.add_argument("--min-rps", type=float, default=0.0,
@@ -1238,6 +1307,7 @@ def parse_args(argv):
 
     args.rate = pick(args.rate, "rate", 100.0)
     args.duration = pick(args.duration, "duration", 10.0)
+    args.warmup = pick(args.warmup, "warmup", 10.0)
     args.concurrency = pick(args.concurrency, "concurrency", 16)
     args.keep_alive = bool(pick(args.keep_alive, "keep_alive", False))
     args.gzip = bool(pick(args.gzip, "gzip", False))
@@ -1273,14 +1343,14 @@ def parse_args(argv):
         if args.calibration_seconds <= 0:
             parser.error("--calibration-seconds must be greater than zero")
         return args
-    if args.concurrency < 1 or args.duration <= 0 or args.rate < 0:
-        parser.error("duration, rate, and concurrency values are invalid")
+    if args.concurrency < 1 or args.duration <= 0 or args.warmup < 0 or args.rate < 0:
+        parser.error("warmup, duration, rate, and concurrency values are invalid")
     if args.calibration_seconds <= 0:
         parser.error("--calibration-seconds must be greater than zero")
     if args.requests <= 0:
         if args.rate <= 0:
             parser.error("--requests is required when --rate=0")
-        args.requests = int(math.ceil(args.rate * args.duration))
+        args.requests = int(math.ceil(args.rate * (args.warmup + args.duration)))
     return args
 
 
@@ -1356,9 +1426,13 @@ def main(argv=None):
         result = summarize(args, args.scenario or "custom", outcome,
                            server_summary, server_metrics, hardware, calibration)
 
-        print("requests=%d responses=%d successful=%d failed=%d elapsed=%.3fs" %
-              (args.requests, result["responses_received"], result["successful"],
-               result["failed"], outcome["elapsed"]))
+        print("requests=%d warmup=%d steady=%d drain=%d failed=%d" %
+              (args.requests, result["warmup_requests_offered"],
+               result["steady_responses_completed"],
+               result["drain_responses_completed"], result["failed"]))
+        print("phases=warmup:%.3fs steady:%.3fs drain:%.3fs" %
+              (result["warmup_seconds"], result["steady_state_seconds"],
+               result["drain_seconds"]))
         print("throughput=%.2f req/s successful=%.2f req/s target=%.2f req/s mode=%s" %
               (result["throughput_rps"], result["successful_rps"], args.rate,
                result["mode"]))
