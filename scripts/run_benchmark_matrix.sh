@@ -7,7 +7,20 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(dirname "$script_dir")"
 log_file="${1:-$repo_root/benchmarks/benchmark_matrix.csv}"
 duration="${2:-5}"
+min_hardware_agnostic_rps="${3:-1000}"
+calibration_seconds="${4:-2}"
 
+# Calibrate once before the matrix. Individual scenarios reuse the per-machine
+# cache, so calibration work is not part of any scenario's measured duration.
+if ! python3 "$script_dir/http_benchmark.py" \
+    --calibrate only \
+    --calibrate-force \
+    --calibration-seconds "$calibration_seconds"; then
+    echo "calibration failed; matrix not run" >&2
+    exit 2
+fi
+
+matrix_status=0
 for scenario in \
     new-connection-1000 \
     new-connection-5000 \
@@ -18,11 +31,21 @@ for scenario in \
     slow-clients
 do
     echo "=== scenario: $scenario ==="
-    python3 "$script_dir/http_benchmark.py" \
+    extra_args=()
+    if [ "$min_hardware_agnostic_rps" != "0" ]; then
+        extra_args+=(--min-hardware-agnostic-rps "$min_hardware_agnostic_rps")
+    fi
+    if ! python3 "$script_dir/http_benchmark.py" \
         --start-server \
         --scenario "$scenario" \
         --duration "$duration" \
         --concurrency 32 \
         --timeout 30 \
-        --log-file "$log_file" || true
+        --calibrate on \
+        --log-file "$log_file" \
+        "${extra_args[@]}"; then
+        matrix_status=1
+    fi
 done
+
+exit "$matrix_status"

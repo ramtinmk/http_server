@@ -17,9 +17,13 @@ CSV or JSON Lines while human-readable output is retained.
 import argparse
 import collections
 import csv
+import hashlib
 import json
 import math
 import os
+import platform
+import resource
+import shlex
 import signal
 import socket
 import subprocess
@@ -27,6 +31,16 @@ import sys
 import tempfile
 import threading
 import time
+
+
+CALIBRATION_ALGORITHM = "sha256-ramped-buffer"
+CALIBRATION_DEFAULT_SECONDS = 2.0
+# This is a stable reporting unit, not a claim about the speed of a particular
+# host. Ratios between machine indexes are what make normalized results useful.
+CALIBRATION_REFERENCE_OPS_PER_SEC = 10000.0
+CALIBRATION_CACHE_VERSION = 1
+CALIBRATION_PAYLOAD_MAX = 1024 * 1024
+CALIBRATION_PAYLOAD_MIN = 1024
 
 
 CSV_FIELDS = (
@@ -44,6 +58,18 @@ CSV_FIELDS = (
     "server_accepted_connections", "server_rejected_tasks",
     "server_completed_requests", "server_request_failures",
     "ctx_switches_voluntary", "ctx_switches_involuntary", "tcp_retransmits",
+    "server_cpu_seconds", "server_cpu_seconds_per_1000_requests",
+    "rps_per_server_cpu_second", "server_cpu_cores", "client_cpu_seconds",
+    "client_cpu_percent", "hardware_agnostic_rps", "limited_by",
+    "machine_index", "calibration_ops_per_sec", "calibration_reference_ops_per_sec",
+    "calibration_algorithm", "calibration_seconds", "calibrated",
+    "throughput_rps_normalized", "successful_rps_normalized",
+    "latency_p50_ms_normalized", "latency_p95_ms_normalized",
+    "latency_p99_ms_normalized",
+    "machine_id", "host_name", "cpu_model", "cpu_logical_cores",
+    "cpu_physical_cores", "cpu_mhz", "cpu_max_mhz", "memory_total_kb",
+    "os_kernel", "compiler_flags", "ulimit_nofile_soft", "ulimit_nofile_hard",
+    "page_size_kb",
 )
 
 SCENARIOS = {
@@ -99,6 +125,158 @@ SCENARIOS = {
 }
 
 
+def _read_text(path):
+    try:
+        with open(path, encoding="utf-8") as source:
+            return source.read()
+    except (OSError, UnicodeError):
+        return ""
+
+
+def _cpuinfo_records():
+    records = []
+    current = {}
+    for line in _read_text("/proc/cpuinfo").splitlines():
+        if not line.strip():
+            if current:
+                records.append(current)
+                current = {}
+            continue
+        key, separator, value = line.partition(":")
+        if separator:
+            current[key.strip()] = value.strip()
+    if current:
+        records.append(current)
+    return records
+
+
+def _read_mem_total_kb():
+    for line in _read_text("/proc/meminfo").splitlines():
+        key, separator, value = line.partition(":")
+        if key == "MemTotal" and separator:
+            try:
+                return int(value.strip().split()[0])
+            except (IndexError, ValueError):
+                break
+    return 0
+
+
+def _read_cpu_max_mhz():
+    value = _read_text(
+        "/sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_max_freq"
+    ).strip()
+    if not value:
+        return 0.0
+    try:
+        # cpufreq exposes kHz; accepting MHz as a fallback keeps this useful on
+        # kernels that expose a human-readable value instead.
+        numeric = float(value)
+        return round(numeric / 1000.0 if numeric > 10000 else numeric, 3)
+    except ValueError:
+        return 0.0
+
+
+def _read_compiler_flags():
+    """Return normalized server compiler flags when compile_commands is present."""
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    compile_commands = os.path.join(repo_root, "compile_commands.json")
+    try:
+        with open(compile_commands, encoding="utf-8") as source:
+            commands = json.load(source)
+    except (OSError, ValueError, TypeError):
+        commands = []
+
+    flags = []
+    seen = set()
+    for entry in commands:
+        command = entry.get("arguments") or entry.get("command")
+        if not command:
+            continue
+        try:
+            tokens = list(command) if isinstance(command, list) else shlex.split(command)
+        except ValueError:
+            continue
+        skip_next = False
+        for token in tokens[1:]:
+            if skip_next:
+                skip_next = False
+                continue
+            if token == "-o":
+                skip_next = True
+                continue
+            if token.startswith("-") and token not in seen:
+                flags.append(token)
+                seen.add(token)
+    if flags:
+        return " ".join(flags)
+    return os.environ.get("CFLAGS", "unknown")
+
+
+def hardware_fingerprint():
+    records = _cpuinfo_records()
+    logical_cores = os.cpu_count() or len(records) or 1
+    model = next((record.get("model name") or record.get("Processor")
+                  for record in records
+                  if record.get("model name") or record.get("Processor")), "unknown")
+    try:
+        cpu_mhz = float(next(record["cpu MHz"] for record in records if "cpu MHz" in record))
+    except (StopIteration, ValueError):
+        cpu_mhz = 0.0
+
+    physical_pairs = {
+        (record.get("physical id"), record.get("core id"))
+        for record in records
+        if record.get("physical id") is not None and record.get("core id") is not None
+    }
+    if physical_pairs:
+        physical_cores = len(physical_pairs)
+    else:
+        core_counts = [record.get("cpu cores") for record in records if record.get("cpu cores")]
+        socket_ids = {
+            record.get("physical id") for record in records
+            if record.get("physical id") is not None
+        }
+        try:
+            physical_cores = (
+                int(core_counts[0]) * max(1, len(socket_ids))
+                if core_counts else logical_cores
+            )
+        except ValueError:
+            physical_cores = logical_cores
+
+    try:
+        nofile_soft, nofile_hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    except (AttributeError, OSError, ValueError):
+        nofile_soft, nofile_hard = 0, 0
+    try:
+        page_size_kb = int(os.sysconf("SC_PAGE_SIZE")) // 1024
+    except (AttributeError, OSError, ValueError):
+        page_size_kb = 0
+
+    fingerprint = {
+        "host_name": platform.node() or "unknown",
+        "cpu_model": model,
+        "cpu_logical_cores": logical_cores,
+        "cpu_physical_cores": physical_cores,
+        "cpu_mhz": round(cpu_mhz, 3),
+        "cpu_max_mhz": _read_cpu_max_mhz(),
+        "memory_total_kb": _read_mem_total_kb(),
+        "os_kernel": platform.release() or "unknown",
+        "compiler_flags": _read_compiler_flags(),
+        "ulimit_nofile_soft": nofile_soft,
+        "ulimit_nofile_hard": nofile_hard,
+        "page_size_kb": page_size_kb,
+    }
+    machine_material = "|".join(str(fingerprint[key]) for key in (
+        "cpu_model", "cpu_logical_cores", "cpu_physical_cores",
+        "memory_total_kb", "page_size_kb",
+    ))
+    fingerprint["machine_id"] = hashlib.sha256(
+        machine_material.encode("utf-8", "replace")
+    ).hexdigest()[:16]
+    return fingerprint
+
+
 class RequestError(Exception):
     category = "framing"
 
@@ -133,6 +311,139 @@ def percentile(values, fraction):
     ordered = sorted(values)
     index = min(len(ordered) - 1, int(math.ceil(fraction * len(ordered))) - 1)
     return ordered[index]
+
+
+def _calibration_payload():
+    """Choose a fixed hash input whose one-shot cost is below 50 ms."""
+    size = CALIBRATION_PAYLOAD_MAX
+    while True:
+        payload = b"http-server-benchmark\\0" * max(1, size // 23)
+        started = time.perf_counter()
+        hashlib.sha256(payload).digest()
+        elapsed = time.perf_counter() - started
+        if elapsed < 0.05 or size <= CALIBRATION_PAYLOAD_MIN:
+            return payload
+        size //= 2
+
+
+def _calibrate_ops_per_second(seconds=CALIBRATION_DEFAULT_SECONDS):
+    if seconds <= 0:
+        raise ValueError("calibration duration must be greater than zero")
+    payload = _calibration_payload()
+    deadline = time.perf_counter() + seconds
+    operations = 0
+    while True:
+        hashlib.sha256(payload).digest()
+        operations += 1
+        if time.perf_counter() >= deadline:
+            break
+    elapsed = max(1e-9, seconds + (time.perf_counter() - deadline))
+    return operations / elapsed
+
+
+def calibrate(seconds=CALIBRATION_DEFAULT_SECONDS):
+    """Return the machine speed index for the fixed SHA-256 workload."""
+    return _calibrate_ops_per_second(seconds) / CALIBRATION_REFERENCE_OPS_PER_SEC
+
+
+def _calibration_cache_path(machine_id):
+    cache_root = os.environ.get("XDG_CACHE_HOME")
+    if not cache_root:
+        cache_root = os.path.join(os.path.expanduser("~"), ".cache")
+    return os.path.join(cache_root, "http_server_bench", machine_id + ".json")
+
+
+def _calibration_record(machine_id, seconds, operations_per_second):
+    return {
+        "version": CALIBRATION_CACHE_VERSION,
+        "machine_id": machine_id,
+        "algorithm": CALIBRATION_ALGORITHM,
+        "seconds": round(seconds, 3),
+        "operations_per_second": round(operations_per_second, 3),
+        "reference_operations_per_second": CALIBRATION_REFERENCE_OPS_PER_SEC,
+        "machine_index": operations_per_second / CALIBRATION_REFERENCE_OPS_PER_SEC,
+    }
+
+
+def _load_calibration_cache(machine_id):
+    path = _calibration_cache_path(machine_id)
+    try:
+        with open(path, encoding="utf-8") as source:
+            record = json.load(source)
+    except (OSError, ValueError, TypeError):
+        return None
+    if not isinstance(record, dict):
+        return None
+    try:
+        reference_operations_per_second = float(
+            record.get("reference_operations_per_second", 0.0)
+        )
+    except (TypeError, ValueError):
+        return None
+    if (
+        record.get("version") != CALIBRATION_CACHE_VERSION
+        or record.get("machine_id") != machine_id
+        or record.get("algorithm") != CALIBRATION_ALGORITHM
+        or reference_operations_per_second != CALIBRATION_REFERENCE_OPS_PER_SEC
+    ):
+        return None
+    try:
+        operations_per_second = float(record["operations_per_second"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if operations_per_second <= 0:
+        return None
+    return record
+
+
+def _save_calibration_cache(record):
+    path = _calibration_cache_path(record["machine_id"])
+    temporary = path + ".tmp-%d" % os.getpid()
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(temporary, "w", encoding="utf-8") as output:
+            json.dump(record, output, sort_keys=True)
+            output.write("\n")
+        os.replace(temporary, path)
+    except OSError:
+        try:
+            os.remove(temporary)
+        except OSError:
+            pass
+
+
+def calibration_for_machine(hardware, mode="on", force=False,
+                            seconds=CALIBRATION_DEFAULT_SECONDS):
+    """Return calibration metadata, using a per-machine cache when enabled."""
+    base = {
+        "machine_id": hardware.get("machine_id", "unknown"),
+        "algorithm": CALIBRATION_ALGORITHM,
+        "seconds": 0.0,
+        "operations_per_second": 0.0,
+        "reference_operations_per_second": CALIBRATION_REFERENCE_OPS_PER_SEC,
+        "machine_index": 0.0,
+        "calibrated": False,
+    }
+    if mode == "off":
+        return base
+    if mode not in ("on", "only"):
+        raise ValueError("calibration mode must be on, off, or only")
+    record = None if force else _load_calibration_cache(base["machine_id"])
+    if record is None:
+        operations_per_second = _calibrate_ops_per_second(seconds)
+        record = _calibration_record(
+            base["machine_id"], seconds, operations_per_second
+        )
+        _save_calibration_cache(record)
+    result = dict(base)
+    result.update({
+        "seconds": float(record.get("seconds", seconds)),
+        "operations_per_second": float(record["operations_per_second"]),
+        "machine_index": float(record["operations_per_second"]) /
+        CALIBRATION_REFERENCE_OPS_PER_SEC,
+        "calibrated": True,
+    })
+    return result
 
 
 def git_commit_id():
@@ -373,7 +684,23 @@ def worker(args, state, results, worker_id):
 
 # --- Server process monitoring (CPU, RSS, fds, context switches) ------------
 
-CLK_TCK = os.sysconf("SC_CLK_TCK")
+try:
+    CLK_TCK = os.sysconf("SC_CLK_TCK")
+except (AttributeError, OSError, ValueError):
+    CLK_TCK = 100
+
+
+def read_proc_cpu_seconds(pid):
+    if not pid:
+        return 0.0
+    try:
+        with open("/proc/%d/stat" % pid, encoding="utf-8") as source:
+            data = source.read()
+        end = data.rfind(")")
+        fields = data[end + 2:].split()
+        return (int(fields[11]) + int(fields[12])) / CLK_TCK
+    except (OSError, ValueError, IndexError, ZeroDivisionError):
+        return 0.0
 
 
 def read_proc_tcp_retransmits():
@@ -473,6 +800,8 @@ class ServerMonitor:
     def summary(self):
         result = {
             "server_cpu_percent": 0.0,
+            "server_cpu_seconds": 0.0,
+            "server_cpu_cores": 0.0,
             "server_rss_kb": self.max_rss_kb,
             "server_open_fds": self.max_open_fds,
             "ctx_switches_voluntary": 0,
@@ -483,9 +812,12 @@ class ServerMonitor:
             first = self.samples[0]
             last = self.samples[-1]
             elapsed = max(1e-6, last["t"] - first["t"])
-            cpu_ticks = last["cpu_ticks"] - first["cpu_ticks"]
+            cpu_ticks = max(0, last["cpu_ticks"] - first["cpu_ticks"])
+            cpu_seconds = cpu_ticks / CLK_TCK
+            result["server_cpu_seconds"] = round(cpu_seconds, 6)
+            result["server_cpu_cores"] = round(cpu_seconds / elapsed, 6)
             result["server_cpu_percent"] = round(
-                100.0 * (cpu_ticks / CLK_TCK) / elapsed, 2
+                100.0 * cpu_seconds / elapsed, 2
             )
             result["ctx_switches_voluntary"] = last["voluntary"] - first["voluntary"]
             result["ctx_switches_involuntary"] = last["involuntary"] - first["involuntary"]
@@ -598,7 +930,22 @@ def run_load(args, specs, slow_clients=0):
     }
 
 
-def summarize(args, spec_names, outcome, server_summary, server_metrics):
+def classify_limiter(client_cpu_seconds, server_cpu_seconds, elapsed):
+    """Return a coarse saturation verdict; treat it as diagnostic, not a gate."""
+    elapsed = max(1e-6, elapsed)
+    client_percent = 100.0 * client_cpu_seconds / elapsed
+    server_percent = 100.0 * server_cpu_seconds / elapsed
+    if server_cpu_seconds <= 0:
+        return "unknown"
+    if client_percent >= 80.0 and client_percent > server_percent * 1.25:
+        return "client"
+    if server_percent >= 80.0 and server_percent >= client_percent * 0.75:
+        return "server"
+    return "neither/unknown"
+
+
+def summarize(args, spec_names, outcome, server_summary, server_metrics,
+              hardware=None, calibration=None):
     elapsed = outcome["elapsed"]
     latencies = outcome["latencies"]
     statuses = outcome["statuses"]
@@ -672,10 +1019,106 @@ def summarize(args, spec_names, outcome, server_summary, server_metrics):
     result["fail_other"] = errors.get("other", 0)
     result.update(server_summary)
     result.update(server_metrics)
+
+    hardware = hardware or hardware_fingerprint()
+    calibration = calibration or {
+        "machine_index": 0.0,
+        "operations_per_second": 0.0,
+        "reference_operations_per_second": CALIBRATION_REFERENCE_OPS_PER_SEC,
+        "algorithm": CALIBRATION_ALGORITHM,
+        "seconds": 0.0,
+        "calibrated": False,
+    }
+    server_cpu_seconds = float(result.get("server_cpu_seconds", 0.0) or 0.0)
+    server_completed = int(result.get("server_completed_requests", 0) or 0)
+    if server_completed <= 0:
+        server_completed = responses_received
+    server_cpu_cores = server_cpu_seconds / max(1e-6, elapsed)
+    client_cpu_seconds = float(outcome.get("client_cpu_seconds", 0.0) or 0.0)
+    result["server_cpu_seconds"] = round(server_cpu_seconds, 6)
+    result["server_cpu_seconds_per_1000_requests"] = round(
+        server_cpu_seconds / server_completed * 1000.0, 6
+    ) if server_completed else 0.0
+    result["rps_per_server_cpu_second"] = round(
+        successful / server_cpu_seconds, 3
+    ) if server_cpu_seconds > 0 else 0.0
+    result["server_cpu_cores"] = round(server_cpu_cores, 6)
+    result["client_cpu_seconds"] = round(client_cpu_seconds, 6)
+    result["client_cpu_percent"] = round(
+        100.0 * client_cpu_seconds / max(1e-6, elapsed), 2
+    )
+    result["hardware_agnostic_rps"] = result["rps_per_server_cpu_second"]
+    result["limited_by"] = classify_limiter(
+        client_cpu_seconds, server_cpu_seconds, elapsed
+    )
+
+    machine_index = float(calibration.get("machine_index", 0.0) or 0.0)
+    calibrated = bool(calibration.get("calibrated", False)) and machine_index > 0
+    result["machine_index"] = round(machine_index, 6) if calibrated else 0.0
+    result["calibration_ops_per_sec"] = round(float(calibration.get(
+        "operations_per_second", 0.0
+    ) or 0.0), 3)
+    result["calibration_reference_ops_per_sec"] = (
+        CALIBRATION_REFERENCE_OPS_PER_SEC
+    )
+    result["calibration_algorithm"] = calibration.get(
+        "algorithm", CALIBRATION_ALGORITHM
+    )
+    result["calibration_seconds"] = round(float(calibration.get(
+        "seconds", 0.0
+    ) or 0.0), 3)
+    result["calibrated"] = calibrated
+    if calibrated:
+        result["throughput_rps_normalized"] = round(
+            result["throughput_rps"] / machine_index, 3
+        )
+        result["successful_rps_normalized"] = round(
+            result["successful_rps"] / machine_index, 3
+        )
+        result["latency_p50_ms_normalized"] = round(
+            result["latency_p50_ms"] * machine_index, 3
+        )
+        result["latency_p95_ms_normalized"] = round(
+            result["latency_p95_ms"] * machine_index, 3
+        )
+        result["latency_p99_ms_normalized"] = round(
+            result["latency_p99_ms"] * machine_index, 3
+        )
+    else:
+        result["throughput_rps_normalized"] = 0.0
+        result["successful_rps_normalized"] = 0.0
+        result["latency_p50_ms_normalized"] = 0.0
+        result["latency_p95_ms_normalized"] = 0.0
+        result["latency_p99_ms_normalized"] = 0.0
+    result.update(hardware)
     return result
 
 
 # --- Result logging ---------------------------------------------------------
+
+
+def _migrate_csv_schema(path, existing_fields):
+    """Append the new schema without corrupting rows written by old clients."""
+    if not existing_fields:
+        return
+    if not set(existing_fields).issubset(set(CSV_FIELDS)):
+        raise ValueError("result CSV contains unknown columns")
+    temporary = path + ".tmp-%d" % os.getpid()
+    try:
+        with open(path, "r", newline="", encoding="utf-8") as source:
+            reader = csv.DictReader(source)
+            with open(temporary, "w", newline="", encoding="utf-8") as output:
+                writer = csv.DictWriter(output, fieldnames=CSV_FIELDS)
+                writer.writeheader()
+                for row in reader:
+                    writer.writerow(row)
+        os.replace(temporary, path)
+    except OSError:
+        try:
+            os.remove(temporary)
+        except OSError:
+            pass
+        raise
 
 
 def log_result(path, result):
@@ -683,11 +1126,16 @@ def log_result(path, result):
     if parent:
         os.makedirs(parent, exist_ok=True)
     if path.endswith(".json") or path.endswith(".jsonl"):
-        with open(path, "a") as output:
+        with open(path, "a", encoding="utf-8") as output:
             output.write(json.dumps(result) + "\n")
     else:
         write_header = not os.path.exists(path) or os.path.getsize(path) == 0
-        with open(path, "a", newline="") as output:
+        if not write_header:
+            with open(path, "r", newline="", encoding="utf-8") as existing:
+                existing_fields = next(csv.reader(existing), [])
+            if existing_fields != list(CSV_FIELDS):
+                _migrate_csv_schema(path, existing_fields)
+        with open(path, "a", newline="", encoding="utf-8") as output:
             writer = csv.DictWriter(output, fieldnames=CSV_FIELDS)
             if write_header:
                 writer.writeheader()
@@ -748,7 +1196,12 @@ def parse_args(argv):
                         help="total requests (defaults to ceil(rate * duration))")
     parser.add_argument("--concurrency", type=int, default=None)
     parser.add_argument("--timeout", type=float, default=10.0)
-    parser.add_argument("--min-rps", type=float, default=0.0)
+    parser.add_argument("--min-rps", type=float, default=0.0,
+                        help="minimum raw successful throughput (legacy gate)")
+    parser.add_argument("--min-hardware-agnostic-rps", type=float, default=0.0,
+                        help="minimum successful requests per server CPU-second")
+    parser.add_argument("--min-normalized-rps", type=float, default=0.0,
+                        help="minimum calibration-normalized successful throughput")
     parser.add_argument("--expect-status", default=None,
                         help="comma-separated expected status codes (default 200)")
     parser.add_argument("--log-file", help="append results and commit ID to CSV or JSON")
@@ -763,6 +1216,15 @@ def parse_args(argv):
     parser.add_argument("--server", default="./bin/http_server")
     parser.add_argument("--server-metrics-file", default=None,
                         help="JSON metrics snapshot written by the server")
+    parser.add_argument("--print-hardware", action="store_true",
+                        help="print hardware metadata and exit without load")
+    parser.add_argument("--calibrate", choices=("on", "off", "only"), default="on",
+                        help="calibrate the host, skip calibration, or calibrate and exit")
+    parser.add_argument("--calibrate-force", action="store_true",
+                        help="ignore the cached calibration for this machine")
+    parser.add_argument("--calibration-seconds", type=float,
+                        default=CALIBRATION_DEFAULT_SECONDS,
+                        help="calibration duration when no cache is available")
     args = parser.parse_args(argv)
 
     scenario = SCENARIOS.get(args.scenario, {}) if args.scenario else {}
@@ -802,13 +1264,19 @@ def parse_args(argv):
                 "method": args.method or "GET",
                 "path": "/home",
                 "gzip": args.gzip,
-                "expect": [int(c) for c in args.expect_status.split(",") if c] or [200],
+                "expect": [int(c) for c in (args.expect_status or "").split(",") if c] or [200],
             }]
     else:
         args.specs, _ = build_specs(args)
 
+    if args.print_hardware or args.calibrate == "only":
+        if args.calibration_seconds <= 0:
+            parser.error("--calibration-seconds must be greater than zero")
+        return args
     if args.concurrency < 1 or args.duration <= 0 or args.rate < 0:
         parser.error("duration, rate, and concurrency values are invalid")
+    if args.calibration_seconds <= 0:
+        parser.error("--calibration-seconds must be greater than zero")
     if args.requests <= 0:
         if args.rate <= 0:
             parser.error("--requests is required when --rate=0")
@@ -818,11 +1286,37 @@ def parse_args(argv):
 
 def main(argv=None):
     args = parse_args(argv)
+    hardware = hardware_fingerprint()
+    calibration = None
     server = None
     metrics_file = args.server_metrics_file
     created_metrics_file = None
     monitor = None
     try:
+        if args.print_hardware:
+            print(json.dumps(hardware, sort_keys=True))
+            if args.calibrate != "only":
+                return 0
+        calibration = calibration_for_machine(
+            hardware,
+            mode=args.calibrate,
+            force=args.calibrate_force,
+            seconds=args.calibration_seconds,
+        )
+        if args.calibrate == "only":
+            print(json.dumps({
+                "algorithm": calibration["algorithm"],
+                "calibrated": calibration["calibrated"],
+                "machine_id": hardware["machine_id"],
+                "machine_index": calibration["machine_index"],
+                "operations_per_second": calibration["operations_per_second"],
+                "reference_operations_per_second": (
+                    calibration["reference_operations_per_second"]
+                ),
+                "seconds": calibration["seconds"],
+            }, sort_keys=True))
+            return 0
+
         if not metrics_file:
             fd, metrics_file = tempfile.mkstemp(prefix="http_server_metrics_", suffix=".json")
             os.close(fd)
@@ -851,13 +1345,16 @@ def main(argv=None):
 
         monitor = ServerMonitor(server_pid)
         monitor.start()
+        client_cpu_start = read_proc_cpu_seconds(os.getpid())
         outcome = run_load(args, args.specs, slow_clients=args.slow_clients)
+        client_cpu_end = read_proc_cpu_seconds(os.getpid())
+        outcome["client_cpu_seconds"] = max(0.0, client_cpu_end - client_cpu_start)
         monitor.stop()
 
         server_summary = monitor.summary()
         server_metrics = read_server_metrics(metrics_file)
         result = summarize(args, args.scenario or "custom", outcome,
-                           server_summary, server_metrics)
+                           server_summary, server_metrics, hardware, calibration)
 
         print("requests=%d responses=%d successful=%d failed=%d elapsed=%.3fs" %
               (args.requests, result["responses_received"], result["successful"],
@@ -878,6 +1375,14 @@ def main(argv=None):
                   result["requests_per_connection"], result["server_cpu_percent"],
                   result["server_rss_kb"], result["server_open_fds"],
                   result["server_queue_depth_max"], result["server_rejected_tasks"]))
+        print("hardware_agnostic_rps=%.3f cpu_seconds_per_1000_requests=%.6f "
+              "client_cpu=%.2f%% limited_by=%s" % (
+                  result["hardware_agnostic_rps"],
+                  result["server_cpu_seconds_per_1000_requests"],
+                  result["client_cpu_percent"], result["limited_by"]))
+        print("calibration=%s machine_index=%.6f normalized_successful_rps=%.3f" % (
+            "on" if result["calibrated"] else "off",
+            result["machine_index"], result["successful_rps_normalized"]))
 
         if args.log_file:
             try:
@@ -890,17 +1395,29 @@ def main(argv=None):
         if outcome["startup_error"]:
             print("FAIL: %s" % outcome["startup_error"], file=sys.stderr)
             return 1
-        if args.diagnostic:
-            return 0
-        if result["failed"]:
+        if not args.diagnostic and result["failed"]:
             print("FAIL: %d requests failed" % result["failed"], file=sys.stderr)
             return 1
         if args.min_rps and result["successful_rps"] < args.min_rps:
             print("FAIL: throughput %.2f is below minimum %.2f req/s" %
                   (result["successful_rps"], args.min_rps), file=sys.stderr)
             return 1
+        if (args.min_hardware_agnostic_rps and
+                result["hardware_agnostic_rps"] < args.min_hardware_agnostic_rps):
+            print("FAIL: hardware-agnostic throughput %.3f is below minimum %.3f "
+                  "requests per server CPU-second" % (
+                      result["hardware_agnostic_rps"],
+                      args.min_hardware_agnostic_rps), file=sys.stderr)
+            return 1
+        if (args.min_normalized_rps and
+                (not result["calibrated"] or
+                 result["successful_rps_normalized"] < args.min_normalized_rps)):
+            print("FAIL: normalized throughput %.3f is below minimum %.3f req/s" %
+                  (result["successful_rps_normalized"], args.min_normalized_rps),
+                  file=sys.stderr)
+            return 1
         return 0
-    except (OSError, RuntimeError) as exc:
+    except (OSError, RuntimeError, ValueError) as exc:
         print("FAIL: %s" % exc, file=sys.stderr)
         return 2
     finally:
