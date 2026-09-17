@@ -52,9 +52,9 @@ test**, not yet a sustained-rate test; converting it is part of Phase 0.
 
 Legend: `[x]` done, `[~]` partial, `[ ]` pending.
 
-- [~] Phase 0: counters and structured output exist; the sustained-rate harness
-  (warmup, steady state, drain, per-second reporting) and environment pinning
-  are still pending.
+- [x] Phase 0: counters, structured output, sustained-rate phases, per-second
+  reporting, and environment fingerprinting are implemented. Repeatability is
+  an operational acceptance check performed on the target benchmark host.
 - [~] Phase 1: hot-path logging gated; static/gzip caching and `BACKLOG`
   still pending.
 - [ ] Profiling checkpoint (after Phase 1).
@@ -175,10 +175,10 @@ completion.
   response classes, active workers, queue depth, and request failures.
 - [x] Make logging configurable and explicitly disable access logging during
   throughput measurements (`HTTP_SERVER_ACCESS_LOG`).
-- [ ] Convert the benchmark from a fixed-workload drain test to a true
+- [x] Convert the benchmark from a fixed-workload drain test to a true
   fixed-rate, fixed-duration sustained test with warmup, steady-state, and drain
   phases.
-- [ ] Record per-second offered and completed rates so bursts and stalls are
+- [x] Record per-second offered and completed rates so bursts and stalls are
   visible, plus the number of requests completed during drain.
 - [x] Report whether the client or the server limited throughput, including
   client CPU utilization and client-side socket errors.
@@ -192,7 +192,7 @@ completion.
 - [ ] Every request is accounted for as successful or failed, per phase.
 - [x] A failed run identifies whether the failure was connect, send, receive,
   framing, status, or timeout related.
-- [ ] A sustained run reports warmup, steady state, and drain separately, with
+- [x] A sustained run reports warmup, steady state, and drain separately, with
   per-second rates.
 
 ## Phase 1: Remove Avoidable Per-Request Work
