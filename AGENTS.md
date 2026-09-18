@@ -26,6 +26,17 @@ Test runner binary: `./bin/run_tests`
     kill $SERVER_PID && wait $SERVER_PID 2>/dev/null || true
     ```
 
+## Planning
+
+- **Plan standard**: `plan-spec.md` at the repository root is the project-agnostic
+  spec for plan shape, terminology, categories, phases, and acceptance criteria.
+- **Before authoring or editing any plan**, read `plan-spec.md` and follow it.
+- **Plans live in `plans/`**. Use `category` (`program`, `implementation`,
+  `todo`, `spike`, `runbook`, `design`), a unique `plan_id`, and per-phase
+  complexity; cross-reference other plans by `plan_id`.
+- This file holds project facts (commands, paths, conventions); `plan-spec.md`
+  holds plan shape. Do not duplicate one into the other.
+
 ## Runtime Quirks & Architecture
 
 - **Working directory requirement**: Always run `./bin/http_server` from the repository root. Static routes look up `home.html` and `hello.html` via relative paths from CWD.
