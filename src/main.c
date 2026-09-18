@@ -40,6 +40,11 @@ int main(void)
     sigaction(SIGINT, &sa, NULL);
     sigaction(SIGTERM, &sa, NULL);
 
+    // Cache supported static responses before accepting any clients.
+    if (initialize_static_responses() != 0) {
+        return EXIT_FAILURE;
+    }
+
     // Initialize Thread Pool
     ThreadPool *thread_pool = create_thread_pool(THREAD_POOL_SIZE);
     if (thread_pool == NULL)

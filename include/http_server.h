@@ -25,7 +25,9 @@
 
 // --- Configuration and Constants ---
 #define PORT 8081
-#define BACKLOG 10
+#ifndef BACKLOG
+#define BACKLOG 1024
+#endif
 #define BUFFER_SIZE 8092
 #define ZLIB_CHUNK_SIZE 16384
 #define MAX_HEADERS 64
@@ -89,6 +91,7 @@ struct BufferPool;
 // --- Function Prototypes (Interface) ---
 void handle_client(int client_socket, BufferPool *bp);
 int create_server_socket(void);
+int initialize_static_responses(void);
 void send_error_response(int client_socket, const char *response);
 int method_is_supported(const char *method);
 void *worker_thread_function(void *arg);

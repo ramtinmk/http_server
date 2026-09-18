@@ -204,52 +204,6 @@ static int parse_chunk_size(const char *line, size_t *chunk_size) {
     return 0;
 }
 
-/* Validate the encoded chunk stream independently of the response parser.
- * This catches invalid sizes, missing CRLF delimiters, and missing trailers. */
-static int validate_chunked_wire(const HttpResponse *response) {
-    const char *cursor = strstr(response->raw, "\r\n\r\n");
-    if (!cursor) return -1;
-    cursor += 4;
-    const char *end = response->raw + response->raw_length;
-    size_t decoded_length = 0;
-
-    while (cursor < end) {
-        const char *line_end = strstr(cursor, "\r\n");
-        if (!line_end || line_end >= end) return -1;
-        size_t line_length = (size_t)(line_end - cursor);
-        char *size_line = malloc(line_length + 1);
-        if (!size_line) return -1;
-        memcpy(size_line, cursor, line_length);
-        size_line[line_length] = '\0';
-
-        size_t chunk_size;
-        int parsed = parse_chunk_size(size_line, &chunk_size);
-        free(size_line);
-        if (parsed != 0) return -1;
-        cursor = line_end + 2;
-
-        if (chunk_size == 0) {
-            /* A zero chunk is followed by zero or more trailers and a final
-             * empty line, not by another payload chunk. */
-            while (cursor < end) {
-                line_end = strstr(cursor, "\r\n");
-                if (!line_end || line_end >= end) return -1;
-                if (line_end == cursor) {
-                    return cursor + 2 == end && decoded_length == response->body_length ? 0 : -1;
-                }
-                cursor = line_end + 2;
-            }
-            return -1;
-        }
-
-        if ((size_t)(end - cursor) < chunk_size + 2) return -1;
-        decoded_length += chunk_size;
-        cursor += chunk_size;
-        if (memcmp(cursor, "\r\n", 2) != 0) return -1;
-        cursor += 2;
-    }
-    return -1;
-}
 
 static int decompress_gzip(const char *compressed, size_t compressed_length,
                            char **decompressed, size_t *decompressed_length) {
@@ -497,12 +451,9 @@ void test_gzip_response_framing() {
     HttpResponse response;
     TEST_ASSERT(read_http_response(client_socket, request, &response) == 0);
     TEST_ASSERT(response.status_code == 200);
-    TEST_ASSERT(response.chunked);
-    TEST_ASSERT(validate_chunked_wire(&response) == 0);
-    /* A valid chunked response must expose payload bytes separately from its
-     * chunk-size lines and terminating zero chunk. */
+    TEST_ASSERT(!response.chunked);
+    TEST_ASSERT(response.content_length == (long long)response.body_length);
     TEST_ASSERT(response.body_length > 0);
-    TEST_ASSERT(response.raw_length > response.body_length);
     char *decompressed = NULL;
     size_t decompressed_length = 0;
     TEST_ASSERT(decompress_gzip(response.body, response.body_length,
@@ -510,6 +461,51 @@ void test_gzip_response_framing() {
     TEST_ASSERT(decompressed && decompressed_length > 0);
     TEST_ASSERT(decompressed && strstr(decompressed, "<title>Home Page</title>") != NULL);
     free(decompressed);
+    http_response_free(&response);
+    close(client_socket);
+}
+
+void test_gzip_negotiation() {
+    int client_socket = create_and_connect_socket();
+    TEST_ASSERT(client_socket != -1);
+
+    const char request[] =
+        "GET /home HTTP/1.1\r\n"
+        "Host: localhost\r\n"
+        "Accept-Encoding: gzip;q=0\r\n"
+        "Connection: close\r\n\r\n";
+    HttpResponse response;
+    TEST_ASSERT(send(client_socket, request, strlen(request), 0) != -1);
+    TEST_ASSERT(read_http_response(client_socket, request, &response) == 0);
+    TEST_ASSERT(response.status_code == 200);
+    TEST_ASSERT(response.chunked == 0);
+    TEST_ASSERT(strstr(response.headers, "Content-Encoding: gzip") == NULL);
+    TEST_ASSERT(strstr(response.body, "<title>Home Page</title>") != NULL);
+    http_response_free(&response);
+    close(client_socket);
+}
+
+void test_head_gzip_response() {
+    int client_socket = create_and_connect_socket();
+    TEST_ASSERT(client_socket != -1);
+
+    const char request[] =
+        "HEAD /home HTTP/1.1\r\n"
+        "Host: localhost\r\n"
+        "Accept-Encoding: gzip\r\n"
+        "Connection: close\r\n\r\n";
+    HttpResponse response;
+    TEST_ASSERT(send(client_socket, request, strlen(request), 0) != -1);
+    TEST_ASSERT(read_http_response(client_socket, request, &response) == 0);
+    TEST_ASSERT(response.status_code == 200);
+    TEST_ASSERT(response.body_length == 0);
+    TEST_ASSERT(strstr(response.headers, "Content-Encoding: gzip") != NULL);
+    char content_length[32];
+    long long declared_length;
+    TEST_ASSERT(header_value(response.headers, "Content-Length",
+                             content_length, sizeof(content_length)) == 0);
+    TEST_ASSERT(parse_content_length(content_length, &declared_length) == 0);
+    TEST_ASSERT(declared_length > 0);
     http_response_free(&response);
     close(client_socket);
 }
@@ -747,7 +743,9 @@ void run_server_tests() {
     RUN_TEST(test_root_page_load,   "GET / (Root)");
     RUN_TEST(test_home_page,        "GET /home (Check content)");
     RUN_TEST(test_hello_page,       "GET /hello (Check content)");
-    RUN_TEST(test_gzip_response_framing, "Gzip response framing and chunks");
+    RUN_TEST(test_gzip_response_framing, "Gzip response framing");
+    RUN_TEST(test_gzip_negotiation, "Gzip q=0 negotiation");
+    RUN_TEST(test_head_gzip_response, "HEAD gzip response has no body");
 
     // Error Handling
     RUN_TEST(test_not_found_404,    "GET /nonexistent (Expect 404)");

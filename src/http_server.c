@@ -4,7 +4,7 @@
 #include <signal.h>
 #include <sys/sendfile.h>
 #include <sys/stat.h>
-#include <sys/uio.h>
+
 #include <fcntl.h>
 #include <errno.h>
 #include <time.h>
@@ -13,6 +13,23 @@
 // --- Configuration ---
 #define IDLE_TIMEOUT_SEC 60
 #define READ_BUFFER_SIZE 8192
+#define RESPONSE_HEADER_SIZE 512
+
+typedef struct {
+    unsigned char *body;
+    size_t body_len;
+    char headers[2][RESPONSE_HEADER_SIZE];
+    size_t headers_len[2];
+} CachedResponse;
+
+typedef struct {
+    CachedResponse plain;
+    CachedResponse gzip;
+} StaticAsset;
+
+static StaticAsset home_asset;
+static StaticAsset hello_asset;
+static int static_responses_initialized;
 
 // Error Templates
 const char *BAD_REQUEST_400 = ERROR_TEMPLATE("400 Bad Request", "Malformed request syntax");
@@ -23,6 +40,136 @@ const char *HEADER_FIELDS_TOO_LARGE_431 = ERROR_TEMPLATE("431 Request Header Fie
 
 const char *SUPPORTED_METHODS[] = {"GET", "HEAD"};
 const int SUPPORTED_METHOD_COUNT = 2;
+
+static void free_cached_response(CachedResponse *response) {
+    if (!response) return;
+    free(response->body);
+    memset(response, 0, sizeof(*response));
+}
+
+static int read_asset(const char *path, unsigned char **body, size_t *body_len) {
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) return -1;
+
+    struct stat st;
+    if (fstat(fd, &st) < 0 || !S_ISREG(st.st_mode) || st.st_size < 0) {
+        close(fd);
+        errno = EINVAL;
+        return -1;
+    }
+
+    size_t length = (size_t)st.st_size;
+    unsigned char *data = malloc(length ? length : 1);
+    if (!data) {
+        close(fd);
+        errno = ENOMEM;
+        return -1;
+    }
+
+    size_t offset = 0;
+    while (offset < length) {
+        ssize_t count = read(fd, data + offset, length - offset);
+        if (count < 0 && errno == EINTR) continue;
+        if (count <= 0) {
+            free(data);
+            close(fd);
+            errno = EIO;
+            return -1;
+        }
+        offset += (size_t)count;
+    }
+    close(fd);
+    *body = data;
+    *body_len = length;
+    return 0;
+}
+
+static int gzip_asset(const unsigned char *input, size_t input_len,
+                      unsigned char **output, size_t *output_len) {
+    uLong bound = compressBound((uLong)input_len);
+    unsigned char *data = malloc(bound ? (size_t)bound : 1);
+    if (!data) {
+        errno = ENOMEM;
+        return -1;
+    }
+
+    z_stream stream;
+    memset(&stream, 0, sizeof(stream));
+    if (deflateInit2(&stream, Z_DEFAULT_COMPRESSION, Z_DEFLATED,
+                     15 + 16, 8, Z_DEFAULT_STRATEGY) != Z_OK) {
+        free(data);
+        errno = EIO;
+        return -1;
+    }
+    stream.next_in = (Bytef *)input;
+    stream.avail_in = (uInt)input_len;
+    stream.next_out = data;
+    stream.avail_out = (uInt)bound;
+    int result = deflate(&stream, Z_FINISH);
+    size_t produced = (size_t)stream.total_out;
+    deflateEnd(&stream);
+    if (result != Z_STREAM_END) {
+        free(data);
+        errno = EIO;
+        return -1;
+    }
+    *output = data;
+    *output_len = produced;
+    return 0;
+}
+
+static int prepare_headers(CachedResponse *response, int gzip) {
+    for (int keep_alive = 0; keep_alive <= 1; keep_alive++) {
+        int written = snprintf(response->headers[keep_alive],
+                               sizeof(response->headers[keep_alive]),
+                               "HTTP/1.1 200 OK\r\n"
+                               "Server: SimpleHTTPServer/1.0\r\n"
+                               "Connection: %s\r\n"
+                               "Content-Type: text/html\r\n"
+                               "Content-Length: %zu\r\n"
+                               "%s"
+                               "Vary: Accept-Encoding\r\n\r\n",
+                               keep_alive ? "keep-alive" : "close",
+                               response->body_len,
+                               gzip ? "Content-Encoding: gzip\r\n" : "");
+        if (written < 0 || (size_t)written >= sizeof(response->headers[keep_alive])) {
+            errno = EOVERFLOW;
+            return -1;
+        }
+        response->headers_len[keep_alive] = (size_t)written;
+    }
+    return 0;
+}
+
+static int load_static_asset(const char *path, StaticAsset *asset) {
+    memset(asset, 0, sizeof(*asset));
+    if (read_asset(path, &asset->plain.body, &asset->plain.body_len) != 0 ||
+        gzip_asset(asset->plain.body, asset->plain.body_len,
+                   &asset->gzip.body, &asset->gzip.body_len) != 0 ||
+        prepare_headers(&asset->plain, 0) != 0 ||
+        prepare_headers(&asset->gzip, 1) != 0) {
+        free_cached_response(&asset->plain);
+        free_cached_response(&asset->gzip);
+        return -1;
+    }
+    return 0;
+}
+
+int initialize_static_responses(void) {
+    if (static_responses_initialized) return 0;
+    if (load_static_asset("home.html", &home_asset) != 0) {
+        fprintf(stderr, "Failed to cache home.html: %s\n", strerror(errno));
+        return -1;
+    }
+    if (load_static_asset("hello.html", &hello_asset) != 0) {
+        fprintf(stderr, "Failed to cache hello.html: %s\n", strerror(errno));
+        free_cached_response(&home_asset.plain);
+        free_cached_response(&home_asset.gzip);
+        return -1;
+    }
+    static_responses_initialized = 1;
+    return 0;
+}
 
 // --- Helper Functions ---
 
@@ -44,36 +191,6 @@ static ssize_t send_all(int sockfd, const void *buf, size_t len) {
     return (ssize_t)total_sent;
 }
 
-// Reliable scatter-gather send that loops until all iovecs are sent
-static ssize_t sendmsg_all(int sockfd, struct iovec *iov, int iovcnt) {
-    while (iovcnt > 0) {
-        struct msghdr msg;
-        memset(&msg, 0, sizeof(msg));
-        msg.msg_iov = iov;
-        msg.msg_iovlen = iovcnt;
-
-        ssize_t sent = sendmsg(sockfd, &msg, MSG_NOSIGNAL);
-        if (sent < 0) {
-            if (errno == EINTR) { continue;
-}
-            return -1;
-        }
-        if (sent == 0) { return 0;
-}
-
-        size_t rem = (size_t)sent;
-        while (iovcnt > 0 && rem >= iov->iov_len) {
-            rem -= iov->iov_len;
-            iov++;
-            iovcnt--;
-        }
-        if (iovcnt > 0 && rem > 0) {
-            iov->iov_base = (char *)iov->iov_base + rem;
-            iov->iov_len -= rem;
-        }
-    }
-    return 0;
-}
 
 // Wrapper to send data without crashing on SIGPIPE
 ssize_t send_data(int sockfd, const void *buf, size_t len) {
@@ -177,6 +294,57 @@ static void parse_request_line(char *line, HTTPRequest *req) {
     }
 }
 
+static int gzip_is_accepted(const char *value) {
+    if (!value) return 0;
+    char copy[256];
+    snprintf(copy, sizeof(copy), "%s", value);
+
+    char *saveptr = NULL;
+    for (char *item = strtok_r(copy, ",", &saveptr);
+         item;
+         item = strtok_r(NULL, ",", &saveptr)) {
+        while (*item == ' ' || *item == '\t') item++;
+        char *end = item + strlen(item);
+        while (end > item && (end[-1] == ' ' || end[-1] == '\t')) *--end = '\0';
+
+        char *parameters = strchr(item, ';');
+        if (parameters) *parameters++ = '\0';
+        if (strcasecmp(item, "gzip") != 0) continue;
+
+        int accepted = 1;
+        if (parameters) {
+            char *parameter_save = NULL;
+            for (char *parameter = strtok_r(parameters, ";", &parameter_save);
+                 parameter;
+                 parameter = strtok_r(NULL, ";", &parameter_save)) {
+                while (*parameter == ' ' || *parameter == '\t') parameter++;
+                char *equals = strchr(parameter, '=');
+                if (!equals) continue;
+                char *name_end = equals;
+                while (name_end > parameter &&
+                       (name_end[-1] == ' ' || name_end[-1] == '\t')) {
+                    name_end--;
+                }
+                *name_end = '\0';
+                if (strcasecmp(parameter, "q") != 0) continue;
+
+                char *qvalue = equals + 1;
+                while (*qvalue == ' ' || *qvalue == '\t') qvalue++;
+                char *qend = NULL;
+                double quality = strtod(qvalue, &qend);
+                while (qend && (*qend == ' ' || *qend == '\t')) qend++;
+                if (qend == qvalue || (qend && *qend != '\0') ||
+                    quality < 0.0 || quality > 1.0 || quality == 0.0) {
+                    accepted = 0;
+                }
+                break;
+            }
+        }
+        return accepted;
+    }
+    return 0;
+}
+
 static void parse_header_line(char *line, HTTPRequest *req) {
     if (!line || !req || req->header_count >= MAX_HEADERS) { return;
 }
@@ -211,8 +379,7 @@ static void parse_header_line(char *line, HTTPRequest *req) {
 
     // Logic Hooks
     if (strcasecmp(name, "Accept-Encoding") == 0) {
-        if (strstr(value, "gzip")) { req->accepts_gzip = 1;
-}
+        req->accepts_gzip = gzip_is_accepted(value);
     }
     if (strcasecmp(name, "Connection") == 0) {
         if (strcasecmp(value, "close") == 0) { req->keep_alive = 0;
@@ -303,155 +470,39 @@ static ProcessResult process_single_request(int client_socket, RingBuffer *rb, i
         return REQ_FATAL_ERROR;
     }
 
-    // Map Path
-    char filepath[1024];
+    // Select a server-lifetime cached representation.
+    CachedResponse *response = NULL;
     if (strcmp(req.path, "/") == 0 || strcmp(req.path, "/home") == 0) {
-        snprintf(filepath, sizeof(filepath), "home.html");
+        response = req.accepts_gzip ? &home_asset.gzip : &home_asset.plain;
     } else if (strcmp(req.path, "/hello") == 0) {
-        snprintf(filepath, sizeof(filepath), "hello.html");
+        response = req.accepts_gzip ? &hello_asset.gzip : &hello_asset.plain;
     } else {
         send_error_response(client_socket, NOT_FOUND_404);
         metrics_response(404);
         return REQ_OK; // 404 is a valid HTTP response, keep connection alive
     }
 
-    int fd = open(filepath, O_RDONLY);
-    if (fd < 0) {
-        int open_errno = errno;
-        if (open_errno == ENOENT) { send_error_response(client_socket, NOT_FOUND_404);
-        } else {
-            send_error_response(client_socket, ERROR_TEMPLATE("500 Internal Error", "File Access Error"));
-            metrics_request_failed();
-        }
-        metrics_response(open_errno == ENOENT ? 404 : 500);
+    if (!response || !response->body) {
+        send_error_response(client_socket, ERROR_TEMPLATE("500 Internal Error", "Static response unavailable"));
+        metrics_request_failed();
+        metrics_response(500);
         return REQ_OK;
     }
 
-    struct stat st;
-    if (fstat(fd, &st) < 0 || S_ISDIR(st.st_mode)) {
-        close(fd);
-        send_error_response(client_socket, NOT_FOUND_404);
-        metrics_response(404);
-        return REQ_OK;
-    }
-    long file_size = st.st_size;
-    int use_gzip = req.accepts_gzip && (strcmp(req.method, "HEAD") != 0);
-
-    // 4. Send Response Headers
-    char header_buf[1024];
-    int offset = snprintf(header_buf, sizeof(header_buf),
-        "HTTP/1.1 200 OK\r\n"
-        "Server: SimpleHTTPServer/1.0\r\n"
-        "Connection: %s\r\n"
-        "Content-Type: text/html\r\n",
-        (*keep_alive) ? "keep-alive" : "close"
-    );
-
-    if (use_gzip) {
-        offset += snprintf(header_buf + offset, sizeof(header_buf) - offset, 
-            "Content-Encoding: gzip\r\nTransfer-Encoding: chunked\r\n\r\n");
-    } else {
-        offset += snprintf(header_buf + offset, sizeof(header_buf) - offset, 
-            "Content-Length: %ld\r\n\r\n", file_size);
-    }
-
-    if (send_data(client_socket, header_buf, strlen(header_buf)) < 0) {
-        close(fd);
+    // Headers, body bytes, and lengths are all prepared during startup.
+    int keep_alive_index = (*keep_alive) ? 1 : 0;
+    if (send_data(client_socket, response->headers[keep_alive_index],
+                  response->headers_len[keep_alive_index]) < 0) {
         metrics_request_failed();
         return REQ_CLIENT_CLOSED;
     }
     metrics_response(200);
 
-    // 5. Send Body
-    if (strcmp(req.method, "HEAD") == 0) {
-        close(fd);
-        return REQ_OK;
+    if (strcmp(req.method, "HEAD") == 0) return REQ_OK;
+    if (send_data(client_socket, response->body, response->body_len) < 0) {
+        metrics_request_failed();
+        return REQ_CLIENT_CLOSED;
     }
-
-    if (use_gzip) {
-        // --- GZIP STREAMING ---
-        unsigned char in[ZLIB_CHUNK_SIZE];
-        unsigned char out[ZLIB_CHUNK_SIZE];
-        z_stream z;
-        memset(&z, 0, sizeof(z));
-        
-        if (deflateInit2(&z, Z_DEFAULT_COMPRESSION, Z_DEFLATED, 15+16, 8, Z_DEFAULT_STRATEGY) != Z_OK) {
-            close(fd);
-            metrics_request_failed();
-            return REQ_FATAL_ERROR;
-        }
-
-        int flush;
-        int z_ret;
-        do {
-            ssize_t r = read(fd, in, sizeof(in));
-            if (r < 0) {
-                deflateEnd(&z);
-                close(fd);
-                metrics_request_failed();
-                return REQ_FATAL_ERROR;
-            }
-            
-            flush = (r == 0) ? Z_FINISH : Z_NO_FLUSH;
-            z.avail_in = (uInt)r;
-            z.next_in = in;
-
-            do {
-                z.avail_out = sizeof(out);
-                z.next_out = out;
-                z_ret = deflate(&z, flush);
-                if (z_ret == Z_STREAM_ERROR) {
-                    deflateEnd(&z);
-                    close(fd);
-                    metrics_request_failed();
-                    return REQ_FATAL_ERROR;
-                }
-                
-                size_t have = sizeof(out) - z.avail_out;
-                if (have > 0) {
-                    char chunk_head[32];
-                    int head_len = snprintf(chunk_head, sizeof(chunk_head), "%zx\r\n", have);
-
-                    struct iovec iov[3];
-                    iov[0].iov_base = chunk_head;
-                    iov[0].iov_len = head_len;
-                    iov[1].iov_base = (void *)out;
-                    iov[1].iov_len = have;
-                    iov[2].iov_base = (void *)"\r\n";
-                    iov[2].iov_len = 2;
-
-                    if (sendmsg_all(client_socket, iov, 3) < 0) {
-                        deflateEnd(&z);
-                        close(fd);
-                        metrics_request_failed();
-                        return REQ_CLIENT_CLOSED;
-                    }
-                }
-            } while (z.avail_out == 0);
-        } while (flush != Z_FINISH);
-        
-        deflateEnd(&z);
-        if (send_all(client_socket, "0\r\n\r\n", 5) < 0) {
-            close(fd);
-            metrics_request_failed();
-            return REQ_CLIENT_CLOSED;
-        }
-    } else {
-        // --- SENDFILE (Zero Copy) ---
-        off_t off = 0;
-        while (off < file_size) {
-            ssize_t sent = sendfile(client_socket, fd, &off, file_size - off);
-            if (sent < 0) {
-                close(fd);
-                metrics_request_failed();
-                return (errno == EPIPE || errno == ECONNRESET) ? REQ_CLIENT_CLOSED : REQ_FATAL_ERROR;
-            }
-            if (sent == 0) { break;
-}
-        }
-    }
-
-    close(fd);
     return REQ_OK;
 }
 
