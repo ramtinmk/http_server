@@ -22,6 +22,7 @@
 
 #include "ring_buffer.h"
 #include "thread_pool.h"
+#include "server_config.h"
 
 // --- Configuration and Constants ---
 #define PORT 8081

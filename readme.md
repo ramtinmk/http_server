@@ -43,10 +43,10 @@ root. Request-rate benchmark targets start and stop their own server:
 ```
 make benchmark         # 1,000 req/s new-connection smoke test
 make stress            # 5,000 req/s new-connection, logs stress_results.csv
-make benchmark-matrix  # every scenario from docs/scaling-plan.md
+make benchmark-matrix  # every scenario from plans/scaling-plan.md
 ```
 
-The benchmark implements the measurement contract in `docs/scaling-plan.md`.
+The benchmark implements the measurement contract in `plans/scaling-plan.md`.
 Each run records the offered rate, completed/successful/failed requests,
 status-code distribution, latency percentiles, connection and keep-alive
 request rates, server CPU/RSS/open file descriptors, thread-pool queue depth,

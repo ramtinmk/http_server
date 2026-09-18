@@ -7,7 +7,7 @@
  * Lightweight, lock-free server instrumentation.
  *
  * The counters below are the server-side half of the Measurement Contract in
- * docs/scaling-plan.md. They are cheap enough to update on every request
+ * plans/scaling-plan.md. They are cheap enough to update on every request
  * (relaxed atomics, no locks) so they do not perturb the hot path.
  *
  * When the environment variable HTTP_SERVER_METRICS_FILE is set, a background
@@ -74,5 +74,43 @@ int metrics_reporter_active(void);
  * Returns the number of bytes that would have been written (snprintf
  * semantics); the output is truncated if it does not fit. */
 size_t metrics_snapshot(char *buf, size_t cap);
+
+/* --- Active-connection gauge -------------------------------------------- */
+
+/* Increment the live active-connection gauge (called in the accept loop after
+ * successful admission; never from worker threads). */
+void metrics_active_connection_inc(void);
+
+/* Decrement the live active-connection gauge (called from the worker thread
+ * after closing the client socket). */
+void metrics_active_connection_dec(void);
+
+/* Read the current live active-connection count (used by the accept loop for
+ * the admission check; the accept loop is single-threaded so no CAS needed). */
+long metrics_active_connection_count(void);
+
+/* --- Overload and limit counters ---------------------------------------- */
+
+/* New connection rejected because MAX_ACTIVE_CONNECTIONS was reached. */
+void metrics_admission_rejected(void);
+
+/* Worker acquired no buffer because the buffer pool was empty. */
+void metrics_buffer_pool_exhausted(void);
+
+/* Connection closed because no complete headers arrived within
+ * HEADER_READ_TIMEOUT_SEC after accept. */
+void metrics_header_timeout(void);
+
+/* Keep-alive connection closed because the client was idle longer than
+ * IDLE_TIMEOUT_SEC between requests. */
+void metrics_idle_timeout(void);
+
+/* Response write aborted because the client did not drain the socket within
+ * WRITE_TIMEOUT_SEC. */
+void metrics_write_timeout(void);
+
+/* Connection closed because the unprocessed input buffer exceeded
+ * MAX_INPUT_BUFFER_BYTES. */
+void metrics_input_buffer_limit(void);
 
 #endif /* METRICS_H */

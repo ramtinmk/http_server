@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Dependency-free HTTP load generator implementing the measurement contract in
-docs/scaling-plan.md.
+plans/scaling-plan.md.
 
 The client validates HTTP framing (Content-Length or chunked encoding) instead
 of treating an idle socket timeout as response completion. It records offered

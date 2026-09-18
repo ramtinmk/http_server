@@ -15,7 +15,7 @@ independently shippable:
 1. **Fingerprint** — record what machine produced each run (record, do not
    normalize), matching the pending Phase-0 contract item "Pin down the
    benchmark host, CPU count, kernel, compiler flags, and ulimit values" in
-   `docs/scaling-plan.md`.
+   `plans/scaling-plan.md`.
 2. **CPU-time accounting** — derive cost-per-request in CPU seconds, which
    removes wall-clock and core-count dependence from comparisons.
 3. **Calibration** — run a fixed CPU-bound microbenchmark on the server host at
@@ -72,7 +72,7 @@ different machines are never silently compared.
 - [x] Write the fingerprint to every row. If an old CSV is encountered, migrate
       its existing rows to the appended schema before writing the new row.
 - [x] Document the new columns and their units in the "Measurement Contract"
-      section of `docs/scaling-plan.md`, and complete the Phase-0 environment
+      section of `plans/scaling-plan.md`, and complete the Phase-0 environment
       metadata item.
 
 ### Exit criteria
@@ -222,7 +222,7 @@ independent of the calibration math. All items are optional; nothing in Phases
   - [ ] `throughput_rps_normalized`: expected to be within ~15%.
 - [x] Verify CSV backward compatibility: old rows migrate to the appended
       schema and remain readable (covered by `tests/test_http_benchmark.py`).
-- [x] Update `docs/scaling-plan.md` Measurement Contract to reference this doc
+- [x] Update `plans/scaling-plan.md` Measurement Contract to reference this doc
       for hardware-agnostic reporting requirements.
 - [x] Run a short real server stress test with a minimum
       `hardware_agnostic_rps` gate and verify the result CSV contains hardware

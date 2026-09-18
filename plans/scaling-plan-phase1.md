@@ -1,6 +1,6 @@
 # Phase 1 Implementation Plan
 
-This plan supports Phase 1 of `docs/scaling-plan.md`: remove avoidable
+This plan supports Phase 1 of `plans/scaling-plan.md`: remove avoidable
 per-request work without changing the server's concurrency model.
 
 ## Scope

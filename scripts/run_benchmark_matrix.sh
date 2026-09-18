@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Runs every scenario from the measurement contract in docs/scaling-plan.md and
+# Runs every scenario from the measurement contract in plans/scaling-plan.md and
 # appends each result to one CSV (or JSONL) for phase-over-phase comparison.
 set -u
 

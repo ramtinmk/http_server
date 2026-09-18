@@ -116,7 +116,7 @@ add_custom_target(benchmark
 )
 
 # Canonical 5,000 req/s new-connection stress run described by
-# docs/scaling-plan.md (50,000 offered requests). The acceptance gate uses
+# plans/scaling-plan.md (50,000 offered requests). The acceptance gate uses
 # hardware_agnostic_rps (successful requests per server CPU-second), not raw
 # wall-clock throughput, so it remains meaningful across host hardware.
 add_custom_target(stress
@@ -152,7 +152,6 @@ if(CLANG_TIDY_EXE)
     # Report only — no changes to source files
     add_custom_target(lint
         COMMAND ${CLANG_TIDY_EXE}
-            --config-file=${CMAKE_SOURCE_DIR}/.clang-tidy
             -p ${CMAKE_SOURCE_DIR}
             ${LINT_SOURCES}
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
@@ -163,7 +162,6 @@ if(CLANG_TIDY_EXE)
     # Apply all auto-fixable suggestions in-place
     add_custom_target(lint-fix
         COMMAND ${CLANG_TIDY_EXE}
-            --config-file=${CMAKE_SOURCE_DIR}/.clang-tidy
             -p ${CMAKE_SOURCE_DIR}
             --fix
             --fix-errors

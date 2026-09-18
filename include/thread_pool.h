@@ -1,11 +1,10 @@
 #ifndef THREAD_POOL_H
 #define THREAD_POOL_H
 
+#include "server_config.h"
 #include <pthread.h>
 #include "ring_buffer.h"
 
-
-#define THREAD_POOL_SIZE 16
 
 // Forward declaration
 typedef struct Task Task;
@@ -50,6 +49,8 @@ struct ThreadPool {
     pthread_mutex_t queue_mutex;
     pthread_cond_t queue_cond;
     int shutdown;
+    int queue_length;
+    int queue_max;
 
     // These now definitely work because of the forward declarations above
     TaskPool *task_pool;
@@ -59,7 +60,7 @@ struct ThreadPool {
 
 ThreadPool *create_thread_pool(int pool_size);
 void destroy_thread_pool(ThreadPool *pool);
-void add_task_to_queue(ThreadPool *pool, int client_socket);
+int add_task_to_queue(ThreadPool *pool, int client_socket);
 Task *get_task_from_queue(ThreadPool *pool);
 void *worker_thread_function(void *arg);
 

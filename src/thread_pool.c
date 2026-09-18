@@ -150,6 +150,8 @@ ThreadPool *create_thread_pool(int pool_size)
     pool->task_queue_head = NULL;
     pool->task_queue_tail = NULL;
     pool->shutdown = 0;
+    pool->queue_length = 0;
+    pool->queue_max    = MAX_QUEUED_TASKS;
 
     if (pthread_mutex_init(&pool->queue_mutex, NULL) != 0)
     {
@@ -236,7 +238,7 @@ RingBuffer *buffer_acquire(BufferPool *bp)
     if (bp->top == -1)
     {
         pthread_mutex_unlock(&bp->lock);
-        return ring_buffer_create(INITIAL_RING_BUFFER_CAPACITY);
+        return NULL;
     }
     RingBuffer *rb = bp->pool_storage[bp->top];
     bp->top--;
@@ -283,28 +285,31 @@ void buffer_release(BufferPool *bp, RingBuffer *rb)
     }
 }
 
-void add_task_to_queue(ThreadPool *pool, int client_socket)
+int add_task_to_queue(ThreadPool *pool, int client_socket)
 {
     if (!pool)
     {
-        if (client_socket >= 0) { close(client_socket);
-}
-        return;
+        return -1;
     }
 
     Task *new_task = task_alloc(pool->task_pool);
     if (!new_task)
     {
         metrics_task_rejected();
-        fprintf(stderr, "Error: Task pool exhausted. Dropping connection on socket %d\n", client_socket);
-        if (client_socket >= 0) { close(client_socket); 
-}
-        return;
+        return -1;
     }
     new_task->client_socket = client_socket;
     new_task->next = NULL;
 
     pthread_mutex_lock(&pool->queue_mutex);
+    if (pool->shutdown || pool->queue_length >= pool->queue_max)
+    {
+        pthread_mutex_unlock(&pool->queue_mutex);
+        task_free(pool->task_pool, new_task);
+        metrics_task_rejected();
+        return -1;
+    }
+
     if (pool->task_queue_tail == NULL)
     {
         pool->task_queue_head = new_task;
@@ -316,9 +321,11 @@ void add_task_to_queue(ThreadPool *pool, int client_socket)
         pool->task_queue_tail = new_task;
     }
 
+    pool->queue_length++;
     metrics_queue_enqueued();
     pthread_cond_signal(&pool->queue_cond);
     pthread_mutex_unlock(&pool->queue_mutex);
+    return 0;
 }
 
 Task *get_task_from_queue(ThreadPool *pool)
@@ -348,6 +355,7 @@ Task *get_task_from_queue(ThreadPool *pool)
         {
             pool->task_queue_tail = NULL;
         }
+        pool->queue_length--;
         metrics_queue_dequeued();
     }
 

@@ -58,7 +58,7 @@ Legend: `[x]` done, `[~]` partial, `[ ]` pending.
 - [~] Phase 1: logging, startup static/gzip caching, and configurable `BACKLOG`
   are implemented; buffer reuse, profiling, and performance exit criteria remain.
 - [ ] Profiling checkpoint (after Phase 1).
-- [ ] Phase 2: connection and queue capacity, explicit resource limits.
+- [~] Phase 2: connection and queue capacity, explicit resource limits are implemented; saturation validation and several fine-grained limits remain.
 - [ ] Phase 3: move socket I/O to an event loop.
 - [ ] Phase 4: scale accept and CPU work.
 - [ ] Phase 5: operating-system and deployment tuning.
@@ -143,7 +143,7 @@ drain period. Record:
   diagnostic value.
 - Calibration-backed `successful_rps_normalized` and normalized p50/p95/p99
   latency. The calibration index and whether calibration was enabled are
-  recorded in every result row. See `docs/hardware-agnostic-benchmark.md` for
+  recorded in every result row. See `plans/hardware-agnostic-benchmark.md` for
   the implementation and comparison rules.
 
 Use separate scenarios because they exercise different bottlenecks. The
@@ -302,32 +302,67 @@ not only to the regression section.
 
 ### Work
 
-- [ ] Define a bounded maximum number of queued tasks.
-- [ ] Return a controlled overload response or close new connections when the
-  queue is full; never allocate unbounded task memory.
-- [ ] Define explicit limits for: maximum active connections, maximum
-  per-connection input buffer, maximum output buffer, maximum output bytes per
-  connection, maximum request-line size, maximum header count/size, maximum
-  keep-alive requests per connection, idle connection timeout, header-read
-  timeout, write timeout, and maximum buffered pipelined requests.
-- [ ] Increase the task arena and buffer pool based on measured concurrency
-  rather than arbitrary constants.
-- [ ] Check every `accept`, task enqueue, buffer acquisition, and send result.
-- [ ] Set `FD_CLOEXEC` and document the required `RLIMIT_NOFILE`.
-- [x] Add queue-depth and active-worker instrumentation.
+- [x] Define a bounded maximum number of queued tasks with `MAX_QUEUED_TASKS`
+  and track `queue_length` under the queue mutex.
+- [x] Close newly accepted connections deterministically when the queue or task
+  arena is full; enqueue returns a status and never allocates unbounded task
+  memory.
+- [~] Define and enforce explicit resource limits. Implemented limits include
+  `MAX_ACTIVE_CONNECTIONS`, `MAX_INPUT_BUFFER_BYTES`,
+  `MAX_KEEPALIVE_REQUESTS`, `MAX_PIPELINE_DEPTH`, header-read timeout, idle
+  keep-alive timeout, and write timeout. Request-line/header-size semantics,
+  output-byte limits, and a separate output-buffer limit remain to be added.
+- [x] Make the task arena and buffer pool bounded. Buffer acquisition returns
+  `NULL` on pool exhaustion instead of allocating an uncapped fallback; sizing
+  still needs benchmark-based tuning.
+- [~] Check `accept`, task enqueue, buffer acquisition, and send results. The
+  main admission and send paths are checked; accept errno classification,
+  `fcntl` failure handling, and complete per-errno metrics remain.
+- [x] Set `FD_CLOEXEC` on the listening and accepted sockets and report the
+  required `RLIMIT_NOFILE` headroom at startup. Kernel-limit enforcement and
+  deployment documentation remain.
+- [x] Add queue-depth, active-worker, active-connection, and overload metrics.
 - [ ] Test worker counts around the available CPU count instead of assuming
   that more threads always improve throughput.
-- [ ] Verify `listen()`'s return value, the effective `somaxconn`, SYN backlog
-  and completed-connection queue behavior, accept errors, and listen drops.
-  `SO_REUSEADDR` is already set; keep `SO_REUSEPORT` for Phase 4.
+- [~] Verify `listen()`'s return value and handle accept errors. Effective
+  `somaxconn`, SYN backlog/completed-connection queues, listen drops, and
+  backlog observability remain. `SO_REUSEADDR` is already set; keep
+  `SO_REUSEPORT` for Phase 4.
+
+### Phase 2 implementation status
+
+The current implementation is in `src/main.c`, `src/http_server.c`,
+`src/thread_pool.c`, `src/metrics.c`, and `include/server_config.h`.
+Configuration values are compile-time overridable and are printed at startup.
+The default policy is 16 workers, 256 queued tasks, 512 active connections,
+64 KiB input buffering, a 16-request pipeline depth, 100 requests per
+keep-alive connection, a 5-second initial header timeout, a 30-second idle
+keep-alive timeout, and a 10-second write timeout.
+
+The current overload policy is close-on-admission-failure: active-connection,
+queue, task-arena, and buffer-pool exhaustion are counted and the client socket
+is closed rather than waiting in the accept loop. The implementation remains
+the blocking worker-per-connection architecture; Phase 2 does not remove the
+worker's responsibility for a connected socket.
+
+Focused validation now covers queue configuration, task admission, strict
+buffer-pool exhaustion, slow clients that send no headers, keep-alive request
+limits, and oversized input. The full sustained saturation/leak campaign and
+kernel backlog measurements are still pending.
 
 ### Exit criteria
 
-- [ ] Saturation tests do not leak file descriptors, buffers, or tasks.
-- [ ] The process remains responsive when clients connect and do not send
-  headers.
-- [ ] Queue-full behavior is deterministic and visible in metrics.
-- [ ] The configured limits are observable and enforced.
+- [~] Saturation tests do not leak file descriptors, buffers, or tasks. Focused
+  cleanup tests pass, but repeated connect/disconnect, descriptor-exhaustion,
+  RSS, and long-running saturation measurements remain.
+- [x] The process remains responsive when clients connect and do not send
+  headers; the header-read timeout is covered by an integration test.
+- [x] Queue-full/task-pool behavior is bounded and visible in metrics. A
+  dedicated queue-full integration test and per-reason rejection metrics are
+  still useful follow-ups.
+- [~] The configured limits are observable and enforced. Startup output and
+  metrics expose the implemented limits/counters; fine-grained header/output
+  limits and effective kernel backlog values remain.
 
 ## Phase 3: Move Socket I/O to an Event Loop
 

@@ -153,6 +153,57 @@ void test_pool_stress_tasks() {
     TEST_ASSERT(1); // Reached shutdown after stress
 }
 
+// --- Phase 2 Tests ---
+
+void test_queue_max_configured() {
+    /* create_thread_pool must set queue_max from MAX_QUEUED_TASKS. */
+    ThreadPool *pool = create_thread_pool(4);
+    TEST_ASSERT(pool != NULL);
+    TEST_ASSERT(pool->queue_max == MAX_QUEUED_TASKS);
+    TEST_ASSERT(pool->queue_length == 0);
+    destroy_thread_pool(pool);
+}
+
+void test_add_task_returns_success() {
+    /* add_task_to_queue now returns int: 0 = accepted, -1 = rejected. */
+    ThreadPool *pool = create_thread_pool(1);
+    TEST_ASSERT(pool != NULL);
+    /* Socket -1 is gracefully skipped by the worker, so the queue roundtrip
+     * works without a real client. */
+    int ret = add_task_to_queue(pool, -1);
+    TEST_ASSERT(ret == 0);
+    /* Give the worker a moment to drain. */
+    usleep(50000);
+    destroy_thread_pool(pool);
+}
+
+void test_buffer_acquire_returns_null_on_exhaustion() {
+    /* BufferPool must return NULL when empty (no hidden fallback allocation). */
+    int cap = 3;
+    BufferPool *bp = create_buffer_pool(cap);
+    TEST_ASSERT(bp != NULL);
+
+    RingBuffer *held[3];
+    for (int i = 0; i < cap; i++) {
+        held[i] = buffer_acquire(bp);
+        TEST_ASSERT(held[i] != NULL);
+    }
+
+    /* Pool exhausted — must return NULL, not a freshly allocated buffer. */
+    RingBuffer *extra = buffer_acquire(bp);
+    TEST_ASSERT(extra == NULL);
+
+    /* Return buffers and verify re-acquisition works. */
+    for (int i = 0; i < cap; i++) {
+        buffer_release(bp, held[i]);
+    }
+    RingBuffer *recovered = buffer_acquire(bp);
+    TEST_ASSERT(recovered != NULL);
+    buffer_release(bp, recovered);
+
+    destroy_buffer_pool(bp);
+}
+
 // --- Runner ---
 
 void run_thread_pool_suite() {
@@ -172,6 +223,12 @@ void run_thread_pool_suite() {
 
     // Utilities
     RUN_TEST(test_set_nonblocking_logic,    "Utils: Set non-blocking flags");
+
+    // Phase 2: bounded queue and strict buffer pool
+    RUN_TEST(test_queue_max_configured,         "Phase2: queue_max set from config");
+    RUN_TEST(test_add_task_returns_success,     "Phase2: add_task returns 0 on success");
+    RUN_TEST(test_buffer_acquire_returns_null_on_exhaustion,
+                                               "Phase2: buffer_acquire returns NULL when empty");
 
     printf("\n");
 }

@@ -29,6 +29,18 @@ static _Atomic long g_queue_depth_max;
 static _Atomic long g_active_workers;
 static _Atomic long g_active_workers_max;
 
+/* Active-connection gauge (live connections, not cumulative). */
+static _Atomic long g_active_connections;
+static _Atomic long g_active_connections_max;
+
+/* Overload and limit counters (cumulative). */
+static _Atomic long long g_admission_rejected;
+static _Atomic long long g_buffer_pool_exhausted;
+static _Atomic long long g_header_timeout;
+static _Atomic long long g_idle_timeout;
+static _Atomic long long g_write_timeout;
+static _Atomic long long g_input_buffer_limit;
+
 /*
  * Response-class distribution. Each tracked status code gets a slot; the
  * extra slot at the end (STATUS_BUCKETS) collects everything else. The
@@ -126,6 +138,55 @@ void metrics_worker_idle(void)
     gauge_dec(&g_active_workers);
 }
 
+/* --- Active-connection gauge -------------------------------------------- */
+
+void metrics_active_connection_inc(void)
+{
+    gauge_inc(&g_active_connections, &g_active_connections_max);
+}
+
+void metrics_active_connection_dec(void)
+{
+    gauge_dec(&g_active_connections);
+}
+
+long metrics_active_connection_count(void)
+{
+    return atomic_load_explicit(&g_active_connections, memory_order_relaxed);
+}
+
+/* --- Overload and limit counters ---------------------------------------- */
+
+void metrics_admission_rejected(void)
+{
+    atomic_fetch_add_explicit(&g_admission_rejected, 1, memory_order_relaxed);
+}
+
+void metrics_buffer_pool_exhausted(void)
+{
+    atomic_fetch_add_explicit(&g_buffer_pool_exhausted, 1, memory_order_relaxed);
+}
+
+void metrics_header_timeout(void)
+{
+    atomic_fetch_add_explicit(&g_header_timeout, 1, memory_order_relaxed);
+}
+
+void metrics_idle_timeout(void)
+{
+    atomic_fetch_add_explicit(&g_idle_timeout, 1, memory_order_relaxed);
+}
+
+void metrics_write_timeout(void)
+{
+    atomic_fetch_add_explicit(&g_write_timeout, 1, memory_order_relaxed);
+}
+
+void metrics_input_buffer_limit(void)
+{
+    atomic_fetch_add_explicit(&g_input_buffer_limit, 1, memory_order_relaxed);
+}
+
 /* --- Snapshot formatting ------------------------------------------------ */
 
 /*
@@ -162,7 +223,15 @@ size_t metrics_snapshot(char *buf, size_t cap)
         "\"status_431\":%lld,"
         "\"status_500\":%lld,"
         "\"status_501\":%lld,"
-        "\"status_other\":%lld}",
+        "\"status_other\":%lld,"
+        "\"active_connections\":%ld,"
+        "\"active_connections_max\":%ld,"
+        "\"admission_rejected\":%lld,"
+        "\"buffer_pool_exhausted\":%lld,"
+        "\"header_timeout\":%lld,"
+        "\"idle_timeout\":%lld,"
+        "\"write_timeout\":%lld,"
+        "\"input_buffer_limit\":%lld}",
         atomic_load_explicit(&g_accepted_connections, memory_order_relaxed),
         atomic_load_explicit(&g_completed_requests, memory_order_relaxed),
         atomic_load_explicit(&g_request_failures, memory_order_relaxed),
@@ -172,7 +241,15 @@ size_t metrics_snapshot(char *buf, size_t cap)
         atomic_load_explicit(&g_active_workers, memory_order_relaxed),
         atomic_load_explicit(&g_active_workers_max, memory_order_relaxed),
         status[0], status[1], status[2], status[3], status[4], status[5],
-        status[6], status[7]);
+        status[6], status[7],
+        atomic_load_explicit(&g_active_connections, memory_order_relaxed),
+        atomic_load_explicit(&g_active_connections_max, memory_order_relaxed),
+        atomic_load_explicit(&g_admission_rejected, memory_order_relaxed),
+        atomic_load_explicit(&g_buffer_pool_exhausted, memory_order_relaxed),
+        atomic_load_explicit(&g_header_timeout, memory_order_relaxed),
+        atomic_load_explicit(&g_idle_timeout, memory_order_relaxed),
+        atomic_load_explicit(&g_write_timeout, memory_order_relaxed),
+        atomic_load_explicit(&g_input_buffer_limit, memory_order_relaxed));
     return used;
 }
 
@@ -191,7 +268,7 @@ static int g_reporter_interval_ms = 1000;
  */
 static void write_snapshot(const char *path)
 {
-    char json[1024];
+    char json[2048];
     metrics_snapshot(json, sizeof(json));
 
     char tmp[sizeof(g_reporter_path) + 8];

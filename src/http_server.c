@@ -10,8 +10,7 @@
 #include <time.h>
 #include <zlib.h> 
 
-// --- Configuration ---
-#define IDLE_TIMEOUT_SEC 60
+// --- Configuration (limits come from server_config.h via http_server.h) ---
 #define READ_BUFFER_SIZE 8192
 #define RESPONSE_HEADER_SIZE 512
 
@@ -42,14 +41,16 @@ const char *SUPPORTED_METHODS[] = {"GET", "HEAD"};
 const int SUPPORTED_METHOD_COUNT = 2;
 
 static void free_cached_response(CachedResponse *response) {
-    if (!response) return;
+    if (!response) { return;
+}
     free(response->body);
     memset(response, 0, sizeof(*response));
 }
 
 static int read_asset(const char *path, unsigned char **body, size_t *body_len) {
     int fd = open(path, O_RDONLY);
-    if (fd < 0) return -1;
+    if (fd < 0) { return -1;
+}
 
     struct stat st;
     if (fstat(fd, &st) < 0 || !S_ISREG(st.st_mode) || st.st_size < 0) {
@@ -69,7 +70,8 @@ static int read_asset(const char *path, unsigned char **body, size_t *body_len) 
     size_t offset = 0;
     while (offset < length) {
         ssize_t count = read(fd, data + offset, length - offset);
-        if (count < 0 && errno == EINTR) continue;
+        if (count < 0 && errno == EINTR) { continue;
+}
         if (count <= 0) {
             free(data);
             close(fd);
@@ -156,7 +158,8 @@ static int load_static_asset(const char *path, StaticAsset *asset) {
 }
 
 int initialize_static_responses(void) {
-    if (static_responses_initialized) return 0;
+    if (static_responses_initialized) { return 0;
+}
     if (load_static_asset("home.html", &home_asset) != 0) {
         fprintf(stderr, "Failed to cache home.html: %s\n", strerror(errno));
         return -1;
@@ -203,14 +206,27 @@ void send_error_response(int client_socket, const char *response) {
     send_all(client_socket, response, strlen(response));
 }
 
-// Efficiently set timeout using kernel socket options
+// Set receive timeout (SO_RCVTIMEO) on a socket.
 void set_socket_timeout(int sockfd, int seconds) {
     struct timeval tv;
     tv.tv_sec = seconds;
     tv.tv_usec = 0;
     if (setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof tv) < 0) {
         if (errno != EBADF && errno != ENOTSOCK) {
-            perror("setsockopt timeout");
+            perror("setsockopt SO_RCVTIMEO");
+        }
+    }
+}
+
+// Set send timeout (SO_SNDTIMEO) on a socket.  Protects against slow readers
+// blocking a worker thread while writing a response.
+static void set_socket_write_timeout(int sockfd, int seconds) {
+    struct timeval tv;
+    tv.tv_sec = seconds;
+    tv.tv_usec = 0;
+    if (setsockopt(sockfd, SOL_SOCKET, SO_SNDTIMEO, (const char*)&tv, sizeof tv) < 0) {
+        if (errno != EBADF && errno != ENOTSOCK) {
+            perror("setsockopt SO_SNDTIMEO");
         }
     }
 }
@@ -226,6 +242,14 @@ int create_server_socket(void) {
     if ((server_socket = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
         perror("socket");
         exit(EXIT_FAILURE);
+    }
+
+    /* Mark the listening socket close-on-exec so child processes (if any) do
+     * not accidentally inherit it. */
+    {
+        int fl = fcntl(server_socket, F_GETFD);
+        if (fl >= 0) { fcntl(server_socket, F_SETFD, fl | FD_CLOEXEC);
+}
     }
 
     int opt = 1;
@@ -295,7 +319,8 @@ static void parse_request_line(char *line, HTTPRequest *req) {
 }
 
 static int gzip_is_accepted(const char *value) {
-    if (!value) return 0;
+    if (!value) { return 0;
+}
     char copy[256];
     snprintf(copy, sizeof(copy), "%s", value);
 
@@ -303,13 +328,17 @@ static int gzip_is_accepted(const char *value) {
     for (char *item = strtok_r(copy, ",", &saveptr);
          item;
          item = strtok_r(NULL, ",", &saveptr)) {
-        while (*item == ' ' || *item == '\t') item++;
+        while (*item == ' ' || *item == '\t') { item++;
+}
         char *end = item + strlen(item);
-        while (end > item && (end[-1] == ' ' || end[-1] == '\t')) *--end = '\0';
+        while (end > item && (end[-1] == ' ' || end[-1] == '\t')) { *--end = '\0';
+}
 
         char *parameters = strchr(item, ';');
-        if (parameters) *parameters++ = '\0';
-        if (strcasecmp(item, "gzip") != 0) continue;
+        if (parameters) { *parameters++ = '\0';
+}
+        if (strcasecmp(item, "gzip") != 0) { continue;
+}
 
         int accepted = 1;
         if (parameters) {
@@ -317,22 +346,27 @@ static int gzip_is_accepted(const char *value) {
             for (char *parameter = strtok_r(parameters, ";", &parameter_save);
                  parameter;
                  parameter = strtok_r(NULL, ";", &parameter_save)) {
-                while (*parameter == ' ' || *parameter == '\t') parameter++;
+                while (*parameter == ' ' || *parameter == '\t') { parameter++;
+}
                 char *equals = strchr(parameter, '=');
-                if (!equals) continue;
+                if (!equals) { continue;
+}
                 char *name_end = equals;
                 while (name_end > parameter &&
                        (name_end[-1] == ' ' || name_end[-1] == '\t')) {
                     name_end--;
                 }
                 *name_end = '\0';
-                if (strcasecmp(parameter, "q") != 0) continue;
+                if (strcasecmp(parameter, "q") != 0) { continue;
+}
 
                 char *qvalue = equals + 1;
-                while (*qvalue == ' ' || *qvalue == '\t') qvalue++;
+                while (*qvalue == ' ' || *qvalue == '\t') { qvalue++;
+}
                 char *qend = NULL;
                 double quality = strtod(qvalue, &qend);
-                while (qend && (*qend == ' ' || *qend == '\t')) qend++;
+                while (qend && (*qend == ' ' || *qend == '\t')) { qend++;
+}
                 if (qend == qvalue || (qend && *qend != '\0') ||
                     quality < 0.0 || quality > 1.0 || quality == 0.0) {
                     accepted = 0;
@@ -493,13 +527,20 @@ static ProcessResult process_single_request(int client_socket, RingBuffer *rb, i
     int keep_alive_index = (*keep_alive) ? 1 : 0;
     if (send_data(client_socket, response->headers[keep_alive_index],
                   response->headers_len[keep_alive_index]) < 0) {
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            metrics_write_timeout();
+        }
         metrics_request_failed();
         return REQ_CLIENT_CLOSED;
     }
     metrics_response(200);
 
-    if (strcmp(req.method, "HEAD") == 0) return REQ_OK;
+    if (strcmp(req.method, "HEAD") == 0) { return REQ_OK;
+}
     if (send_data(client_socket, response->body, response->body_len) < 0) {
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            metrics_write_timeout();
+        }
         metrics_request_failed();
         return REQ_CLIENT_CLOSED;
     }
@@ -520,6 +561,7 @@ void *worker_thread_function(void *arg) {
             metrics_worker_busy();
             handle_client(task->client_socket, pool->buffer_pool);
             close(task->client_socket);
+            metrics_active_connection_dec();
             metrics_worker_idle();
         }
         
@@ -534,58 +576,93 @@ void handle_client(int client_socket, BufferPool *bp) {
 
     RingBuffer *rb = buffer_acquire(bp);
     if (!rb) {
-        fprintf(stderr, "Server overloaded: No buffers available.\n");
+        /* Buffer pool is strictly bounded; no fallback allocation. */
+        metrics_buffer_pool_exhausted();
         return;
     }
 
-    // Set timeout
-    set_socket_timeout(client_socket, IDLE_TIMEOUT_SEC);
+    /* Write timeout: prevents a slow receiver from holding this worker while
+     * we block inside send().  Applied once at connection start. */
+    set_socket_write_timeout(client_socket, WRITE_TIMEOUT_SEC);
 
-    int keep_alive = 1;
+    /* Header-read timeout: shorter window for the very first request headers.
+     * Switched to the longer idle timeout after the first successful response. */
+    set_socket_timeout(client_socket, HEADER_READ_TIMEOUT_SEC);
+
+    int keep_alive    = 1;
+    int request_count = 0;   /* total requests served on this connection */
     char read_buffer[READ_BUFFER_SIZE];
 
     while (keep_alive) {
-        // 1. Process Pipelined Requests
-        // Loop as long as we have valid requests in the buffer
+        /* 1. Drain pipelined requests already sitting in the ring buffer. */
+        int pipeline_depth = 0;
         ProcessResult res;
         do {
             res = process_single_request(client_socket, rb, &keep_alive);
-            
+
             if (res == REQ_FATAL_ERROR || res == REQ_CLIENT_CLOSED) {
                 keep_alive = 0;
                 break;
             }
-            // If REQ_OK, we loop again to see if another request is waiting
+            if (res == REQ_OK) {
+                request_count++;
+                pipeline_depth++;
+                /* Enforce per-connection keep-alive request limit. */
+                if (request_count >= MAX_KEEPALIVE_REQUESTS) {
+                    keep_alive = 0;
+                    break;
+                }
+                /* Enforce pipeline depth: don't process unbounded pipelined
+                 * requests from one recv() pass before reading more data. */
+                if (pipeline_depth >= MAX_PIPELINE_DEPTH) {
+                    break;
+                }
+            }
         } while (res == REQ_OK && !ring_buffer_is_empty(rb));
 
         if (!keep_alive) { break;
 }
 
-        // 2. Read More Data
+        /* 2. After the first successful response switch to the longer idle
+         *    timeout so well-behaved keep-alive clients aren't prematurely
+         *    closed. */
+        if (request_count > 0) {
+            set_socket_timeout(client_socket, IDLE_TIMEOUT_SEC);
+        }
+
+        /* 3. Enforce input buffer size limit before accepting more data. */
+        if (ring_buffer_get_size(rb) >= MAX_INPUT_BUFFER_BYTES) {
+            send_error_response(client_socket, PAYLOAD_TOO_LARGE_413);
+            metrics_response(413);
+            metrics_input_buffer_limit();
+            break;
+        }
+
+        /* 4. Read more data from the socket. */
         ssize_t bytes = recv(client_socket, read_buffer, sizeof(read_buffer), 0);
 
         if (bytes > 0) {
-            size_t written = ring_buffer_write(rb, read_buffer, bytes);
+            size_t written = ring_buffer_write(rb, read_buffer, (size_t)bytes);
             if (written < (size_t)bytes) {
-                // Buffer overflow or OOM
+                /* Ring buffer could not grow (at its own hard ceiling). */
                 send_error_response(client_socket, PAYLOAD_TOO_LARGE_413);
                 metrics_response(413);
-                keep_alive = 0;
+                metrics_input_buffer_limit();
+                break;
             }
         } else if (bytes == 0) {
-            // Client closed gracefully
+            /* Clean close from client. */
             keep_alive = 0;
         } else {
-            // Error or Timeout
+            /* Error or timeout. */
             if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                // Timeout
-                keep_alive = 0; 
-            } else if (errno != EINTR && errno != EBADF && errno != ENOTSOCK && errno != ECONNRESET) {
-                perror("recv");
-                keep_alive = 0;
-            } else {
-                keep_alive = 0;
+                if (request_count == 0) {
+                    metrics_header_timeout();
+                } else {
+                    metrics_idle_timeout();
+                }
             }
+            keep_alive = 0;
         }
     }
 
