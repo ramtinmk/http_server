@@ -55,8 +55,8 @@ Legend: `[x]` done, `[~]` partial, `[ ]` pending.
 - [x] Phase 0: counters, structured output, sustained-rate phases, per-second
   reporting, and environment fingerprinting are implemented. Repeatability is
   an operational acceptance check performed on the target benchmark host.
-- [~] Phase 1: hot-path logging gated; static/gzip caching and `BACKLOG`
-  still pending.
+- [~] Phase 1: logging, startup static/gzip caching, and configurable `BACKLOG`
+  are implemented; buffer reuse, profiling, and performance exit criteria remain.
 - [ ] Profiling checkpoint (after Phase 1).
 - [ ] Phase 2: connection and queue capacity, explicit resource limits.
 - [ ] Phase 3: move socket I/O to an event loop.
@@ -155,7 +155,7 @@ identifiers in parentheses match `scripts/http_benchmark.py --scenario`:
 | 5,000 req/s, new connection | `new-connection-5000` | Stress accept, backlog, and connection handling |
 | 5,000 req/s, keep-alive | `keep-alive-5000` | Measure request processing without TCP setup |
 | 5,000 req/s, `/home` and `/hello` mix | `mixed-paths-5000` | Avoid endpoint-specific conclusions |
-| 500 req/s gzip | `gzip-500` | Measure compression CPU and chunked framing |
+| 500 req/s gzip | `gzip-500` | Measure cached gzip response handling |
 | Slow clients and idle keep-alive | `slow-clients` | Verify resource protection |
 | 404 and unsupported methods | `error-paths` | Measure error-path behavior |
 
@@ -203,12 +203,13 @@ This phase should be completed before changing the concurrency model.
 
 - [x] Guard the accept-path `printf()` calls behind a configurable log level
   that throughput runs disable.
-- [ ] Raise `BACKLOG` from 10 to a configurable value such as 1024, then verify
-  the effective kernel limit with `somaxconn`. Treat this as burst tolerance:
-  it is unlikely to be the main sustained-throughput lever.
-- [ ] Load `home.html` and `hello.html` once at startup.
-- [ ] Precompute the plain response headers and body lengths.
-- [ ] Keep cached response bytes in memory and serve them directly. Prefer a
+- [x] Raise `BACKLOG` from 10 to a configurable value such as 1024. Treat this
+  as burst tolerance: it is unlikely to be the main sustained-throughput
+  lever.
+- [ ] Verify the effective backlog limit against the kernel `somaxconn` value.
+- [x] Load `home.html` and `hello.html` once at startup.
+- [x] Precompute the plain and gzip response headers and body lengths.
+- [x] Keep cached response bytes in memory and serve them directly. Prefer a
   complete response representation (headers + body + encoding) selected in the
   hot path over re-formatting headers per request, for example:
 
@@ -223,10 +224,11 @@ This phase should be completed before changing the concurrency model.
   };
   ```
 
-- [ ] Cache gzip output for each static asset instead of running zlib per
+- [x] Cache gzip output for each static asset instead of running zlib per
   request.
 - [ ] Reuse per-worker request buffers where safe.
-- [ ] Avoid repeated `strlen`, `strstr`, and path formatting in the hot path.
+- [~] Avoid repeated path formatting and unnecessary string work in the hot
+  path; path formatting is removed, but broader string-work cleanup remains.
 
 ### Risks
 
@@ -246,6 +248,12 @@ This phase should be completed before changing the concurrency model.
 - [ ] Steady-state p99 meets the scenario-specific target (20 ms keep-alive,
   50 ms new connection, 100 ms gzip).
 - [x] Gzip correctness tests still pass byte-for-byte after decompression.
+
+Implementation validation passes the build, ring-buffer, thread-pool, and
+server suites, including cached plain/gzip responses, `HEAD`, `gzip;q=0`,
+404, keep-alive, and pipelining. Short plain and gzip benchmark smoke runs also
+completed with zero failures; the full 5,000 req/s acceptance run and profiling
+checkpoint remain pending.
 
 Baseline runs to date show roughly 1.5k-2.1k req/s for new connections and
 keep-alive starvation at 5,000 req/s, which is consistent with the blocking
