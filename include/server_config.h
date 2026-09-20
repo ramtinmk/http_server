@@ -84,4 +84,22 @@
 #define REQUIRED_NOFILE_HEADROOM 64
 #endif
 
+/* --- Event-loop model selection ---------------------------------------- */
+
+/* Set to 1 to run the Phase 3 single-threaded epoll event loop instead of
+ * the Phase 2 blocking thread-pool model.  Set to 0 to revert to Phase 2. */
+#ifndef USE_EVENT_LOOP
+#define USE_EVENT_LOOP 1
+#endif
+
+/* Maximum epoll events retrieved per epoll_wait call. */
+#ifndef EL_MAX_EVENTS
+#define EL_MAX_EVENTS 256
+#endif
+
+/* How often (ms) to scan for expired connection deadlines. */
+#ifndef EL_DEADLINE_SCAN_MS
+#define EL_DEADLINE_SCAN_MS 100
+#endif
+
 #endif /* SERVER_CONFIG_H */

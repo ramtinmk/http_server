@@ -41,6 +41,18 @@ static _Atomic long long g_idle_timeout;
 static _Atomic long long g_write_timeout;
 static _Atomic long long g_input_buffer_limit;
 
+/* Phase 3 event-loop counters (cumulative). */
+static _Atomic long long g_el_wakeups;
+static _Atomic long long g_el_readable_events;
+static _Atomic long long g_el_writable_events;
+static _Atomic long long g_el_eagain;
+static _Atomic long long g_el_partial_writes;
+static _Atomic long long g_el_deadline_closes;
+static _Atomic long long g_el_pipeline_full;
+static _Atomic long long g_el_output_drained;
+static _Atomic long long g_el_connections_opened;
+static _Atomic long long g_el_connections_closed;
+
 /*
  * Response-class distribution. Each tracked status code gets a slot; the
  * extra slot at the end (STATUS_BUCKETS) collects everything else. The
@@ -187,6 +199,47 @@ void metrics_input_buffer_limit(void)
     atomic_fetch_add_explicit(&g_input_buffer_limit, 1, memory_order_relaxed);
 }
 
+void metrics_el_wakeup(void)
+{
+    atomic_fetch_add_explicit(&g_el_wakeups, 1, memory_order_relaxed);
+}
+void metrics_el_readable_event(void)
+{
+    atomic_fetch_add_explicit(&g_el_readable_events, 1, memory_order_relaxed);
+}
+void metrics_el_writable_event(void)
+{
+    atomic_fetch_add_explicit(&g_el_writable_events, 1, memory_order_relaxed);
+}
+void metrics_el_eagain(void)
+{
+    atomic_fetch_add_explicit(&g_el_eagain, 1, memory_order_relaxed);
+}
+void metrics_el_partial_write(void)
+{
+    atomic_fetch_add_explicit(&g_el_partial_writes, 1, memory_order_relaxed);
+}
+void metrics_el_deadline_close(void)
+{
+    atomic_fetch_add_explicit(&g_el_deadline_closes, 1, memory_order_relaxed);
+}
+void metrics_el_pipeline_full(void)
+{
+    atomic_fetch_add_explicit(&g_el_pipeline_full, 1, memory_order_relaxed);
+}
+void metrics_el_output_drained(void)
+{
+    atomic_fetch_add_explicit(&g_el_output_drained, 1, memory_order_relaxed);
+}
+void metrics_el_connection_opened(void)
+{
+    atomic_fetch_add_explicit(&g_el_connections_opened, 1, memory_order_relaxed);
+}
+void metrics_el_connection_closed(void)
+{
+    atomic_fetch_add_explicit(&g_el_connections_closed, 1, memory_order_relaxed);
+}
+
 /* --- Snapshot formatting ------------------------------------------------ */
 
 /*
@@ -231,7 +284,17 @@ size_t metrics_snapshot(char *buf, size_t cap)
         "\"header_timeout\":%lld,"
         "\"idle_timeout\":%lld,"
         "\"write_timeout\":%lld,"
-        "\"input_buffer_limit\":%lld}",
+        "\"input_buffer_limit\":%lld,"
+        "\"el_wakeups\":%lld,"
+        "\"el_readable_events\":%lld,"
+        "\"el_writable_events\":%lld,"
+        "\"el_eagain\":%lld,"
+        "\"el_partial_writes\":%lld,"
+        "\"el_deadline_closes\":%lld,"
+        "\"el_pipeline_full\":%lld,"
+        "\"el_output_drained\":%lld,"
+        "\"el_connections_opened\":%lld,"
+        "\"el_connections_closed\":%lld}",
         atomic_load_explicit(&g_accepted_connections, memory_order_relaxed),
         atomic_load_explicit(&g_completed_requests, memory_order_relaxed),
         atomic_load_explicit(&g_request_failures, memory_order_relaxed),
@@ -249,7 +312,17 @@ size_t metrics_snapshot(char *buf, size_t cap)
         atomic_load_explicit(&g_header_timeout, memory_order_relaxed),
         atomic_load_explicit(&g_idle_timeout, memory_order_relaxed),
         atomic_load_explicit(&g_write_timeout, memory_order_relaxed),
-        atomic_load_explicit(&g_input_buffer_limit, memory_order_relaxed));
+        atomic_load_explicit(&g_input_buffer_limit, memory_order_relaxed),
+        atomic_load_explicit(&g_el_wakeups,            memory_order_relaxed),
+        atomic_load_explicit(&g_el_readable_events,    memory_order_relaxed),
+        atomic_load_explicit(&g_el_writable_events,    memory_order_relaxed),
+        atomic_load_explicit(&g_el_eagain,             memory_order_relaxed),
+        atomic_load_explicit(&g_el_partial_writes,     memory_order_relaxed),
+        atomic_load_explicit(&g_el_deadline_closes,    memory_order_relaxed),
+        atomic_load_explicit(&g_el_pipeline_full,      memory_order_relaxed),
+        atomic_load_explicit(&g_el_output_drained,     memory_order_relaxed),
+        atomic_load_explicit(&g_el_connections_opened, memory_order_relaxed),
+        atomic_load_explicit(&g_el_connections_closed, memory_order_relaxed));
     return used;
 }
 
@@ -268,7 +341,7 @@ static int g_reporter_interval_ms = 1000;
  */
 static void write_snapshot(const char *path)
 {
-    char json[2048];
+    char json[4096];
     metrics_snapshot(json, sizeof(json));
 
     char tmp[sizeof(g_reporter_path) + 8];

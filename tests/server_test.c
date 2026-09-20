@@ -850,6 +850,268 @@ void test_input_buffer_limit() {
     close(fd);
 }
 
+// --- Phase 3 event-loop integration tests ---
+
+/*
+ * test_el_fragmented_headers
+ *
+ * Deliver a valid GET /home request one byte at a time with a 1ms pause
+ * between each write.  The event loop must reassemble the fragmented input
+ * across multiple epoll-readable events and return a correct response.
+ */
+void test_el_fragmented_headers(void)
+{
+    int fd = create_and_connect_socket();
+    TEST_ASSERT(fd != -1);
+
+    const char *req = "GET /home HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+    size_t len = strlen(req);
+    for (size_t i = 0; i < len; i++) {
+        ssize_t n = send(fd, req + i, 1, 0);
+        if (n < 0) {
+            close(fd);
+            TEST_ASSERT(0 /* send failed during fragmented delivery */);
+            return;
+        }
+        usleep(1000); /* 1 ms between bytes */
+    }
+
+    HttpResponse resp;
+    int rc = read_http_response(fd, req, &resp);
+    TEST_ASSERT(rc == 0);
+    TEST_ASSERT(resp.status_code == 200);
+    TEST_ASSERT(resp.body_length > 0);
+    http_response_free(&resp);
+    close(fd);
+}
+
+/*
+ * test_el_coalesced_pipeline
+ *
+ * Pack three different keep-alive requests into a single TCP send.  The
+ * event loop must parse all three requests from the coalesced data and
+ * return responses in request order:
+ *   1. GET /        -> 200 (/, home page)
+ *   2. GET /hello   -> 200 (hello page)
+ *   3. GET /home    -> 200 (home page, Connection: close)
+ */
+void test_el_coalesced_pipeline(void)
+{
+    int fd = create_and_connect_socket();
+    TEST_ASSERT(fd != -1);
+
+    const char *req1 = "GET / HTTP/1.1\r\nHost: localhost\r\nConnection: keep-alive\r\n\r\n";
+    const char *req2 = "GET /hello HTTP/1.1\r\nHost: localhost\r\nConnection: keep-alive\r\n\r\n";
+    const char *req3 = "GET /home HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+
+    /* Build one buffer with all three requests. */
+    size_t l1 = strlen(req1), l2 = strlen(req2), l3 = strlen(req3);
+    char *all = malloc(l1 + l2 + l3 + 1);
+    TEST_ASSERT(all != NULL);
+    memcpy(all,           req1, l1);
+    memcpy(all + l1,      req2, l2);
+    memcpy(all + l1 + l2, req3, l3);
+    ssize_t sent = send(fd, all, l1 + l2 + l3, 0);
+    free(all);
+    TEST_ASSERT(sent > 0);
+
+    /* Read and verify three responses. */
+    HttpResponse r1, r2, r3;
+    TEST_ASSERT(read_http_response(fd, req1, &r1) == 0);
+    TEST_ASSERT(r1.status_code == 200);
+    TEST_ASSERT(r1.body_length > 0);
+
+    TEST_ASSERT(read_http_response(fd, req2, &r2) == 0);
+    TEST_ASSERT(r2.status_code == 200);
+    TEST_ASSERT(r2.body_length > 0);
+
+    /* Response 1 and 2 must be different pages. */
+    TEST_ASSERT(r1.body_length != r2.body_length ||
+                memcmp(r1.body, r2.body, r1.body_length) != 0);
+
+    TEST_ASSERT(read_http_response(fd, req3, &r3) == 0);
+    TEST_ASSERT(r3.status_code == 200);
+    TEST_ASSERT(r3.body_length > 0);
+
+    /* Response 3 (/home) must match response 1 (/). */
+    TEST_ASSERT(r1.body_length == r3.body_length);
+
+    http_response_free(&r1);
+    http_response_free(&r2);
+    http_response_free(&r3);
+    close(fd);
+}
+
+/*
+ * test_el_abrupt_client_close
+ *
+ * Send an incomplete request (no terminal \r\n\r\n) then abruptly close
+ * the socket.  The event loop must handle EPOLLHUP / EOF without crashing
+ * or leaking the connection.  A subsequent request on a fresh socket must
+ * succeed, proving the server is still responsive.
+ */
+void test_el_abrupt_client_close(void)
+{
+    /* Connect and send a partial request. */
+    int fd = create_and_connect_socket();
+    TEST_ASSERT(fd != -1);
+    const char *partial = "GET /home HTTP/1.1\r\nHost: localhost\r\n";
+    send(fd, partial, strlen(partial), 0);
+    /* Close without completing headers — simulates an abrupt disconnect. */
+    close(fd);
+
+    /* Brief pause so the server can process the EOF. */
+    usleep(50000); /* 50 ms */
+
+    /* Verify the server is still alive and serving. */
+    int fd2 = create_and_connect_socket();
+    TEST_ASSERT(fd2 != -1);
+    const char *req = "GET /home HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+    HttpResponse resp;
+    TEST_ASSERT(read_http_response(fd2, req, &resp) == -1 ||
+                (send(fd2, req, strlen(req), 0) > 0 &&
+                 read_http_response(fd2, req, &resp) == 0 &&
+                 resp.status_code == 200));
+    http_response_free(&resp);
+    close(fd2);
+
+    /* Cleaner version: open, send, read. */
+    int fd3 = create_and_connect_socket();
+    TEST_ASSERT(fd3 != -1);
+    ssize_t s = send(fd3, req, strlen(req), 0);
+    TEST_ASSERT(s > 0);
+    HttpResponse resp3;
+    int rc3 = read_http_response(fd3, req, &resp3);
+    TEST_ASSERT(rc3 == 0);
+    TEST_ASSERT(resp3.status_code == 200);
+    http_response_free(&resp3);
+    close(fd3);
+}
+
+/*
+ * test_el_keepalive_multiple_cycles
+ *
+ * Issue five successive requests on one keep-alive connection, verifying
+ * that the event loop correctly transitions between WRITING and KEEP_ALIVE
+ * states and delivers an independent 200 response for each request.
+ */
+void test_el_keepalive_multiple_cycles(void)
+{
+    int fd = create_and_connect_socket();
+    TEST_ASSERT(fd != -1);
+
+    /* All but the last request uses keep-alive. */
+    for (int i = 0; i < 4; i++) {
+        const char *req = "GET /home HTTP/1.1\r\nHost: localhost\r\nConnection: keep-alive\r\n\r\n";
+        ssize_t s = send(fd, req, strlen(req), 0);
+        TEST_ASSERT(s > 0);
+        HttpResponse resp;
+        int rc = read_http_response(fd, req, &resp);
+        TEST_ASSERT(rc == 0);
+        TEST_ASSERT(resp.status_code == 200);
+        TEST_ASSERT(resp.body_length > 0);
+        http_response_free(&resp);
+    }
+
+    /* Final request closes. */
+    const char *fin = "GET /hello HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+    ssize_t s = send(fd, fin, strlen(fin), 0);
+    TEST_ASSERT(s > 0);
+    HttpResponse resp;
+    int rc = read_http_response(fd, fin, &resp);
+    TEST_ASSERT(rc == 0);
+    TEST_ASSERT(resp.status_code == 200);
+    http_response_free(&resp);
+    close(fd);
+}
+
+/*
+ * test_el_deep_pipeline
+ *
+ * Send MAX_PIPELINE_DEPTH + 17 requests (33) in one TCP write.  The event
+ * loop must parse in increments of MAX_PIPELINE_DEPTH, drain the queue, then
+ * refill it from the ring buffer until every buffered request is answered.
+ * Regression test for the pipeline-cap stall where responses beyond the cap
+ * were never sent because no further EPOLLIN event would arrive.
+ */
+void test_el_deep_pipeline(void)
+{
+    int fd = create_and_connect_socket();
+    TEST_ASSERT(fd != -1);
+
+    const char *req = "GET /home HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+    size_t req_len = strlen(req);
+    int count = MAX_PIPELINE_DEPTH + 17;
+
+    char *burst = malloc(req_len * (size_t)count);
+    TEST_ASSERT(burst != NULL);
+    for (int i = 0; i < count; i++) {
+        memcpy(burst + (size_t)i * req_len, req, req_len);
+    }
+    ssize_t sent = send(fd, burst, req_len * (size_t)count, 0);
+    free(burst);
+    TEST_ASSERT(sent > 0);
+
+    HttpResponse resp;
+    int ok = 1;
+    for (int i = 0; i < count; i++) {
+        if (read_http_response(fd, req, &resp) != 0) { ok = 0; break; }
+        if (resp.status_code != 200) { ok = 0; }
+        http_response_free(&resp);
+    }
+    TEST_ASSERT(ok == 1);
+    close(fd);
+}
+
+/*
+ * test_el_concurrent_connections
+ *
+ * Open CONCURRENCY connections at the same time, each on its own thread,
+ * each sending GET /home.  All must receive a 200 response.  This verifies
+ * the event loop handles N simultaneous fds without dropping any.
+ */
+#define EL_CONCURRENCY 20
+
+typedef struct {
+    int ok;  /* 1 if the request succeeded, 0 otherwise */
+} ElConcResult;
+
+static void *el_conc_worker(void *arg)
+{
+    ElConcResult *res = (ElConcResult *)arg;
+    res->ok = 0;
+    int fd = create_and_connect_socket();
+    if (fd < 0) return NULL;
+    const char *req = "GET /home HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+    if (send(fd, req, strlen(req), 0) <= 0) { close(fd); return NULL; }
+    HttpResponse resp;
+    if (read_http_response(fd, req, &resp) == 0 && resp.status_code == 200)
+        res->ok = 1;
+    http_response_free(&resp);
+    close(fd);
+    return NULL;
+}
+
+void test_el_concurrent_connections(void)
+{
+    pthread_t threads[EL_CONCURRENCY];
+    ElConcResult results[EL_CONCURRENCY];
+
+    for (int i = 0; i < EL_CONCURRENCY; i++) {
+        results[i].ok = 0;
+        pthread_create(&threads[i], NULL, el_conc_worker, &results[i]);
+    }
+    for (int i = 0; i < EL_CONCURRENCY; i++) {
+        pthread_join(threads[i], NULL);
+    }
+
+    int failures = 0;
+    for (int i = 0; i < EL_CONCURRENCY; i++) {
+        if (!results[i].ok) failures++;
+    }
+    TEST_ASSERT(failures == 0);
+}
+
 // --- Runner ---
 
 void run_server_tests() {
@@ -883,4 +1145,12 @@ void run_server_tests() {
     RUN_TEST(test_slow_client_header_timeout, "Phase2: Slow client closed after header timeout");
     RUN_TEST(test_keepalive_request_limit,    "Phase2: Keep-alive connection closed at request limit");
     RUN_TEST(test_input_buffer_limit,         "Phase2: Oversized input rejected with 413 or close");
+
+    // Phase 3: event-loop specific behaviour
+    RUN_TEST(test_el_fragmented_headers,      "Phase3: Fragmented header delivery across recv calls");
+    RUN_TEST(test_el_coalesced_pipeline,      "Phase3: Coalesced pipelined requests in order");
+    RUN_TEST(test_el_abrupt_client_close,     "Phase3: Abrupt client close mid-request");
+    RUN_TEST(test_el_keepalive_multiple_cycles, "Phase3: Keep-alive state cycling across 5 requests");
+    RUN_TEST(test_el_deep_pipeline,  "Phase3: 33 pipelined requests in one write");
+    RUN_TEST(test_el_concurrent_connections,  "Phase3: 20 concurrent connections all complete");
 }

@@ -12,6 +12,9 @@
 #include "thread_pool.h"
 #include "metrics.h"
 #include "server_config.h"
+#if USE_EVENT_LOOP
+#include "event_loop.h"
+#endif
 #include <signal.h>
 #include <errno.h>
 #include <sys/resource.h>
@@ -85,13 +88,7 @@ static void check_nofile_limit(void)
 
 int main(void)
 {
-    int server_socket, client_socket;
-    struct sockaddr_in client_addr;
-    socklen_t addr_size = sizeof(client_addr);
-
-    /* Access logging is disabled during throughput measurements. */
-    const char *access_log_env = getenv("HTTP_SERVER_ACCESS_LOG");
-    int access_log = !(access_log_env && strcmp(access_log_env, "0") == 0);
+    int server_socket;
 
     /* Optional structured metrics snapshots for the benchmark harness. */
     const char *metrics_path = getenv("HTTP_SERVER_METRICS_FILE");
@@ -117,7 +114,30 @@ int main(void)
         return EXIT_FAILURE;
     }
 
-    /* Create and start the worker thread pool. */
+    /* Bind and listen. */
+    server_socket = create_server_socket();
+    printf("Server listening on port %d...\n", PORT);
+
+#if USE_EVENT_LOOP
+    /* ------------------------------------------------------------------ */
+    /* Phase 3: single-threaded nonblocking epoll event loop.              */
+    /* The thread pool is not used; all admitted sockets are owned by the  */
+    /* event loop.                                                          */
+    /* ------------------------------------------------------------------ */
+    printf("Dispatch model: epoll event loop (Phase 3).\n");
+    event_loop_run(server_socket, &server_running);
+
+    printf("\nShutting down server gracefully...\n");
+    close(server_socket);
+    metrics_reporter_stop();
+
+#else
+    /* ------------------------------------------------------------------ */
+    /* Phase 2: blocking thread-pool model.                                */
+    /* ------------------------------------------------------------------ */
+    struct sockaddr_in client_addr;
+    socklen_t addr_size = sizeof(client_addr);
+
     ThreadPool *thread_pool = create_thread_pool(THREAD_POOL_SIZE);
     if (thread_pool == NULL) {
         fprintf(stderr, "Failed to create thread pool\n");
@@ -125,19 +145,10 @@ int main(void)
     }
     printf("Thread pool initialized with %d threads (queue max: %d).\n",
            THREAD_POOL_SIZE, MAX_QUEUED_TASKS);
-
-    /* Bind and listen. */
-    server_socket = create_server_socket();
-    printf("Server listening on port %d...\n", PORT);
+    printf("Dispatch model: blocking thread pool (Phase 2).\n");
 
     /* ---------- Accept loop -------------------------------------------- */
     while (server_running) {
-
-        /*
-         * Accept with SOCK_CLOEXEC so the client FD is not inherited by any
-         * future child processes.  Fall back to accept() + fcntl() on kernels
-         * that pre-date accept4().
-         */
 #ifdef SOCK_CLOEXEC
         client_socket = accept4(server_socket,
                                 (struct sockaddr *)&client_addr,
@@ -154,20 +165,12 @@ int main(void)
             }
         }
 #endif
-
         if (client_socket == -1) {
-            if (errno == EINTR) {
-                /* Interrupted by shutdown signal — exit the loop. */
-                break;
-            }
-            /* Transient errors (EMFILE, ENFILE, ECONNABORTED…) are not fatal.
-             * Log once and keep accepting. */
+            if (errno == EINTR) break;
             perror("accept");
             continue;
         }
 
-        /* Every TCP-level accepted connection is counted here regardless of
-         * whether we admit it to the queue. */
         metrics_connection_accepted();
 
         if (access_log) {
@@ -176,25 +179,14 @@ int main(void)
                    ntohs(client_addr.sin_port));
         }
 
-        /*
-         * Connection-level admission: compare the live active-connection gauge
-         * to the configured maximum.  The accept loop is single-threaded so a
-         * plain load is safe here — only this thread increments the gauge.
-         */
         if (metrics_active_connection_count() >= (long)MAX_ACTIVE_CONNECTIONS) {
             metrics_admission_rejected();
             close(client_socket);
             continue;
         }
 
-        /* Admitted: increment the gauge before handing off to the worker. */
         metrics_active_connection_inc();
 
-        /*
-         * Enqueue the connection for a worker thread.  On failure (task pool
-         * exhausted or queue full) the connection is rejected: undo the gauge
-         * increment and close the socket.
-         */
         if (add_task_to_queue(thread_pool, client_socket) != 0) {
             metrics_active_connection_dec();
             close(client_socket);
@@ -208,6 +200,7 @@ int main(void)
     destroy_thread_pool(thread_pool);
     metrics_reporter_stop();
     printf("Thread pool destroyed.\n");
+#endif /* USE_EVENT_LOOP */
 
     return 0;
 }

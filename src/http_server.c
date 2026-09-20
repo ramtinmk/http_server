@@ -668,3 +668,129 @@ void handle_client(int client_socket, BufferPool *bp) {
 
     buffer_release(bp, rb);
 }
+
+/* ------------------------------------------------------------------ */
+/* Phase 3: event-loop response preparation                             */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Parse one HTTP request from `rb` and populate `pr` with the cached
+ * response the event loop will send.  Uses the same transaction/rollback
+ * logic as process_single_request so fragmented delivery is safe.
+ *
+ * Error responses re-use the compile-time string literals defined at the
+ * top of this file (BAD_REQUEST_400, NOT_FOUND_404, ...) as the `header`
+ * field with body_len == 0, because the HTML payload is embedded inline.
+ * All error responses set force_close = 1 so the event loop closes the
+ * connection after delivering them.
+ *
+ * Returns:
+ *   0   - request fully parsed, `pr` filled.
+ *   1   - headers incomplete; `rb` is unchanged (rolled back).
+ */
+int el_prepare_response(RingBuffer *rb, int force_close, int *keep_alive_out, PendingResponse *pr)
+{
+    if (ring_buffer_is_empty(rb)) { return 1; }
+
+    /* Transaction: save ring-buffer read state for rollback on NEED_DATA. */
+    size_t snap_tail = rb->tail;
+    size_t snap_size = rb->size;
+
+    char line_buf[MAX_HEADER_LEN];
+    HTTPRequest req;
+    memset(&req, 0, sizeof(HTTPRequest));
+    req.keep_alive = 1; /* HTTP/1.1 default */
+
+    /* --- 1. Parse request line ----------------------------------------- */
+    char *line = ring_buffer_readline(rb, line_buf, sizeof(line_buf));
+    if (!line) {
+        rb->tail = snap_tail;
+        rb->size = snap_size;
+        return 1; /* NEED_DATA */
+    }
+
+    parse_request_line(line, &req);
+    if (strlen(req.method) == 0 || strlen(req.path) == 0) {
+        /* Malformed request line — consume bytes and return error response. */
+        pr->header      = BAD_REQUEST_400;
+        pr->header_len  = strlen(BAD_REQUEST_400);
+        pr->body        = NULL;
+        pr->body_len    = 0;
+        pr->is_head     = 0;
+        pr->force_close = 1;
+        pr->status      = 400;
+        return 0;
+    }
+
+    /* --- 2. Parse headers ----------------------------------------------- */
+    while (1) {
+        line = ring_buffer_readline(rb, line_buf, sizeof(line_buf));
+        if (!line) {
+            /* Incomplete headers: roll back entire transaction. */
+            rb->tail = snap_tail;
+            rb->size = snap_size;
+            return 1; /* NEED_DATA */
+        }
+        if (line[0] == '\0') { break; } /* Empty line -> end of headers. */
+
+        if (req.header_count >= MAX_HEADERS) {
+            pr->header      = HEADER_FIELDS_TOO_LARGE_431;
+            pr->header_len  = strlen(HEADER_FIELDS_TOO_LARGE_431);
+            pr->body        = NULL;
+            pr->body_len    = 0;
+            pr->is_head     = 0;
+            pr->force_close = 1;
+            pr->status      = 431;
+            return 0;
+        }
+        parse_header_line(line, &req);
+    }
+    /* --- Transaction committed ------------------------------------------- */
+
+    *keep_alive_out = req.keep_alive;
+
+    /* --- 3. Validate method --------------------------------------------- */
+    if (!method_is_supported(req.method)) {
+        pr->header      = NOT_IMPLEMENTED_501;
+        pr->header_len  = strlen(NOT_IMPLEMENTED_501);
+        pr->body        = NULL;
+        pr->body_len    = 0;
+        pr->is_head     = 0;
+        pr->force_close = 1;
+        pr->status      = 501;
+        return 0;
+    }
+
+    /* --- 4. Select cached response -------------------------------------- */
+    CachedResponse *resp = NULL;
+    if (strcmp(req.path, "/") == 0 || strcmp(req.path, "/home") == 0) {
+        resp = req.accepts_gzip ? &home_asset.gzip : &home_asset.plain;
+    } else if (strcmp(req.path, "/hello") == 0) {
+        resp = req.accepts_gzip ? &hello_asset.gzip : &hello_asset.plain;
+    }
+
+    if (!resp || !resp->body) {
+        /* 404 — keep connection alive just like the blocking path does. */
+        pr->header      = NOT_FOUND_404;
+        pr->header_len  = strlen(NOT_FOUND_404);
+        pr->body        = NULL;
+        pr->body_len    = 0;
+        pr->is_head     = 0;
+        pr->force_close = 0;
+        pr->status      = 404;
+        return 0;
+    }
+
+    /* --- 5. 200 OK ------------------------------------------------------- */
+    /* A forced-close response (keep-alive request limit reached) must
+     * advertise Connection: close so the client does not reuse the socket. */
+    int ka_idx = force_close ? 0 : (req.keep_alive ? 1 : 0);
+    pr->header          = resp->headers[ka_idx];
+    pr->header_len      = resp->headers_len[ka_idx];
+    pr->body            = resp->body;
+    pr->body_len        = resp->body_len;
+    pr->is_head         = (strcmp(req.method, "HEAD") == 0);
+    pr->force_close     = force_close;
+    pr->status          = 200;
+    return 0;
+}

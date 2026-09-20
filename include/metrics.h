@@ -113,4 +113,37 @@ void metrics_write_timeout(void);
  * MAX_INPUT_BUFFER_BYTES. */
 void metrics_input_buffer_limit(void);
 
+/* --- Phase 3 event-loop counters --------------------------------------- */
+
+/* Incremented each time epoll_wait returns (whether events or timeout). */
+void metrics_el_wakeup(void);
+
+/* Incremented each time a readable (EPOLLIN) event is dispatched. */
+void metrics_el_readable_event(void);
+
+/* Incremented each time a writable (EPOLLOUT) event is dispatched. */
+void metrics_el_writable_event(void);
+
+/* Incremented each time recv or send returns EAGAIN/EWOULDBLOCK. */
+void metrics_el_eagain(void);
+
+/* Incremented each time a send completes a short (partial) write. */
+void metrics_el_partial_write(void);
+
+/* Incremented each time a connection is closed by the deadline scanner. */
+void metrics_el_deadline_close(void);
+
+/* Incremented each time the per-connection pipeline queue is full. */
+void metrics_el_pipeline_full(void);
+
+/* Incremented each time the output queue drains and the connection
+ * transitions back to keep-alive (waiting for the next request). */
+void metrics_el_output_drained(void);
+
+/* Incremented each time a new connection is registered with epoll. */
+void metrics_el_connection_opened(void);
+
+/* Incremented each time any connection is removed from epoll and closed. */
+void metrics_el_connection_closed(void);
+
 #endif /* METRICS_H */
