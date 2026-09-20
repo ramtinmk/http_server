@@ -583,11 +583,17 @@ def read_response(sock):
     else:
         raise FramingError("response has neither Content-Length nor chunked framing")
 
-    return status, bytes(body)
+    # The server may end a keep-alive connection (e.g. its per-connection
+    # request limit) while still delivering a complete, valid response.  The
+    # caller must drop the socket instead of sending another request on it.
+    should_close = headers.get("connection") == "close" or version == "HTTP/1.0"
+    return status, bytes(body), should_close
 
 
 def send_request(args, spec, sock=None, counters=None):
-    """Send one request, return (status, body). Counts connection attempts."""
+    """Send one request, return (status, body, server_keep_alive).
+
+    Counts connection attempts."""
     own_socket = sock is None
     if own_socket:
         if counters is not None:
@@ -613,8 +619,8 @@ def send_request(args, spec, sock=None, counters=None):
             raise TimeoutError_("timeout while sending request")
         except OSError as exc:
             raise SendError("send failed: %s" % exc)
-        status, body = read_response(sock)
-        return status, body
+        status, body, should_close = read_response(sock)
+        return status, body, not should_close
     finally:
         if own_socket:
             sock.close()
@@ -626,11 +632,15 @@ def worker(args, state, results, worker_id):
     sock = None
     specs = state["specs"]
 
+    def connect():
+        counters["connections"] += 1
+        new_sock = socket.create_connection((args.host, args.port), args.timeout)
+        new_sock.settimeout(args.timeout)
+        return new_sock
+
     if args.keep_alive:
         try:
-            counters["connections"] += 1
-            sock = socket.create_connection((args.host, args.port), args.timeout)
-            sock.settimeout(args.timeout)
+            sock = connect()
         except OSError as exc:
             state["startup_error"] = "connect failed: %s" % exc
             return
@@ -655,32 +665,37 @@ def worker(args, state, results, worker_id):
         started = time.monotonic()
         status = None
         error = None
+        server_keep_alive = True
+        connection_lost = False
         try:
-            status, body = send_request(args, spec, sock, counters)
+            status, body, server_keep_alive = send_request(args, spec, sock, counters)
+            connection_lost = not server_keep_alive
             if status not in spec["expect"]:
                 error = "status"
             elif status == 200 and not body:
                 error = "framing"
         except RequestError as exc:
             error = exc.category
-            if sock is not None:
-                sock.close()
-                sock = None
-                try:
-                    counters["connections"] += 1
-                    sock = socket.create_connection((args.host, args.port), args.timeout)
-                    sock.settimeout(args.timeout)
-                except OSError:
-                    pass
+            connection_lost = True
         except OSError:
             error = "other"
-            if sock is not None:
-                try:
-                    sock.close()
-                except OSError:
-                    pass
-                sock = None
+            connection_lost = True
         completed = time.monotonic()
+
+        # A server that ends the connection after a complete response (its
+        # keep-alive request limit, or an HTTP/1.0 close) is not a failure;
+        # drop the socket and reconnect rather than reusing a dead one.
+        if sock is not None and connection_lost:
+            try:
+                sock.close()
+            except OSError:
+                pass
+            sock = None
+            try:
+                sock = connect()
+            except OSError:
+                pass
+
         events.append({
             "started": started, "completed": completed,
             "status": status, "error": error,
