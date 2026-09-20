@@ -436,6 +436,56 @@ design cannot scale efficiently when many persistent or slow connections exist.
 - [x] Event-loop CPU utilization and wakeups are measured before further
   tuning.
 
+### Saturation capacity and backpressure follow-up
+
+The active-connection limit is currently a hard compile-time admission cap.
+When `MAX_ACTIVE_CONNECTIONS` is lower than the offered concurrency, the event
+loop accepts additional sockets and closes them immediately. That behavior is
+bounded, but it is not graceful for clients that expect a response and can
+surface as large numbers of `wrk` read errors.
+
+Observed evidence on 2026-09-20:
+
+```text
+wrk -t12 -c1000 -d30s --latency http://localhost:8081/
+MAX_ACTIVE_CONNECTIONS=512
+3619 requests in 30.05s
+Socket errors: connect 0, read 4875861, write 0, timeout 15
+Requests/sec: 120.44
+```
+
+This is a saturation failure test, not a valid capacity result. Future work
+must make the overload policy explicit and prove it under offered concurrency
+above the configured limit.
+
+- [ ] Derive the effective connection capacity at startup from the soft
+  `RLIMIT_NOFILE`, already-open descriptors, reserved descriptors for the
+  listener, epoll, metrics, logs, and shutdown infrastructure, plus an
+  operator-configured maximum. Fail clearly or clamp safely when the requested
+  limit exceeds the effective capacity; do not rely on a warning alone.
+- [ ] Replace the fixed-size event-loop connection table with runtime-sized
+  state, or document and enforce the maximum supported table size separately
+  from the descriptor limit.
+- [ ] Define listener backpressure for saturation. Prefer disabling listener
+  read interest while the connection table is full and re-enabling it after a
+  close; document backlog behavior and the conditions under which a client may
+  still receive a connect timeout or refusal.
+- [ ] If user-space rejection is required, provide a bounded overload policy
+  with a complete `503 Service Unavailable` response where safe, otherwise
+  close before accepting request data. Never accept and silently reset a
+  request merely because the configured connection cap was reached.
+- [ ] Decouple idle keep-alive state from request buffers and response storage.
+  Release or shrink input/output storage when a connection is idle so memory
+  scales with active requests rather than the connection-table size.
+- [ ] Add saturation metrics for effective capacity, listener-disabled time,
+  admission rejects by reason, backlog pressure, overload responses, resets,
+  active-connection high-water mark, and current/maximum leased buffer bytes.
+- [ ] Add a fixed-rate saturation acceptance test at `-c` below, equal to, and
+  above the configured limit. Report completed responses, connect/read/write/
+  timeout errors, p99 latency, active-connection high-water mark, descriptors,
+  RSS, and post-drain values. The above-limit case must have a documented
+  bounded outcome rather than an unexplained read-error storm.
+
 ## Phase 4: Scale Accept and CPU Work
 
 After nonblocking I/O is stable, scale only where profiling identifies a limit.
