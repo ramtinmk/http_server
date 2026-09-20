@@ -31,7 +31,7 @@
  * Setting this higher than THREAD_POOL_SIZE increases queue wait time
  * for connections beyond the worker count; it does not increase parallelism. */
 #ifndef MAX_ACTIVE_CONNECTIONS
-#define MAX_ACTIVE_CONNECTIONS 512
+#define MAX_ACTIVE_CONNECTIONS 1024
 #endif
 
 /* --- Per-connection limits ---------------------------------------------- */

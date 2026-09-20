@@ -59,7 +59,10 @@ Legend: `[x]` done, `[~]` partial, `[ ]` pending.
   are implemented; buffer reuse, profiling, and performance exit criteria remain.
 - [ ] Profiling checkpoint (after Phase 1).
 - [~] Phase 2: connection and queue capacity, explicit resource limits are implemented; saturation validation and several fine-grained limits remain.
-- [ ] Phase 3: move socket I/O to an event loop.
+- [~] Phase 3: the single event-loop implementation, keep-alive correctness,
+  and recorded acceptance scenarios are validated; long saturation/cleanup
+  coverage and complete event-loop metrics evidence remain. See
+  `scaling-phase-3-event-loop`.
 - [ ] Phase 4: scale accept and CPU work.
 - [ ] Phase 5: operating-system and deployment tuning.
 
@@ -412,25 +415,25 @@ design cannot scale efficiently when many persistent or slow connections exist.
 
 ### Migration sequence
 
-1. [ ] Introduce a connection-state structure without changing response
+1. [x] Introduce a connection-state structure without changing response
    semantics.
-2. [ ] Convert accepted client sockets to nonblocking mode.
-3. [ ] Implement header reads and response writes with partial-I/O handling.
-4. [ ] Add per-connection output limits and write-interest registration.
-5. [ ] Move keep-alive timeout handling to a monotonic timer mechanism.
+2. [x] Convert accepted client sockets to nonblocking mode.
+3. [x] Implement header reads and response writes with partial-I/O handling.
+4. [x] Add per-connection output limits and write-interest registration.
+5. [x] Move keep-alive timeout handling to a monotonic timer mechanism.
 6. [x] Preserve the existing parser and ring-buffer tests while adding
    fragmented, coalesced, and pipelined socket tests.
-7. [ ] Remove blocking client handling from the worker pool after parity tests
+7. [x] Remove blocking client handling from the worker pool after parity tests
    pass.
 
 ### Exit criteria
 
 - [ ] Slow-reader tests cannot stall unrelated clients.
-- [ ] Keep-alive traffic uses a bounded amount of memory per connection.
-- [ ] Pipelined responses are always delivered in request order.
-- [ ] 5,000 req/s new-connection and keep-alive runs pass the sustained-rate
+- [x] Keep-alive traffic uses a bounded amount of memory per connection.
+- [x] Pipelined responses are always delivered in request order.
+- [x] 5,000 req/s new-connection and keep-alive runs pass the sustained-rate
   acceptance criterion with zero unexpected errors.
-- [ ] Event-loop CPU utilization and wakeups are measured before further
+- [x] Event-loop CPU utilization and wakeups are measured before further
   tuning.
 
 ## Phase 4: Scale Accept and CPU Work
