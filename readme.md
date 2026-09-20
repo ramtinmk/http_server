@@ -70,6 +70,23 @@ The benchmark uses only Python's standard library and validates response
 framing (Content-Length, chunked, or `Connection: close`) and expected status
 codes. A nonzero exit status means that a request failed, returned an
 unexpected status, or missed the minimum throughput threshold.
+
+### `wrk` Snapshot (2026-09-20)
+
+One local run against a running Phase 3 epoll server served `/home` for 30 seconds:
+
+```
+wrk -t12 -c400 -d30s --latency http://127.0.0.1:8081/home
+```
+
+- Requests: 3,941,992
+- Throughput: 131,017.52 requests/sec
+- Latency: 3.33 ms p50, 5.04 ms p99, 17.39 ms max
+- Transfer: 1.24 GB total, 42.10 MB/sec
+
+This is an indicative local snapshot, not a replacement for the canonical
+measurement-contract results recorded by `scripts/http_benchmark.py`.
+
 ### **Phase 1: Protocol Compliance**
 1. **Proper HTTP Header Parsing**   ✅
    - Parse full request headers into key-value pairs
