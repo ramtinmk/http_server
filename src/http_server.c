@@ -35,7 +35,8 @@ const char *BAD_REQUEST_400 = ERROR_TEMPLATE("400 Bad Request", "Malformed reque
 const char *NOT_FOUND_404 = ERROR_TEMPLATE("404 Not Found", "The requested resource was not found");
 const char *NOT_IMPLEMENTED_501 = ERROR_TEMPLATE("501 Not Implemented", "HTTP method not supported");
 const char *PAYLOAD_TOO_LARGE_413 = ERROR_TEMPLATE("413 Payload Too Large", "Request entity too large");
-const char *HEADER_FIELDS_TOO_LARGE_431 = ERROR_TEMPLATE("431 Request Header Fields Too Large", "Too many headers");
+const char *REQUEST_URI_TOO_LONG_414 = ERROR_TEMPLATE("414 URI Too Long", "Request line too long");
+const char *HEADER_FIELDS_TOO_LARGE_431 = ERROR_TEMPLATE("431 Request Header Fields Too Large", "Request header too large");
 
 const char *SUPPORTED_METHODS[] = {"GET", "HEAD"};
 const int SUPPORTED_METHOD_COUNT = 2;
@@ -452,20 +453,26 @@ static ProcessResult process_single_request(int client_socket, RingBuffer *rb, i
     size_t rb_snapshot_size = rb->size;
 
     char line_buf[MAX_HEADER_LEN];
+    size_t line_len = 0;
     HTTPRequest req;
     memset(&req, 0, sizeof(HTTPRequest));
     req.keep_alive = 1; // Default for HTTP/1.1
 
     // 1. Parse Request Line
-    char *line = ring_buffer_readline(rb, line_buf, sizeof(line_buf));
-    if (!line) {
+    RingLineResult lr = ring_buffer_readline(rb, line_buf, sizeof(line_buf), &line_len);
+    if (lr == RING_LINE_NONE) {
         // Rollback: Not a full line yet
         rb->tail = rb_snapshot_tail;
         rb->size = rb_snapshot_size;
         return REQ_NEED_DATA;
     }
+    if (lr == RING_LINE_TOO_LONG) {
+        send_error_response(client_socket, REQUEST_URI_TOO_LONG_414);
+        metrics_response(414);
+        return REQ_FATAL_ERROR;
+    }
 
-    parse_request_line(line, &req);
+    parse_request_line(line_buf, &req);
     if (strlen(req.method) == 0 || strlen(req.path) == 0) {
         send_error_response(client_socket, BAD_REQUEST_400);
         metrics_response(400);
@@ -474,15 +481,20 @@ static ProcessResult process_single_request(int client_socket, RingBuffer *rb, i
 
     // 2. Parse Headers
     while (1) {
-        line = ring_buffer_readline(rb, line_buf, sizeof(line_buf));
-        if (!line) {
+        lr = ring_buffer_readline(rb, line_buf, sizeof(line_buf), &line_len);
+        if (lr == RING_LINE_NONE) {
             // Incomplete headers. Rollback entire transaction.
             rb->tail = rb_snapshot_tail;
             rb->size = rb_snapshot_size;
             return REQ_NEED_DATA;
         }
+        if (lr == RING_LINE_TOO_LONG) {
+            send_error_response(client_socket, HEADER_FIELDS_TOO_LARGE_431);
+            metrics_response(431);
+            return REQ_FATAL_ERROR;
+        }
 
-        if (line[0] == '\0') { break; // Empty line = End of Headers
+        if (line_buf[0] == '\0') { break; // Empty line = End of Headers
 }
 
         if (req.header_count >= MAX_HEADERS) {
@@ -490,7 +502,7 @@ static ProcessResult process_single_request(int client_socket, RingBuffer *rb, i
             metrics_response(431);
             return REQ_FATAL_ERROR;
         }
-        parse_header_line(line, &req);
+        parse_header_line(line_buf, &req);
     }
     // --- TRANSACTION COMMITTED ---
     // At this point, we have consumed the request from the ring buffer.
@@ -697,19 +709,31 @@ int el_prepare_response(RingBuffer *rb, int force_close, int *keep_alive_out, Pe
     size_t snap_size = rb->size;
 
     char line_buf[MAX_HEADER_LEN];
+    size_t line_len = 0;
     HTTPRequest req;
     memset(&req, 0, sizeof(HTTPRequest));
     req.keep_alive = 1; /* HTTP/1.1 default */
 
     /* --- 1. Parse request line ----------------------------------------- */
-    char *line = ring_buffer_readline(rb, line_buf, sizeof(line_buf));
-    if (!line) {
+    RingLineResult lr = ring_buffer_readline(rb, line_buf, sizeof(line_buf), &line_len);
+    if (lr == RING_LINE_NONE) {
         rb->tail = snap_tail;
         rb->size = snap_size;
         return 1; /* NEED_DATA */
     }
+    if (lr == RING_LINE_TOO_LONG) {
+        /* Request line exceeds the parser limit; consume and reject. */
+        pr->header      = REQUEST_URI_TOO_LONG_414;
+        pr->header_len  = strlen(REQUEST_URI_TOO_LONG_414);
+        pr->body        = NULL;
+        pr->body_len    = 0;
+        pr->is_head     = 0;
+        pr->force_close = 1;
+        pr->status      = 414;
+        return 0;
+    }
 
-    parse_request_line(line, &req);
+    parse_request_line(line_buf, &req);
     if (strlen(req.method) == 0 || strlen(req.path) == 0) {
         /* Malformed request line — consume bytes and return error response. */
         pr->header      = BAD_REQUEST_400;
@@ -724,14 +748,25 @@ int el_prepare_response(RingBuffer *rb, int force_close, int *keep_alive_out, Pe
 
     /* --- 2. Parse headers ----------------------------------------------- */
     while (1) {
-        line = ring_buffer_readline(rb, line_buf, sizeof(line_buf));
-        if (!line) {
+        lr = ring_buffer_readline(rb, line_buf, sizeof(line_buf), &line_len);
+        if (lr == RING_LINE_NONE) {
             /* Incomplete headers: roll back entire transaction. */
             rb->tail = snap_tail;
             rb->size = snap_size;
             return 1; /* NEED_DATA */
         }
-        if (line[0] == '\0') { break; } /* Empty line -> end of headers. */
+        if (lr == RING_LINE_TOO_LONG) {
+            /* Header line exceeds the parser limit; consume and reject. */
+            pr->header      = HEADER_FIELDS_TOO_LARGE_431;
+            pr->header_len  = strlen(HEADER_FIELDS_TOO_LARGE_431);
+            pr->body        = NULL;
+            pr->body_len    = 0;
+            pr->is_head     = 0;
+            pr->force_close = 1;
+            pr->status      = 431;
+            return 0;
+        }
+        if (line_buf[0] == '\0') { break; } /* Empty line -> end of headers. */
 
         if (req.header_count >= MAX_HEADERS) {
             pr->header      = HEADER_FIELDS_TOO_LARGE_431;
@@ -743,7 +778,7 @@ int el_prepare_response(RingBuffer *rb, int force_close, int *keep_alive_out, Pe
             pr->status      = 431;
             return 0;
         }
-        parse_header_line(line, &req);
+        parse_header_line(line_buf, &req);
     }
     /* --- Transaction committed ------------------------------------------- */
 

@@ -20,6 +20,11 @@
 #define SERVER_PORT 8081
 #define BUFFER_SIZE 4096
 #define RESPONSE_TIMEOUT_MS 5000
+/* Must match the parser limit in http_server.h (not included here to avoid
+ * clashing BUFFER_SIZE definitions). */
+#ifndef MAX_HEADER_LEN
+#define MAX_HEADER_LEN 1024
+#endif
 
 // --- Helper Structures ---
 typedef struct {
@@ -850,6 +855,74 @@ void test_input_buffer_limit() {
     close(fd);
 }
 
+/*
+ * test_long_header_line_rejected
+ *
+ * A single header line longer than MAX_HEADER_LEN must be rejected with 431
+ * rather than silently truncated and parsed as a valid short header.
+ */
+void test_long_header_line_rejected() {
+    int fd = create_and_connect_socket();
+    TEST_ASSERT(fd != -1);
+
+    size_t pad = MAX_HEADER_LEN * 2;
+    char *req = malloc(pad + 128);
+    if (!req) { close(fd); return; }
+
+    int n = snprintf(req, pad + 128,
+                     "GET /home HTTP/1.1\r\n"
+                     "Host: localhost\r\n"
+                     "X-Padding: ");
+    memset(req + n, 'A', pad);
+    n += (int)pad;
+    const char *suffix = "\r\n\r\n";
+    memcpy(req + n, suffix, strlen(suffix));
+    n += (int)strlen(suffix);
+
+    send(fd, req, (size_t)n, 0);
+    free(req);
+
+    char buf[512];
+    ssize_t r = recv(fd, buf, sizeof(buf) - 1, 0);
+    TEST_ASSERT(r > 0);
+    buf[r] = '\0';
+    TEST_ASSERT(strstr(buf, "431") != NULL);
+
+    close(fd);
+}
+
+/*
+ * test_long_request_line_rejected
+ *
+ * A request line longer than MAX_HEADER_LEN must be rejected with 414.
+ */
+void test_long_request_line_rejected() {
+    int fd = create_and_connect_socket();
+    TEST_ASSERT(fd != -1);
+
+    size_t pad = MAX_HEADER_LEN * 2;
+    char *req = malloc(pad + 64);
+    if (!req) { close(fd); return; }
+
+    int n = snprintf(req, pad + 64, "GET /");
+    memset(req + n, 'a', pad);
+    n += (int)pad;
+    const char *suffix = " HTTP/1.1\r\n\r\n";
+    memcpy(req + n, suffix, strlen(suffix));
+    n += (int)strlen(suffix);
+
+    send(fd, req, (size_t)n, 0);
+    free(req);
+
+    char buf[512];
+    ssize_t r = recv(fd, buf, sizeof(buf) - 1, 0);
+    TEST_ASSERT(r > 0);
+    buf[r] = '\0';
+    TEST_ASSERT(strstr(buf, "414") != NULL);
+
+    close(fd);
+}
+
 // --- Phase 3 event-loop integration tests ---
 
 /*
@@ -1145,6 +1218,8 @@ void run_server_tests() {
     RUN_TEST(test_slow_client_header_timeout, "Phase2: Slow client closed after header timeout");
     RUN_TEST(test_keepalive_request_limit,    "Phase2: Keep-alive connection closed at request limit");
     RUN_TEST(test_input_buffer_limit,         "Phase2: Oversized input rejected with 413 or close");
+    RUN_TEST(test_long_header_line_rejected,  "Oversized header line rejected with 431");
+    RUN_TEST(test_long_request_line_rejected, "Oversized request line rejected with 414");
 
     // Phase 3: event-loop specific behaviour
     RUN_TEST(test_el_fragmented_headers,      "Phase3: Fragmented header delivery across recv calls");

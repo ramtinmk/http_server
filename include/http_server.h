@@ -65,6 +65,7 @@ extern const char *BAD_REQUEST_400;
 extern const char *NOT_FOUND_404;
 extern const char *NOT_IMPLEMENTED_501;
 extern const char *PAYLOAD_TOO_LARGE_413;
+extern const char *REQUEST_URI_TOO_LONG_414;
 extern const char *HEADER_FIELDS_TOO_LARGE_431;
 extern const char *SUPPORTED_METHODS[];
 extern const int SUPPORTED_METHOD_COUNT;

@@ -139,16 +139,19 @@ void test_readline_basic() {
     ring_buffer_write(rb, "Hello\nWorld\n", 12);
     
     char line[50];
+    size_t line_len = 0;
     printf("       -> Reading first line...\n");
-    char *res = ring_buffer_readline(rb, line, sizeof(line));
+    RingLineResult res = ring_buffer_readline(rb, line, sizeof(line), &line_len);
     
-    TEST_ASSERT(res != NULL);
+    TEST_ASSERT(res == RING_LINE_OK);
     TEST_ASSERT(strcmp(line, "Hello") == 0);
+    TEST_ASSERT(line_len == 5);
     
     printf("       -> Reading second line...\n");
-    res = ring_buffer_readline(rb, line, sizeof(line));
-    TEST_ASSERT(res != NULL);
+    res = ring_buffer_readline(rb, line, sizeof(line), &line_len);
+    TEST_ASSERT(res == RING_LINE_OK);
     TEST_ASSERT(strcmp(line, "World") == 0);
+    TEST_ASSERT(line_len == 5);
     
     ring_buffer_free(rb);
 }
@@ -159,10 +162,13 @@ void test_readline_crlf() {
     ring_buffer_write(rb, "HTTP/1.1 200 OK\r\n", 17);
     
     char line[50];
-    ring_buffer_readline(rb, line, sizeof(line));
+    size_t line_len = 0;
+    RingLineResult res = ring_buffer_readline(rb, line, sizeof(line), &line_len);
     
     printf("       -> Verifying '\\r' was stripped...\n");
+    TEST_ASSERT(res == RING_LINE_OK);
     TEST_ASSERT(strcmp(line, "HTTP/1.1 200 OK") == 0);
+    TEST_ASSERT(line_len == strlen("HTTP/1.1 200 OK"));
     
     ring_buffer_free(rb);
 }
@@ -180,10 +186,12 @@ void test_readline_wrapped_newline() {
     ring_buffer_write(rb, "AB\n", 3);
     
     char line[10];
-    char *res = ring_buffer_readline(rb, line, sizeof(line));
+    size_t line_len = 0;
+    RingLineResult res = ring_buffer_readline(rb, line, sizeof(line), &line_len);
     
-    TEST_ASSERT(res != NULL);
+    TEST_ASSERT(res == RING_LINE_OK);
     TEST_ASSERT(strcmp(line, "AB") == 0);
+    TEST_ASSERT(line_len == 2);
     
     ring_buffer_free(rb);
 }
@@ -193,11 +201,15 @@ void test_readline_truncation() {
     ring_buffer_write(rb, "123456789\nNEXT", 14);
     
     printf("       -> Line length is 9, but buffer is 5...\n");
-    char line[5]; 
-    ring_buffer_readline(rb, line, sizeof(line));
+    char line[5];
+    size_t line_len = 0;
+    RingLineResult res = ring_buffer_readline(rb, line, sizeof(line), &line_len);
     
     printf("       -> Read: '%s'\n", line);
+    TEST_ASSERT(res == RING_LINE_TOO_LONG);
     TEST_ASSERT(strcmp(line, "1234") == 0);
+    /* Caller must still learn the true (untruncated) length. */
+    TEST_ASSERT(line_len == 9);
     
     printf("       -> Verifying remainder of line was discarded...\n");
     char buf[10];
@@ -215,11 +227,84 @@ void test_readline_no_newline() {
     
     printf("       -> Attempting to read line without '\\n'...\n");
     char line[20];
-    char *res = ring_buffer_readline(rb, line, sizeof(line));
+    size_t line_len = 123;
+    RingLineResult res = ring_buffer_readline(rb, line, sizeof(line), &line_len);
     
-    TEST_ASSERT(res == NULL);
+    TEST_ASSERT(res == RING_LINE_NONE);
+    TEST_ASSERT(line_len == 0);
     TEST_ASSERT(ring_buffer_get_size(rb) == 10);
     
+    ring_buffer_free(rb);
+}
+
+void test_readline_exact_fit() {
+    RingBuffer *rb = ring_buffer_create(20);
+    ring_buffer_write(rb, "ABCDE\n", 6);
+
+    printf("       -> Line is exactly line_capacity - 1...\n");
+    char line[6]; // 5 content bytes + NUL
+    size_t line_len = 0;
+    RingLineResult res = ring_buffer_readline(rb, line, sizeof(line), &line_len);
+
+    TEST_ASSERT(res == RING_LINE_OK);
+    TEST_ASSERT(strcmp(line, "ABCDE") == 0);
+    TEST_ASSERT(line_len == 5);
+    TEST_ASSERT(ring_buffer_is_empty(rb));
+
+    ring_buffer_free(rb);
+}
+
+void test_readline_empty_line() {
+    RingBuffer *rb = ring_buffer_create(16);
+    ring_buffer_write(rb, "\r\nX\n", 4);
+
+    printf("       -> First line is empty (CRLF only)...\n");
+    char line[8];
+    size_t line_len = 99;
+    RingLineResult res = ring_buffer_readline(rb, line, sizeof(line), &line_len);
+
+    TEST_ASSERT(res == RING_LINE_OK);
+    TEST_ASSERT(line[0] == '\0');
+    TEST_ASSERT(line_len == 0);
+
+    res = ring_buffer_readline(rb, line, sizeof(line), &line_len);
+    TEST_ASSERT(res == RING_LINE_OK);
+    TEST_ASSERT(strcmp(line, "X") == 0);
+
+    ring_buffer_free(rb);
+}
+
+void test_write_overflow_guard() {
+    RingBuffer *rb = ring_buffer_create(16);
+
+    printf("       -> Rejecting a write that would overflow size arithmetic...\n");
+    char byte = 'x';
+    size_t written = ring_buffer_write(rb, &byte, (size_t)-1);
+
+    TEST_ASSERT(written == 0);
+    TEST_ASSERT(ring_buffer_get_size(rb) == 0);
+    TEST_ASSERT(ring_buffer_validate(rb));
+
+    ring_buffer_free(rb);
+}
+
+void test_invariants_after_mutation() {
+    RingBuffer *rb = ring_buffer_create(8);
+    TEST_ASSERT(ring_buffer_validate(rb));
+
+    ring_buffer_write(rb, "ABCDEF", 6);
+    TEST_ASSERT(ring_buffer_validate(rb));
+
+    char tmp[4];
+    ring_buffer_read(rb, tmp, 3);
+    TEST_ASSERT(ring_buffer_validate(rb));
+
+    ring_buffer_write(rb, "XYZ", 3); // forces physical wrap
+    TEST_ASSERT(ring_buffer_validate(rb));
+
+    ring_buffer_write(rb, "0123456789", 10); // forces resize
+    TEST_ASSERT(ring_buffer_validate(rb));
+
     ring_buffer_free(rb);
 }
 
@@ -259,9 +344,9 @@ void test_efficiency_readline_streaming() {
         ring_buffer_write(rb, header, header_len);
         
         // Read line
-        char *res = ring_buffer_readline(rb, read_buf, sizeof(read_buf));
+        RingLineResult res = ring_buffer_readline(rb, read_buf, sizeof(read_buf), NULL);
         
-        if (!res) {
+        if (res != RING_LINE_OK) {
             fprintf(stderr, "Efficiency test failed at iteration %d\n", i);
             exit(EXIT_FAILURE);
         }
@@ -321,7 +406,11 @@ void run_ring_buffer_tests(void) {
     RUN_TEST(test_readline_crlf,            "Extract line ending with \\r\\n (strip \\r)");
     RUN_TEST(test_readline_wrapped_newline, "Handle \\n located at buffer start (wrap)");
     RUN_TEST(test_readline_truncation,      "Handle destination buffer smaller than line");
-    RUN_TEST(test_readline_no_newline,      "Return NULL if no newline exists");
+    RUN_TEST(test_readline_exact_fit,       "Line exactly fills destination (no truncation)");
+    RUN_TEST(test_readline_empty_line,      "Empty CRLF line yields zero-length string");
+    RUN_TEST(test_readline_no_newline,      "Return NONE if no newline exists");
+    RUN_TEST(test_write_overflow_guard,     "Reject writes that overflow size arithmetic");
+    RUN_TEST(test_invariants_after_mutation,"Validate structure after wrap and resize");
     RUN_TEST(test_reset,                    "Clear buffer state");
 
     // Performance Tests
