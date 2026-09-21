@@ -4,16 +4,27 @@
 #include <stdio.h>
 #include <errno.h>
 #include <stdint.h>
+#include <assert.h>
 
 // --- Configuration ---
 // Maximum allowed size (e.g., 16MB). Prevents memory exhaustion attacks.
-#define MAX_RING_BUFFER_CAPACITY (1024 * 1024 * 16) 
+#define MAX_RING_BUFFER_CAPACITY ((size_t)16 * 1024 * 1024)
 #define DEFAULT_INITIAL_CAPACITY 1024
 
 // --- Helper Functions ---
 
 static inline size_t min_size(size_t a, size_t b) {
     return (a < b) ? a : b;
+}
+
+// Invariant checker used by assertions after every mutation in debug builds.
+int ring_buffer_validate(const RingBuffer *rb) {
+    if (!rb || !rb->buffer || rb->capacity == 0) { return 0; }
+    if (rb->size > rb->capacity) { return 0; }
+    if (rb->head >= rb->capacity || rb->tail >= rb->capacity) { return 0; }
+    // head is always tail advanced by size, modulo capacity.
+    if ((rb->tail + rb->size) % rb->capacity != rb->head) { return 0; }
+    return 1;
 }
 
 // Resizes the buffer.
@@ -52,7 +63,8 @@ static int ring_buffer_resize(RingBuffer *rb, size_t new_capacity) {
     rb->capacity = new_capacity;
     rb->tail = 0;
     rb->head = (rb->size == new_capacity) ? 0 : rb->size;
-    
+
+    assert(ring_buffer_validate(rb));
     return 0;
 }
 
@@ -65,11 +77,14 @@ static void ring_buffer_skip(RingBuffer *rb, size_t len) {
 }
 
     rb->tail += len;
-    // Handle wrap-around
+    // A single subtraction is sufficient: len <= rb->size <= rb->capacity,
+    // so tail can never overshoot capacity by more than one lap.
     if (rb->tail >= rb->capacity) {
         rb->tail -= rb->capacity;
     }
     rb->size -= len;
+
+    assert(ring_buffer_validate(rb));
 }
 
 // --- Lifecycle Functions ---
@@ -93,6 +108,7 @@ RingBuffer *ring_buffer_create(size_t initial_capacity) {
 
     rb->capacity = initial_capacity;
     ring_buffer_reset(rb);
+    assert(ring_buffer_validate(rb));
     return rb;
 }
 
@@ -108,6 +124,7 @@ void ring_buffer_reset(RingBuffer *rb) {
         rb->head = 0;
         rb->tail = 0;
         rb->size = 0;
+        assert(ring_buffer_validate(rb));
     }
 }
 
@@ -117,17 +134,19 @@ size_t ring_buffer_write(RingBuffer *rb, const char *data, size_t data_len) {
     if (!rb || !data || data_len == 0) { return 0;
 }
 
+    // Overflow-safe admission against the hard ceiling.  Checking this before
+    // computing rb->size + data_len avoids any size_t wraparound.
+    if (data_len > MAX_RING_BUFFER_CAPACITY - rb->size) {
+        errno = ENOMEM;
+        return 0;
+    }
+
     size_t available = rb->capacity - rb->size;
 
     // 1. Resize if necessary
     if (data_len > available) {
         size_t new_cap = rb->capacity ? rb->capacity : DEFAULT_INITIAL_CAPACITY;
         size_t required = rb->size + data_len;
-
-        if (required > MAX_RING_BUFFER_CAPACITY) {
-            errno = ENOMEM;
-            return 0;
-        }
 
         // Exponential growth strategy (Doubling)
         while (new_cap < required) {
@@ -165,6 +184,8 @@ size_t ring_buffer_write(RingBuffer *rb, const char *data, size_t data_len) {
     }
 
     rb->size += data_len;
+
+    assert(ring_buffer_validate(rb));
     return data_len;
 }
 
@@ -190,6 +211,8 @@ size_t ring_buffer_read(RingBuffer *rb, char *dest, size_t dest_len) {
     }
 
     rb->size -= bytes_to_read;
+
+    assert(ring_buffer_validate(rb));
     return bytes_to_read;
 }
 
@@ -210,13 +233,21 @@ size_t ring_buffer_peek(const RingBuffer *rb, char *dest, size_t dest_len) {
     return bytes_to_peek;
 }
 
-// --- Specialized HTTP Operations ---
+// --- Specialized Line Operations ---
 
-char *ring_buffer_readline(RingBuffer *rb, char *line_buffer, size_t line_buffer_size) {
-    if (!rb || !line_buffer || line_buffer_size == 0 || rb->size == 0) {
-        if (line_buffer && line_buffer_size > 0) { line_buffer[0] = '\0';
+RingLineResult ring_buffer_readline(RingBuffer *rb, char *line_buffer,
+                                    size_t line_buffer_size, size_t *line_length) {
+    if (line_length) { *line_length = 0;
 }
-        return NULL;
+
+    if (!rb || !line_buffer || line_buffer_size == 0) {
+        return RING_LINE_NONE;
+    }
+
+    line_buffer[0] = '\0';
+
+    if (rb->size == 0) {
+        return RING_LINE_NONE;
     }
 
     // We scan for '\n'.
@@ -247,7 +278,7 @@ char *ring_buffer_readline(RingBuffer *rb, char *line_buffer, size_t line_buffer
     }
 
     if (!found) {
-        return NULL; // No complete line found
+        return RING_LINE_NONE; // No complete line found
     }
 
     // Total bytes to remove from ring buffer (chars + \n)
@@ -274,16 +305,25 @@ char *ring_buffer_readline(RingBuffer *rb, char *line_buffer, size_t line_buffer
         // If the buffer starts with \n, content_len is 0.
     }
 
-    // How much to copy to user buffer? (Protect against overflow)
+    // Report the true content length even when it will be truncated, so the
+    // caller can enforce a maximum line length.
+    if (line_length) { *line_length = content_len;
+}
+
+    // Determine whether the line fits (reserving one byte for the NUL).
+    RingLineResult result;
     size_t bytes_to_copy = content_len;
     if (bytes_to_copy >= line_buffer_size) {
         bytes_to_copy = line_buffer_size - 1;
+        result = RING_LINE_TOO_LONG;
+    } else {
+        result = RING_LINE_OK;
     }
 
-    // Reuse PEEK logic to copy the specific line content
-    // We cannot use ring_buffer_read yet because we want to discard the *full* line (incl \r\n),
-    // even if we only copy a truncated portion to line_buffer.
-    
+    // Copy the specific line content.  We cannot use ring_buffer_read here
+    // because the *full* line (including \r\n) must be discarded even when
+    // only a truncated prefix is copied to line_buffer.
+
     size_t part1_len = min_size(bytes_to_copy, rb->capacity - rb->tail);
     memcpy(line_buffer, rb->buffer + rb->tail, part1_len);
     
@@ -296,7 +336,7 @@ char *ring_buffer_readline(RingBuffer *rb, char *line_buffer, size_t line_buffer
     // Discard the processed line from the ring buffer
     ring_buffer_skip(rb, total_bytes_to_consume);
 
-    return line_buffer;
+    return result;
 }
 
 // --- Getters ---
