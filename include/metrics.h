@@ -91,8 +91,21 @@ long metrics_active_connection_count(void);
 
 /* --- Overload and limit counters ---------------------------------------- */
 
-/* New connection rejected because MAX_ACTIVE_CONNECTIONS was reached. */
+/* Why a new connection could not be admitted. Kept as an explicit enum so a
+ * saturation run can distinguish a genuine process-wide capacity limit from a
+ * per-loop table that ran out of slots. */
+typedef enum {
+    ADMISSION_REJECT_CAPACITY = 0, /* process-wide active-connection cap hit */
+    ADMISSION_REJECT_TABLE_FULL,   /* owning loop's connection table is full */
+    ADMISSION_REJECT_REASON_COUNT
+} AdmissionRejectReason;
+
+/* New connection rejected because the effective capacity was reached. */
 void metrics_admission_rejected(void);
+
+/* New connection rejected, filed under an explicit reason (also bumps the
+ * aggregate admission-rejected total). */
+void metrics_admission_rejected_reason(AdmissionRejectReason reason);
 
 /* Worker acquired no buffer because the buffer pool was empty. */
 void metrics_buffer_pool_exhausted(void);
@@ -145,5 +158,51 @@ void metrics_el_connection_opened(void);
 
 /* Incremented each time any connection is removed from epoll and closed. */
 void metrics_el_connection_closed(void);
+
+/* Per-loop breakdown of the aggregate event-loop counters. `loop_id` is the
+ * 0-based loop index; out-of-range ids are ignored. The snapshot emits the
+ * first METRICS_MAX_EL_LOOPS entries as arrays. */
+void metrics_el_loop_count(int count);
+void metrics_el_loop_wakeup(int loop_id);
+void metrics_el_loop_accepted(int loop_id);
+
+/* --- Phase 4 saturate / backpressure counters --------------------------- */
+
+/* Record the effective connection capacity derived at startup. Emitted in the
+ * snapshot so a benchmark row can be interpreted without the server logs. */
+void metrics_set_connection_capacity(long capacity);
+
+/* Try to reserve one connection slot under a process-wide capacity. Returns
+ * nonzero on success. Used by the multi-loop admission path so the global cap
+ * is enforced atomically rather than per loop. */
+int metrics_connection_admit(long capacity);
+
+/* Listener backpressure: the event loop disables accept interest while the
+ * connection table is full and re-enables it after a close. The first call
+ * records a new disabled transition; the second records the disabled
+ * duration in milliseconds. */
+void metrics_listener_disabled(void);
+void metrics_listener_enabled(long disabled_ms);
+
+/* A complete 503 Service Unavailable response was returned to an overloaded
+ * client instead of silently resetting the connection. */
+void metrics_overload_response(void);
+
+/* A connection was closed in a way that may reach the peer as a reset (it
+ * could not be drained or answered). No silent per-request reset should be
+ * counted here during normal backpressure. */
+void metrics_connection_reset(void);
+
+/* Current and maximum bytes retained by per-connection input buffers. Held by
+ * the event loop; released when an idle keep-alive connection drops its
+ * buffer. */
+void metrics_buffer_leased(size_t bytes);
+void metrics_buffer_returned(size_t bytes);
+
+/* Backlog pressure: number of connections waiting in the kernel accept queue
+ * while listener read interest is disabled. Sampled by the event loop; the
+ * high-water mark shows how many clients were held by backpressure. Negative
+ * samples (unsupported) are ignored. */
+void metrics_backlog_depth(long depth);
 
 #endif /* METRICS_H */
