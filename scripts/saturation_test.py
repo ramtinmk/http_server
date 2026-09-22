@@ -271,16 +271,22 @@ def main(argv=None):
             key: saturated.get(key) for key in (
                 "active_connections", "active_connections_max",
                 "connection_capacity", "listener_disabled_count",
-                "buffer_bytes_current",
+                "buffer_bytes_current", "backlog_depth", "backlog_depth_max",
+                "admission_rejected_capacity", "admission_rejected_table_full",
+                "el_loops",
             )
         }
         print("saturated: active=%s max=%s capacity=%s listener_disabled=%s "
-              "buffer_bytes=%s" % (
+              "buffer_bytes=%s backlog=%s/%s reject_cap=%s reject_tbl=%s" % (
                   saturated.get("active_connections"),
                   saturated.get("active_connections_max"),
                   saturated.get("connection_capacity"),
                   saturated.get("listener_disabled_count"),
-                  saturated.get("buffer_bytes_current")))
+                  saturated.get("buffer_bytes_current"),
+                  saturated.get("backlog_depth"),
+                  saturated.get("backlog_depth_max"),
+                  saturated.get("admission_rejected_capacity"),
+                  saturated.get("admission_rejected_table_full")))
         if saturated.get("active_connections", 0) < args.capacity:
             failures.append("connection table never reached capacity")
         if saturated.get("listener_disabled_count", 0) < 1:
