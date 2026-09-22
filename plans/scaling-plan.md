@@ -63,8 +63,12 @@ Legend: `[x]` done, `[~]` partial, `[ ]` pending.
   and recorded acceptance scenarios are validated; long saturation/cleanup
   coverage and complete event-loop metrics evidence remain. See
   `scaling-phase-3-event-loop`.
-- [ ] Phase 4: scale accept and CPU work.
-- [ ] Phase 5: operating-system and deployment tuning.
+- [ ] Phase 4: scale accept and CPU work. Implementation plan:
+  `scaling-phase-4-scale-accept` (`plans/scaling-plan-phase4.md`). This plan
+  also absorbs the Phase 3 saturation/backpressure follow-up below.
+- [ ] Phase 5: operating-system and deployment tuning. Implementation plan:
+  `scaling-phase-5-os-tuning` (`plans/scaling-plan-phase5.md`); environment
+  pinning is shared with `hardware-agnostic-benchmark` Phase 4.
 
 ## Goals and Non-Goals
 
@@ -438,6 +442,10 @@ design cannot scale efficiently when many persistent or slow connections exist.
 
 ### Saturation capacity and backpressure follow-up
 
+**Tracking:** The open items below are absorbed into Phase 4
+(`scaling-phase-4-scale-accept`, `plans/scaling-plan-phase4.md`, section B) and
+are kept here as the originating evidence and rationale.
+
 The active-connection limit is currently a hard compile-time admission cap.
 When `MAX_ACTIVE_CONNECTIONS` is lower than the offered concurrency, the event
 loop accepts additional sockets and closes them immediately. That behavior is
@@ -488,6 +496,11 @@ above the configured limit.
 
 ## Phase 4: Scale Accept and CPU Work
 
+**Implementation plan:** `scaling-phase-4-scale-accept`
+(`plans/scaling-plan-phase4.md`). Its profiling gate must produce a recorded
+limiter before any concurrency scaling, and it absorbs the Phase 3
+saturation/backpressure follow-up listed above.
+
 After nonblocking I/O is stable, scale only where profiling identifies a limit.
 
 ### Options
@@ -495,8 +508,12 @@ After nonblocking I/O is stable, scale only where profiling identifies a limit.
 - [ ] Run multiple event-loop threads with clear ownership of connections.
 - [ ] Use `SO_REUSEPORT` and multiple processes when separate accept queues
   improve distribution on the target kernel.
-- [ ] Keep gzip work off the event loop and cap compression concurrency.
-- [ ] Precompress known static assets during startup.
+- [x] Keep gzip work off the event loop: cached plain and gzip variants are
+  selected in the hot path and no zlib work runs on the loop.
+- [ ] Cap compression concurrency (needed only if runtime/dynamic compression
+  is ever added).
+- [x] Precompress known static assets during startup (`gzip_asset()` runs once
+  in `initialize_static_responses()`).
 - [ ] Use `sendfile` or equivalent zero-copy output only after response caching
   and nonblocking writes are correct.
 
@@ -504,6 +521,10 @@ Avoid adding processes or threads solely to compensate for lock contention that
 has not been measured.
 
 ## Phase 5: Operating-System and Deployment Tuning
+
+**Implementation plan:** `scaling-phase-5-os-tuning`
+(`plans/scaling-plan-phase5.md`). Environment pinning and the benchmark
+`--check-env` preflight are shared with `hardware-agnostic-benchmark` Phase 4.
 
 Only apply these settings after application bottlenecks are addressed:
 
@@ -594,8 +615,10 @@ fail solely because a different machine has lower absolute capacity. Absolute
 8. [ ] Run correctness and slow-client tests.
 9. [ ] Implement nonblocking connection state with one event-loop thread.
 10. [ ] Compare one event loop against the old worker model.
-11. [ ] Add additional event loops or processes only if profiling justifies it.
-12. [ ] Tune kernel and deployment parameters.
+11. [ ] Add additional event loops or processes only if profiling justifies it
+    (`scaling-phase-4-scale-accept`).
+12. [ ] Tune kernel and deployment parameters (`scaling-phase-5-os-tuning`)
+    with a recorded control run per change.
 13. [ ] Publish a capacity report with control runs.
 
 The success condition is not just a higher benchmark number. It is: during a
