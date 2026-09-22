@@ -48,4 +48,13 @@ do
     fi
 done
 
+# Above-capacity saturation coverage (Phase 4): below/equal/above the configured
+# connection limit, with the bounded overload outcome and post-drain checks.
+if [ -f "$script_dir/saturation_test.py" ]; then
+    echo "=== saturation: capacity 16 ==="
+    if ! python3 "$script_dir/saturation_test.py" --capacity 16; then
+        matrix_status=1
+    fi
+fi
+
 exit "$matrix_status"

@@ -259,6 +259,17 @@ int create_server_socket(void) {
         exit(EXIT_FAILURE);
     }
 
+    /* Phase 4: when multiple event loops are enabled, each loop binds its own
+     * listener, so every socket on the port must set SO_REUSEPORT. The default
+     * single-loop control deliberately does not, so a second accidental
+     * instance still fails to bind instead of silently sharing the port. */
+#if defined(SO_REUSEPORT) && (EL_THREAD_COUNT > 1)
+    if (setsockopt(server_socket, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt)) == -1) {
+        perror("setsockopt reuseport");
+        exit(EXIT_FAILURE);
+    }
+#endif
+
     server_addr.sin_family = AF_INET;
     server_addr.sin_port = htons(PORT);
     server_addr.sin_addr.s_addr = INADDR_ANY;

@@ -143,6 +143,28 @@ add_custom_target(benchmark-matrix
     COMMENT "Running the scaling-plan benchmark matrix"
 )
 
+# Phase 4 saturation acceptance: drive -c below, equal to, and above the
+# configured connection capacity and verify the bounded overload outcome and
+# post-drain cleanup. Writes benchmarks/phase4_saturation.json.
+add_custom_target(saturation
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/saturation_test.py
+            --capacity 16
+    DEPENDS http_server
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    USES_TERMINAL
+    COMMENT "Running Phase 4 saturation acceptance (capacity 16)"
+)
+
+# Phase 4: static assets are precompressed/cached at startup and startup must
+# fail fast when one cannot be loaded.
+add_custom_target(startup-failfast
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/startup_failfast_test.py
+    DEPENDS http_server
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    USES_TERMINAL
+    COMMENT "Checking startup fail-fast on missing static assets"
+)
+
 # --- Linting with clang-tidy ---
 find_program(CLANG_TIDY_EXE NAMES clang-tidy clang-tidy-18 clang-tidy-17 clang-tidy-16)
 

@@ -17,6 +17,7 @@
 #endif
 #include <signal.h>
 #include <errno.h>
+#include <limits.h>
 #include <sys/resource.h>
 
 static volatile sig_atomic_t server_running = 1;
@@ -49,37 +50,89 @@ static void print_server_config(void)
     printf("  HEADER_READ_TIMEOUT   : %d s\n",HEADER_READ_TIMEOUT_SEC);
     printf("  IDLE_TIMEOUT          : %d s\n",IDLE_TIMEOUT_SEC);
     printf("  WRITE_TIMEOUT         : %d s\n",WRITE_TIMEOUT_SEC);
+    printf("  EL_THREAD_COUNT       : %d\n",  EL_THREAD_COUNT);
+    printf("  EL_MAX_CONNECTION_TABLE: %d\n", EL_MAX_CONNECTION_TABLE);
     printf("============================\n");
 }
 
 /*
- * Verify that the process's soft file-descriptor limit is large enough to
- * handle MAX_ACTIVE_CONNECTIONS client sockets plus operational headroom.
- * Prints a warning (not a fatal error) if the limit is too low, so that an
- * operator can raise it without breaking the server for small workloads.
+ * Derive the effective connection capacity at startup.
+ *
+ * The value is the minimum of:
+ *   - the operator-configured maximum (HTTP_SERVER_MAX_CONNECTIONS, or
+ *     MAX_ACTIVE_CONNECTIONS when unset),
+ *   - the descriptor-derived capacity (soft RLIMIT_NOFILE minus the reserved
+ *     headroom for the listener, epoll, metrics, logs, and shutdown), and
+ *   - the hard EL_MAX_CONNECTION_TABLE memory bound.
+ *
+ * Clamps down safely and prints every input so a benchmark row can be
+ * reproduced. Fails (returns a non-positive value) when the effective capacity
+ * would be zero, which the caller treats as a fatal startup error.
  */
-static void check_nofile_limit(void)
+static long derive_effective_capacity(void)
 {
     struct rlimit rl;
     if (getrlimit(RLIMIT_NOFILE, &rl) != 0) {
         perror("getrlimit RLIMIT_NOFILE");
-        return;
+        return -1;
     }
 
-    long required = (long)MAX_ACTIVE_CONNECTIONS + (long)REQUIRED_NOFILE_HEADROOM;
+    long operator_max = MAX_ACTIVE_CONNECTIONS;
+    const char *env = getenv(ENV_MAX_CONNECTIONS);
+    if (env && *env) {
+        errno = 0;
+        char *end = NULL;
+        long parsed = strtol(env, &end, 10);
+        if (errno != 0 || end == env || *end != '\0' || parsed <= 0) {
+            fprintf(stderr,
+                    "FATAL: %s=%s is not a positive integer\n",
+                    ENV_MAX_CONNECTIONS, env);
+            return -1;
+        }
+        operator_max = parsed;
+    }
 
-    printf("  FD limit: soft=%lu, hard=%lu (server requires >= %ld)\n",
+    long descriptor_cap = LONG_MAX;
+    if (rl.rlim_cur != RLIM_INFINITY) {
+        descriptor_cap = (long)rl.rlim_cur - (long)REQUIRED_NOFILE_HEADROOM;
+    }
+
+    long effective = operator_max;
+    const char *limited_by = "operator max";
+    if (descriptor_cap < effective) {
+        effective   = descriptor_cap;
+        limited_by  = "RLIMIT_NOFILE";
+    }
+    if (EL_MAX_CONNECTION_TABLE < effective) {
+        effective  = EL_MAX_CONNECTION_TABLE;
+        limited_by = "EL_MAX_CONNECTION_TABLE";
+    }
+
+    printf("  FD limit: soft=%lu, hard=%lu, reserved=%d\n",
            (unsigned long)rl.rlim_cur,
            (unsigned long)rl.rlim_max,
-           required);
+           REQUIRED_NOFILE_HEADROOM);
+    printf("  Connection capacity: operator_max=%ld, descriptor_cap=%ld, "
+           "effective=%ld (limited by %s)\n",
+           operator_max,
+           descriptor_cap == LONG_MAX ? -1L : descriptor_cap,
+           effective,
+           limited_by);
 
-    if (rl.rlim_cur != RLIM_INFINITY && (long)rl.rlim_cur < required) {
+    if (effective < 1) {
         fprintf(stderr,
-                "WARNING: RLIMIT_NOFILE soft limit (%lu) is below the required "
-                "%ld. Run `ulimit -n %ld` before starting the server, or reduce "
-                "MAX_ACTIVE_CONNECTIONS.\n",
-                (unsigned long)rl.rlim_cur, required, required);
+                "FATAL: effective connection capacity is %ld; raise "
+                "RLIMIT_NOFILE above %d or lower %s\n",
+                effective, REQUIRED_NOFILE_HEADROOM, ENV_MAX_CONNECTIONS);
+        return -1;
     }
+    if (operator_max > effective) {
+        fprintf(stderr,
+                "WARNING: requested %s=%ld exceeds effective capacity %ld; "
+                "clamping to %ld\n",
+                ENV_MAX_CONNECTIONS, operator_max, effective, effective);
+    }
+    return effective;
 }
 
 /* --------------------------------------------------------------------------
@@ -105,9 +158,13 @@ int main(void)
     sigaction(SIGINT,  &sa, NULL);
     sigaction(SIGTERM, &sa, NULL);
 
-    /* Print configuration and validate file-descriptor limits. */
+    /* Print configuration and derive the effective connection capacity. */
     print_server_config();
-    check_nofile_limit();
+    long capacity = derive_effective_capacity();
+    if (capacity < 1) {
+        return EXIT_FAILURE;
+    }
+    metrics_set_connection_capacity(capacity);
 
     /* Cache static responses before accepting any clients. */
     if (initialize_static_responses() != 0) {
@@ -120,12 +177,15 @@ int main(void)
 
 #if USE_EVENT_LOOP
     /* ------------------------------------------------------------------ */
-    /* Phase 3: single-threaded nonblocking epoll event loop.              */
-    /* The thread pool is not used; all admitted sockets are owned by the  */
-    /* event loop.                                                          */
+    /* Phase 3/4: nonblocking epoll event loops.                           */
+    /* EL_THREAD_COUNT == 1 preserves the Phase 3 single-loop control.      */
+    /* Values > 1 add SO_REUSEPORT listeners so the kernel distributes new  */
+    /* connections; each loop exclusively owns the sockets it accepts.      */
     /* ------------------------------------------------------------------ */
-    printf("Dispatch model: epoll event loop (Phase 3).\n");
-    event_loop_run(server_socket, &server_running);
+    printf("Dispatch model: epoll event loop (Phase 4, %d loop%s, "
+           "capacity=%ld).\n",
+           EL_THREAD_COUNT, EL_THREAD_COUNT == 1 ? "" : "s", capacity);
+    event_loop_run(server_socket, &server_running, capacity);
 
     printf("\nShutting down server gracefully...\n");
     close(server_socket);

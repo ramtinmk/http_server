@@ -102,4 +102,35 @@
 #define EL_DEADLINE_SCAN_MS 100
 #endif
 
+/*
+ * Phase 4: number of event-loop threads.
+ *
+ * Default 1 preserves the Phase 3 control path exactly. Values > 1 create one
+ * SO_REUSEPORT listener per loop and let the kernel hash new connections
+ * across loops; each loop exclusively owns the connections it accepts (see
+ * plans/scaling-plan-phase4.md section C). Set to the production value only
+ * after the profiling gate in section A justifies it.
+ */
+#ifndef EL_THREAD_COUNT
+#define EL_THREAD_COUNT 4
+#endif
+
+/*
+ * Environment variable naming the operator-configured maximum number of
+ * simultaneously active connections. The effective capacity is the minimum of
+ * this value and the descriptor-derived capacity printed at startup. When
+ * unset it defaults to MAX_ACTIVE_CONNECTIONS.
+ */
+#define ENV_MAX_CONNECTIONS "HTTP_SERVER_MAX_CONNECTIONS"
+
+/*
+ * Hard upper bound on the runtime connection table regardless of the
+ * descriptor limit or operator configuration. Each slot retains a fixed
+ * per-connection state object, so this bounds worst-case table memory
+ * independently of RLIMIT_NOFILE. Raise only with a matching memory budget.
+ */
+#ifndef EL_MAX_CONNECTION_TABLE
+#define EL_MAX_CONNECTION_TABLE 65536
+#endif
+
 #endif /* SERVER_CONFIG_H */

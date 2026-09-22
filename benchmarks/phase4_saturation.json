@@ -1,0 +1,67 @@
+{
+  "after": {
+    "open_fds": 6,
+    "rss_kb": 1840
+  },
+  "baseline": {
+    "open_fds": 6,
+    "rss_kb": 1840
+  },
+  "capacity": 16,
+  "checks": {
+    "after_free": {
+      "completed": 1,
+      "concurrency": 1,
+      "elapsed_seconds": 0.0007,
+      "errors": {},
+      "offered": 1,
+      "p99_ms": 0.434,
+      "throughput_rps": 1413.43
+    },
+    "drained_metrics": {
+      "active_connections": 0,
+      "buffer_bytes_current": 0,
+      "connection_resets": 0,
+      "listener_disabled_count": 1,
+      "overload_responses": 0
+    },
+    "saturated_metrics": {
+      "active_connections": 16,
+      "active_connections_max": 16,
+      "buffer_bytes_current": 0,
+      "connection_capacity": 16,
+      "listener_disabled_count": 1
+    }
+  },
+  "failures": [],
+  "success": true,
+  "waves": {
+    "above": {
+      "completed": 48,
+      "concurrency": 48,
+      "elapsed_seconds": 0.0443,
+      "errors": {},
+      "offered": 48,
+      "p99_ms": 7.851,
+      "throughput_rps": 1084.1
+    },
+    "below": {
+      "completed": 8,
+      "concurrency": 8,
+      "elapsed_seconds": 0.0076,
+      "errors": {},
+      "offered": 8,
+      "p99_ms": 5.493,
+      "throughput_rps": 1047.55
+    },
+    "equal": {
+      "completed": 16,
+      "concurrency": 16,
+      "elapsed_seconds": 0.0176,
+      "errors": {},
+      "offered": 16,
+      "p99_ms": 11.115,
+      "throughput_rps": 909.35
+    }
+  }
+}

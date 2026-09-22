@@ -74,6 +74,22 @@ CSV_FIELDS = (
     "cpu_physical_cores", "cpu_mhz", "cpu_max_mhz", "memory_total_kb",
     "os_kernel", "compiler_flags", "ulimit_nofile_soft", "ulimit_nofile_hard",
     "page_size_kb",
+    # Phase 4 saturation / event-loop counters (trailing additions preserve
+    # backward compatibility; older rows migrate with empty values).
+    "server_connection_capacity", "server_active_connections",
+    "server_active_connections_max", "server_listener_disabled",
+    "server_listener_disabled_ms", "server_admission_rejected",
+    "server_overload_responses", "server_connection_resets",
+    "server_buffer_bytes_current", "server_buffer_bytes_max",
+    "server_input_buffer_limit", "server_el_wakeups",
+    "server_el_readable_events", "server_el_writable_events",
+    "server_el_eagain", "server_el_partial_writes",
+    "server_el_deadline_closes", "server_el_pipeline_full",
+    "server_el_output_drained", "server_el_connections_opened",
+    "server_el_connections_closed",
+    "server_admission_rejected_capacity", "server_admission_rejected_table_full",
+    "server_backlog_depth", "server_backlog_depth_max",
+    "server_el_loops", "server_el_loop_wakeups", "server_el_loop_accepted",
 )
 
 SCENARIOS = {
@@ -861,6 +877,34 @@ def read_server_metrics(path):
         "server_rejected_tasks": 0,
         "server_completed_requests": 0,
         "server_request_failures": 0,
+        "server_connection_capacity": 0,
+        "server_active_connections": 0,
+        "server_active_connections_max": 0,
+        "server_listener_disabled": 0,
+        "server_listener_disabled_ms": 0,
+        "server_admission_rejected": 0,
+        "server_overload_responses": 0,
+        "server_connection_resets": 0,
+        "server_buffer_bytes_current": 0,
+        "server_buffer_bytes_max": 0,
+        "server_input_buffer_limit": 0,
+        "server_el_wakeups": 0,
+        "server_el_readable_events": 0,
+        "server_el_writable_events": 0,
+        "server_el_eagain": 0,
+        "server_el_partial_writes": 0,
+        "server_el_deadline_closes": 0,
+        "server_el_pipeline_full": 0,
+        "server_el_output_drained": 0,
+        "server_el_connections_opened": 0,
+        "server_el_connections_closed": 0,
+        "server_admission_rejected_capacity": 0,
+        "server_admission_rejected_table_full": 0,
+        "server_backlog_depth": 0,
+        "server_backlog_depth_max": 0,
+        "server_el_loops": 0,
+        "server_el_loop_wakeups": "",
+        "server_el_loop_accepted": "",
     }
     if not path or not os.path.exists(path):
         return defaults
@@ -876,10 +920,41 @@ def read_server_metrics(path):
         "server_rejected_tasks": "rejected_tasks",
         "server_completed_requests": "completed_requests",
         "server_request_failures": "request_failures",
+        "server_connection_capacity": "connection_capacity",
+        "server_active_connections": "active_connections",
+        "server_active_connections_max": "active_connections_max",
+        "server_listener_disabled": "listener_disabled_count",
+        "server_listener_disabled_ms": "listener_disabled_ms",
+        "server_admission_rejected": "admission_rejected",
+        "server_overload_responses": "overload_responses",
+        "server_connection_resets": "connection_resets",
+        "server_buffer_bytes_current": "buffer_bytes_current",
+        "server_buffer_bytes_max": "buffer_bytes_max",
+        "server_input_buffer_limit": "input_buffer_limit",
+        "server_el_wakeups": "el_wakeups",
+        "server_el_readable_events": "el_readable_events",
+        "server_el_writable_events": "el_writable_events",
+        "server_el_eagain": "el_eagain",
+        "server_el_partial_writes": "el_partial_writes",
+        "server_el_deadline_closes": "el_deadline_closes",
+        "server_el_pipeline_full": "el_pipeline_full",
+        "server_el_output_drained": "el_output_drained",
+        "server_el_connections_opened": "el_connections_opened",
+        "server_el_connections_closed": "el_connections_closed",
+        "server_admission_rejected_capacity": "admission_rejected_capacity",
+        "server_admission_rejected_table_full": "admission_rejected_table_full",
+        "server_backlog_depth": "backlog_depth",
+        "server_backlog_depth_max": "backlog_depth_max",
+        "server_el_loops": "el_loops",
     }
     for field, key in mapping.items():
         if key in data:
             defaults[field] = data[key]
+    for field, key in (("server_el_loop_wakeups", "el_loop_wakeups"),
+                       ("server_el_loop_accepted", "el_loop_accepted")):
+        value = data.get(key)
+        if isinstance(value, list):
+            defaults[field] = "|".join(str(item) for item in value)
     return defaults
 
 
