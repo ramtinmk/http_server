@@ -21,6 +21,15 @@
   ```
 - `ctest --output-on-failure` includes the same server-dependent C test runner plus the Python benchmark tests; start the server first when running the full CTest suite.
 
+
+- NEVER write unit tests after you write code. 
+- Highly prefer E2E tests as the sole testing mechanism. Use them to verify complex features work. At the end of E2E tests, produce a verifiable and repeatable artifact. 
+- If you must test a system in isolation, FIRST write all the ways it could fail, THEN write the code.
+- Tautological tests considered harmful.  
+- Change-detector tests considered harmful.  
+- Do not create regression tests for bug fixes without a genuine gap in behavior testing.
+
+
 ## Runtime
 
 - `./bin/http_server` must be launched from the repository root because static files (`home.html` and `hello.html`) are opened via relative paths. The default port is `8081`.

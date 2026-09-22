@@ -1,0 +1,15 @@
+bind: Address already in use
+=== Server Configuration ===
+  PORT                  : 8081
+  BACKLOG               : 1024
+  THREAD_POOL_SIZE      : 16
+  MAX_QUEUED_TASKS      : 256
+  MAX_ACTIVE_CONNECTIONS: 512
+  MAX_KEEPALIVE_REQUESTS: 100
+  MAX_INPUT_BUFFER_BYTES: 65536
+  MAX_PIPELINE_DEPTH    : 16
+  HEADER_READ_TIMEOUT   : 5 s
+  IDLE_TIMEOUT          : 30 s
+  WRITE_TIMEOUT         : 10 s
+============================
+  FD limit: soft=10240, hard=1048576 (server requires >= 576)
