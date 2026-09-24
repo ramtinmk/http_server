@@ -63,9 +63,12 @@ Legend: `[x]` done, `[~]` partial, `[ ]` pending.
   and recorded acceptance scenarios are validated; long saturation/cleanup
   coverage and complete event-loop metrics evidence remain. See
   `scaling-phase-3-event-loop`.
-- [ ] Phase 4: scale accept and CPU work. Implementation plan:
+- [~] Phase 4: scale accept and CPU work. Implementation plan:
   `scaling-phase-4-scale-accept` (`plans/scaling-plan-phase4.md`). This plan
-  also absorbs the Phase 3 saturation/backpressure follow-up below.
+  also absorbs the Phase 3 saturation/backpressure follow-up below. Event-loop
+  count now auto-sizes to online CPU cores by default
+  (`scaling-phase-4-core-autoscale`); measure-and-compare and saturation
+  validation remain.
 - [ ] Phase 5: operating-system and deployment tuning. Implementation plan:
   `scaling-phase-5-os-tuning` (`plans/scaling-plan-phase5.md`); environment
   pinning is shared with `hardware-agnostic-benchmark` Phase 4.
@@ -505,7 +508,10 @@ After nonblocking I/O is stable, scale only where profiling identifies a limit.
 
 ### Options
 
-- [ ] Run multiple event-loop threads with clear ownership of connections.
+- [x] Run multiple event-loop threads with clear ownership of connections.
+- [x] Size the event-loop thread count to the online CPU core count by default,
+  with an explicit override for the control configuration
+  (`scaling-phase-4-core-autoscale`).
 - [ ] Use `SO_REUSEPORT` and multiple processes when separate accept queues
   improve distribution on the target kernel.
 - [x] Keep gzip work off the event loop: cached plain and gzip variants are
@@ -615,8 +621,10 @@ fail solely because a different machine has lower absolute capacity. Absolute
 8. [ ] Run correctness and slow-client tests.
 9. [ ] Implement nonblocking connection state with one event-loop thread.
 10. [ ] Compare one event loop against the old worker model.
-11. [ ] Add additional event loops or processes only if profiling justifies it
-    (`scaling-phase-4-scale-accept`).
+11. [~] Add additional event loops or processes only if profiling justifies it
+    (`scaling-phase-4-scale-accept`). Event-loop count now auto-sizes to CPU
+    cores (`scaling-phase-4-core-autoscale`); multi-process remains
+    profiling-gated.
 12. [ ] Tune kernel and deployment parameters (`scaling-phase-5-os-tuning`)
     with a recorded control run per change.
 13. [ ] Publish a capacity report with control runs.

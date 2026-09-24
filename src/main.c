@@ -50,7 +50,9 @@ static void print_server_config(void)
     printf("  HEADER_READ_TIMEOUT   : %d s\n",HEADER_READ_TIMEOUT_SEC);
     printf("  IDLE_TIMEOUT          : %d s\n",IDLE_TIMEOUT_SEC);
     printf("  WRITE_TIMEOUT         : %d s\n",WRITE_TIMEOUT_SEC);
-    printf("  EL_THREAD_COUNT       : %d\n",  EL_THREAD_COUNT);
+    printf("  EL_THREAD_COUNT       : %d%s\n",  EL_THREAD_COUNT,
+           EL_THREAD_COUNT == 0 ? " (auto: online cores)" : "");
+    printf("  EL_MAX_THREADS        : %d\n",  EL_MAX_THREADS);
     printf("  EL_MAX_CONNECTION_TABLE: %d\n", EL_MAX_CONNECTION_TABLE);
     printf("============================\n");
 }
@@ -171,21 +173,29 @@ int main(void)
         return EXIT_FAILURE;
     }
 
-    /* Bind and listen. */
-    server_socket = create_server_socket();
+    /* Resolve how many event loops to run: explicit override or one per core. */
+#if USE_EVENT_LOOP
+    int el_threads = event_loop_thread_count();
+#else
+    int el_threads = 0;
+#endif
+
+    /* Bind and listen; SO_REUSEPORT is required when several loops share the
+     * port, and deliberately omitted for the single-loop control. */
+    server_socket = create_server_socket(el_threads > 1);
     printf("Server listening on port %d...\n", PORT);
 
 #if USE_EVENT_LOOP
     /* ------------------------------------------------------------------ */
     /* Phase 3/4: nonblocking epoll event loops.                           */
-    /* EL_THREAD_COUNT == 1 preserves the Phase 3 single-loop control.      */
+    /* One loop runs per online CPU core (or the EL_THREAD_COUNT override). */
     /* Values > 1 add SO_REUSEPORT listeners so the kernel distributes new  */
     /* connections; each loop exclusively owns the sockets it accepts.      */
     /* ------------------------------------------------------------------ */
     printf("Dispatch model: epoll event loop (Phase 4, %d loop%s, "
            "capacity=%ld).\n",
-           EL_THREAD_COUNT, EL_THREAD_COUNT == 1 ? "" : "s", capacity);
-    event_loop_run(server_socket, &server_running, capacity);
+           el_threads, el_threads == 1 ? "" : "s", capacity);
+    event_loop_run(server_socket, &server_running, capacity, el_threads);
 
     printf("\nShutting down server gracefully...\n");
     close(server_socket);

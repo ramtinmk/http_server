@@ -119,7 +119,7 @@ struct BufferPool;
 
 // --- Function Prototypes (Interface) ---
 void handle_client(int client_socket, BufferPool *bp);
-int create_server_socket(void);
+int create_server_socket(int reuseport);
 int initialize_static_responses(void);
 void send_error_response(int client_socket, const char *response);
 int method_is_supported(const char *method);

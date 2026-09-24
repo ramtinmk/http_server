@@ -232,7 +232,7 @@ static void set_socket_write_timeout(int sockfd, int seconds) {
     }
 }
 
-int create_server_socket(void) {
+int create_server_socket(int reuseport) {
     // CRITICAL: Ignore SIGPIPE globally. 
     // Otherwise, writing to a closed client crashes the server.
     signal(SIGPIPE, SIG_IGN);
@@ -260,14 +260,18 @@ int create_server_socket(void) {
     }
 
     /* Phase 4: when multiple event loops are enabled, each loop binds its own
-     * listener, so every socket on the port must set SO_REUSEPORT. The default
-     * single-loop control deliberately does not, so a second accidental
-     * instance still fails to bind instead of silently sharing the port. */
-#if defined(SO_REUSEPORT) && (EL_THREAD_COUNT > 1)
-    if (setsockopt(server_socket, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt)) == -1) {
-        perror("setsockopt reuseport");
-        exit(EXIT_FAILURE);
+     * listener, so every socket on the port must set SO_REUSEPORT. With a
+     * single loop we deliberately do not, so a second accidental instance
+     * still fails to bind instead of silently sharing the port. */
+#if defined(SO_REUSEPORT)
+    if (reuseport) {
+        if (setsockopt(server_socket, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt)) == -1) {
+            perror("setsockopt reuseport");
+            exit(EXIT_FAILURE);
+        }
     }
+#else
+    (void)reuseport;
 #endif
 
     server_addr.sin_family = AF_INET;

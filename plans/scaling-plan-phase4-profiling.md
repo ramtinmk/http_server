@@ -5,8 +5,8 @@ category: spike
 status: done
 owner: agent
 created: 2026-09-22
-updated: 2026-09-22
-related: [scaling-phase-4-scale-accept]
+updated: 2026-09-24
+related: [scaling-phase-4-scale-accept, scaling-phase-4-core-autoscale]
 ---
 
 # Phase 4 Profiling Decision Gate
@@ -123,3 +123,15 @@ separately; it does not justify scaling.
   above-capacity bounded outcome is verified by `scripts/saturation_test.py`.
 - `sendfile` remains deferred: bodies are served from startup-cached memory and
   the profile shows `send`/`recv` as ordinary data-path cost, not a copy hotspot.
+
+## Addendum (2026-09-24)
+
+The decision above chose an opt-in default (`EL_THREAD_COUNT=1`) because the
+single loop was not the limiter on this host. The default was subsequently
+changed to host-sized auto-detection (`EL_THREAD_COUNT=0` → one loop per online
+CPU core) in `scaling-phase-4-core-autoscale`, matching how production
+event-driven servers size their worker/loop count. This addendum does not
+invalidate the profiling result: the control for benchmark comparisons remains
+`EL_THREAD_COUNT=1`, and the override still allows reproducing the profiled
+configuration exactly. The multi-process `SO_REUSEPORT` alternative remains
+deferred as recorded above.
