@@ -33,7 +33,7 @@
 ## Runtime
 
 - `./bin/http_server` must be launched from the repository root because static files (`home.html` and `hello.html`) are opened via relative paths. The default port is `8081`.
-- The default build runs the Phase 3 single-threaded epoll event loop (`USE_EVENT_LOOP=1` in `include/server_config.h`), not the older blocking thread-pool dispatch path.
+- The default build runs nonblocking epoll event loops (`USE_EVENT_LOOP=1` in `include/server_config.h`), not the older blocking thread-pool dispatch path. It starts one loop per online CPU core by default (`EL_THREAD_COUNT=0` auto-detects; a positive value overrides, and `1` is the single-loop control) and each loop binds a `SO_REUSEPORT` listener.
 - Benchmark runs can use `HTTP_SERVER_METRICS_FILE=<path>` for server metrics; benchmark output is appended under `benchmarks/`.
 
 ## Plans

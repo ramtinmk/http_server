@@ -105,14 +105,25 @@
 /*
  * Phase 4: number of event-loop threads.
  *
- * Default 1 preserves the Phase 3 control path exactly. Values > 1 create one
- * SO_REUSEPORT listener per loop and let the kernel hash new connections
- * across loops; each loop exclusively owns the connections it accepts (see
- * plans/scaling-plan-phase4.md section C). Set to the production value only
- * after the profiling gate in section A justifies it.
+ * 0 (the default) auto-detects the number of online CPU cores at runtime and
+ * starts one loop per core, so the server scales with the host without a
+ * rebuild. A positive value is an explicit override: 1 preserves the Phase 3
+ * single-loop control path exactly, and values > 1 create one SO_REUSEPORT
+ * listener per loop so the kernel hashes new connections across loops; each
+ * loop exclusively owns the connections it accepts (see
+ * plans/scaling-plan-phase4.md section C). The override is a compile-time
+ * bound; the runtime core count is the effective value when set to 0.
  */
 #ifndef EL_THREAD_COUNT
-#define EL_THREAD_COUNT 4
+#define EL_THREAD_COUNT 0
+#endif
+
+/*
+ * Upper bound on the auto-detected loop count (and clamp for an explicit
+ * override). Caps thread and SO_REUSEPORT listener growth on very large hosts.
+ */
+#ifndef EL_MAX_THREADS
+#define EL_MAX_THREADS 64
 #endif
 
 /*

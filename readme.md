@@ -9,8 +9,10 @@ benchmark target.
 ## Architecture
 
 - **Default dispatch:** nonblocking `epoll` event loop (`USE_EVENT_LOOP=1` in
-  `include/server_config.h`). `EL_THREAD_COUNT` loops each own a `SO_REUSEPORT`
-  listener so the kernel hashes new connections across them (default: 4).
+  `include/server_config.h`). One event loop runs per online CPU core by default
+  (`EL_THREAD_COUNT=0` auto-detects; set a positive value to override), and each
+  loop owns a `SO_REUSEPORT` listener so the kernel hashes new connections
+  across them.
 - **Legacy dispatch:** build with `USE_EVENT_LOOP=0` to run the Phase 2 blocking
   thread pool instead.
 - **HTTP:** HTTP/1.1 keep-alive with Content-Length framing, request pipelining
@@ -248,7 +250,7 @@ is disabled while the benchmark owns the server (`HTTP_SERVER_ACCESS_LOG=0`).
 | 1     | HTTP/1.1 protocol compliance             | Done — parsing, keep-alive, 400/404/413/501        |
 | 2     | Concurrency: thread pool (`pthread`)     | Done — retained as the `USE_EVENT_LOOP=0` path     |
 | 3     | Nonblocking `epoll` event loop           | Done — default dispatch                            |
-| 4     | Multi-loop scaling and backpressure      | Implemented — `SO_REUSEPORT` loops, capacity admission |
+| 4     | Multi-loop scaling and backpressure      | Implemented — one loop per CPU core (`SO_REUSEPORT`), capacity admission |
 | 5     | OS and deployment tuning                 | Active — `plans/scaling-plan-phase5.md`            |
 
 Not yet implemented: TLS/HTTPS, CGI, reverse proxy, dynamic configuration, and

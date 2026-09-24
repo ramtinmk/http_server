@@ -5,8 +5,8 @@ category: implementation
 status: active
 owner: agent
 created: 2026-09-22
-updated: 2026-09-22
-related: [scaling-plan]
+updated: 2026-09-24
+related: [scaling-plan, scaling-phase-4-core-autoscale]
 ---
 
 # Phase 4 Scale Accept and CPU Work
@@ -40,7 +40,9 @@ and `scripts/http_benchmark.py`. Use the build and test conventions in
   follow-up" (connection-capacity derivation, connection-table sizing, listener
   backpressure, bounded overload, idle-buffer decoupling, saturation metrics,
   and the below/equal/above-capacity acceptance test).
-- Multiple event-loop threads with explicit one-owner-per-connection semantics.
+- Multiple event-loop threads with explicit one-owner-per-connection semantics,
+  sized to the online CPU core count by default (see
+  `scaling-phase-4-core-autoscale`).
 - An explicit accept model, with per-loop `SO_REUSEPORT` listeners as an
   alternative only when measured distribution is poor.
 - Keeping cached compression off the event loop and capping any future
@@ -169,9 +171,13 @@ documented as unjustified and reverted.
      accept thundering herd and keeps capacity accounting global.
    - Alternative: per-loop listening sockets with `SO_REUSEPORT`, used only if
      measured kernel hashing distributes load acceptably across loops.
-4. [ ] Add `EL_THREAD_COUNT` in `server_config.h`, default `1` so the control
-   path is preserved, and print it in startup output. Choose the production
-   value by measurement around the available CPU count, not by assumption.
+4. [x] Add `EL_THREAD_COUNT` in `server_config.h` and print the resolved value
+   in startup output. Default `0` auto-detects the online CPU core count (one
+   loop per core, capped by `EL_MAX_THREADS`); a positive value is an explicit
+   override and `1` preserves the control path. Implemented and validated in
+   `scaling-phase-4-core-autoscale`, which supersedes the earlier "default `1`"
+   wording for the default build while keeping `EL_THREAD_COUNT=1` as the
+   benchmark control.
 5. [ ] Make shutdown multi-loop safe: wake every loop, stop accepting, drain or
    close connections exactly once, and join cleanly. Do not leave two owners for
    one socket.

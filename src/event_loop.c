@@ -868,9 +868,24 @@ static void *loop_thread(void *arg)
 }
 
 /* ------------------------------------------------------------------ */
+/* Resolve the requested loop count: explicit override or online CPU cores. */
+int event_loop_thread_count(void)
+{
+    if (EL_THREAD_COUNT > 0)
+        return EL_THREAD_COUNT;
+
+    long cores = sysconf(_SC_NPROCESSORS_ONLN);
+    if (cores < 1)
+        cores = 1;
+    if (cores > EL_MAX_THREADS)
+        cores = EL_MAX_THREADS;
+    return (int)cores;
+}
+
 /* event_loop_run                                                       */
 /* ------------------------------------------------------------------ */
-int event_loop_run(int server_fd, volatile sig_atomic_t *running, long capacity)
+int event_loop_run(int server_fd, volatile sig_atomic_t *running, long capacity,
+                   int nloops)
 {
     if (capacity <= 0) {
         fprintf(stderr, "event_loop_run: invalid capacity %ld\n", capacity);
@@ -879,7 +894,6 @@ int event_loop_run(int server_fd, volatile sig_atomic_t *running, long capacity)
 
     build_overload_response();
 
-    int nloops = EL_THREAD_COUNT;
     if (nloops < 1)
         nloops = 1;
     metrics_el_loop_count(nloops);
