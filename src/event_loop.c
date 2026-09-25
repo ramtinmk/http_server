@@ -23,6 +23,16 @@
 #define EL_RECV_BUFSIZE 8192
 
 /*
+ * Phase 5: per-listener accept-queue overflow tracking. `last` is the most
+ * recently observed kernel counter; `primed` guards the first sample so the
+ * initial (nonzero) value is not reported as a burst of drops.
+ */
+typedef struct {
+    long last;
+    int  primed;
+} ListenDropState;
+
+/*
  * Complete, self-framed overload response. The body length is filled in once
  * during startup so the header and body never disagree. Returned when a
  * connection is admitted past the capacity check (a race between loops) so the
@@ -72,6 +82,9 @@ struct EventLoop {
     volatile sig_atomic_t *running;
 
     long             listener_disabled_at_ms; /* -1 while listener is enabled */
+
+    /* Phase 5: accept-queue overflow sampling for this listener. */
+    ListenDropState  listen_drops;
 
     /* Per-loop diagnostics, reported at shutdown alongside the aggregate
      * metrics snapshot so accept distribution across loops is observable. */
@@ -459,6 +472,10 @@ static void el_accept(EventLoop *loop)
                 return;
             if (errno == EINTR)
                 continue;
+            /* Phase 5: file accept failures by errno so overload caused by
+             * descriptor exhaustion is distinguishable from a protocol
+             * error. */
+            metrics_accept_error(errno);
             perror("accept");
             return;
         }
@@ -659,6 +676,137 @@ static void el_readable(EventLoop *loop, ELConnection *c)
 /* ------------------------------------------------------------------ */
 /* el_scan_deadlines                                                    */
 /* ------------------------------------------------------------------ */
+/* ------------------------------------------------------------------ */
+/* Listener drop sampling (Phase 5)                                     */
+/* ------------------------------------------------------------------ */
+
+/*
+ * The kernel's accept-queue overflow counter for a listening socket is not
+ * exposed by getsockopt; the only userspace view is the `idiag_drops` field
+ * in the NETLINK_SOCK_DIAG inet_diag reply for the listener. We issue one
+ * request per sample on a transient socket and read that field, falling back
+ * silently to "unsupported" on any error so the server runs on kernels or
+ * sandboxes without the netlink diag interface.
+ *
+ * This runs only from the deadline-scan tick (every EL_DEADLINE_SCAN_MS), not
+ * on the hot accept path, so the cost is negligible.
+ */
+#if defined(__linux__)
+#include <linux/inet_diag.h>
+#include <linux/netlink.h>
+#include <linux/rtnetlink.h>
+#include <linux/sock_diag.h>
+#include <sys/stat.h>
+
+/*
+ * Parse the INET_DIAG_MEMINFO attribute of a socket-diag message and return
+ * the SK_MEMINFO_DROPS slot (accept-queue overflow count). Returns -1 when the
+ * attribute is absent.
+ */
+static long meminfo_drops(const struct rtattr *attrs, int len)
+{
+    for (struct rtattr *rta = (struct rtattr *)attrs;
+         RTA_OK(rta, len); rta = RTA_NEXT(rta, len)) {
+        if (rta->rta_type != INET_DIAG_MEMINFO)
+            continue;
+        unsigned int *mem = (unsigned int *)RTA_DATA(rta);
+        int slots = (int)(RTA_PAYLOAD(rta) / sizeof(unsigned int));
+        if (slots > SK_MEMINFO_DROPS)
+            return (long)mem[SK_MEMINFO_DROPS];
+        return -1;
+    }
+    return -1;
+}
+
+static long listener_drop_count(int listen_fd)
+{
+    struct stat st;
+    if (fstat(listen_fd, &st) != 0)
+        return -1;
+
+    int nl = socket(AF_NETLINK, SOCK_RAW | SOCK_CLOEXEC, NETLINK_SOCK_DIAG);
+    if (nl < 0)
+        return -1;
+
+    struct {
+        struct nlmsghdr         nlh;
+        struct inet_diag_req_v2 req;
+    } request;
+    memset(&request, 0, sizeof(request));
+    request.nlh.nlmsg_len   = sizeof(request);
+    request.nlh.nlmsg_type  = SOCK_DIAG_BY_FAMILY;
+    request.nlh.nlmsg_flags = NLM_F_REQUEST | NLM_F_DUMP;
+    request.req.sdiag_family   = AF_INET;
+    request.req.sdiag_protocol = IPPROTO_TCP;
+    request.req.idiag_ext      = (1 << (INET_DIAG_MEMINFO - 1));
+    request.req.idiag_states   = 0; /* listener sockets carry no TCP state */
+
+    struct sockaddr_nl kernel;
+    memset(&kernel, 0, sizeof(kernel));
+    kernel.nl_family = AF_NETLINK;
+
+    long drops = -1;
+    if (sendto(nl, &request, sizeof(request), 0,
+               (struct sockaddr *)&kernel, sizeof(kernel)) >= 0) {
+        char reply[8192];
+        int done = 0;
+        while (!done) {
+            ssize_t n = recv(nl, reply, sizeof(reply), 0);
+            if (n <= 0)
+                break;
+            for (struct nlmsghdr *nlh = (struct nlmsghdr *)reply;
+                 NLMSG_OK(nlh, (unsigned int)n);
+                 nlh = NLMSG_NEXT(nlh, n)) {
+                if (nlh->nlmsg_type == NLMSG_DONE) {
+                    done = 1;
+                    break;
+                }
+                if (nlh->nlmsg_type != SOCK_DIAG_BY_FAMILY)
+                    continue;
+                struct inet_diag_msg *diag = NLMSG_DATA(nlh);
+                if (diag->idiag_inode != (unsigned int)st.st_ino)
+                    continue;
+                int attr_len = (int)(nlh->nlmsg_len - NLMSG_LENGTH(sizeof(*diag)));
+                if (attr_len > 0) {
+                    long d = meminfo_drops(
+                        (struct rtattr *)((char *)diag + sizeof(*diag)),
+                        attr_len);
+                    if (d >= 0)
+                        drops = d;
+                }
+            }
+        }
+    }
+    close(nl);
+    return drops;
+}
+#else
+static long listener_drop_count(int listen_fd)
+{
+    (void)listen_fd;
+    return -1;
+}
+#endif
+
+/* Tracks the last observed overflow counter so we emit only the delta as
+ * cumulative drops (the kernel value resets when the listener is recreated). */
+static void sample_listen_drops(ListenDropState *state, int listen_fd)
+{
+    long current = listener_drop_count(listen_fd);
+    if (current < 0)
+        return;
+    if (!state->primed) {
+        state->last = current;
+        state->primed = 1;
+        return;
+    }
+    if (current > state->last) {
+        for (long i = state->last; i < current; i++)
+            metrics_listen_drops();
+    }
+    state->last = current;
+}
+
 static void el_scan_deadlines(EventLoop *loop)
 {
     for (size_t i = 0; i < loop->pool_size; i++) {
@@ -670,6 +818,8 @@ static void el_scan_deadlines(EventLoop *loop)
             conn_close(loop, c, CLOSE_DEADLINE);
         }
     }
+
+    sample_listen_drops(&loop->listen_drops, loop->listen_fd);
 }
 
 /* ------------------------------------------------------------------ */
@@ -801,6 +951,8 @@ static int loop_init(EventLoop *loop, int listen_fd, long capacity,
     loop->capacity               = capacity;
     loop->running                = running;
     loop->listener_disabled_at_ms = -1;
+    loop->listen_drops.last      = 0;
+    loop->listen_drops.primed    = 0;
     loop->epoll_fd               = -1;
     loop->wake_fd                = -1;
 
