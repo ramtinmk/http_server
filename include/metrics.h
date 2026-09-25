@@ -205,4 +205,18 @@ void metrics_buffer_returned(size_t bytes);
  * samples (unsupported) are ignored. */
 void metrics_backlog_depth(long depth);
 
+/* --- Phase 5: listener drops and accept errors -------------------------- */
+
+/* Cumulative accepted-connection counter dropped by the kernel because the
+ * listener's accept queue overflowed. Sourced (Linux) from the SYN/accept
+ * drop fields Netlink exposes for the listening socket and sampled by the
+ * event loop; unsupported platforms simply never increment it. */
+void metrics_listen_drops(void);
+
+/* One accept()/accept4() failure filed by errno value. `errno_value` is the
+ * raw errno (EMFILE, ENFILE, ECONNABORTED, ...); the snapshot emits the
+ * counters that matter for diagnosing overload. EAGAIN/EINTR are normal
+ * nonblocking outcomes and are not counted here. */
+void metrics_accept_error(int errno_value);
+
 #endif /* METRICS_H */

@@ -8,6 +8,7 @@
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
+#include <errno.h>
 
 /*
  * All counters use C11 relaxed atomics. The values are independent statistics
@@ -53,6 +54,14 @@ static _Atomic long       g_buffer_bytes_current;
 static _Atomic long       g_buffer_bytes_max;
 static _Atomic long       g_backlog_depth;
 static _Atomic long       g_backlog_depth_max;
+
+/* Phase 5: listener drops and accept errors by errno (cumulative). */
+static _Atomic long long  g_listen_drops;
+static _Atomic long long  g_accept_errors;
+static _Atomic long long  g_accept_error_emfile;
+static _Atomic long long  g_accept_error_enfile;
+static _Atomic long long  g_accept_error_econnaborted;
+static _Atomic long long  g_accept_error_other;
 
 /* Per-loop event-loop counters, emitted as arrays in the snapshot. */
 #define METRICS_MAX_EL_LOOPS 16
@@ -379,6 +388,36 @@ void metrics_backlog_depth(long depth)
     }
 }
 
+/* --- Phase 5: listener drops and accept errors -------------------------- */
+
+void metrics_listen_drops(void)
+{
+    atomic_fetch_add_explicit(&g_listen_drops, 1, memory_order_relaxed);
+}
+
+void metrics_accept_error(int errno_value)
+{
+    atomic_fetch_add_explicit(&g_accept_errors, 1, memory_order_relaxed);
+    switch (errno_value) {
+    case EMFILE:
+        atomic_fetch_add_explicit(&g_accept_error_emfile, 1,
+                                  memory_order_relaxed);
+        break;
+    case ENFILE:
+        atomic_fetch_add_explicit(&g_accept_error_enfile, 1,
+                                  memory_order_relaxed);
+        break;
+    case ECONNABORTED:
+        atomic_fetch_add_explicit(&g_accept_error_econnaborted, 1,
+                                  memory_order_relaxed);
+        break;
+    default:
+        atomic_fetch_add_explicit(&g_accept_error_other, 1,
+                                  memory_order_relaxed);
+        break;
+    }
+}
+
 /* --- Snapshot formatting ------------------------------------------------ */
 
 /*
@@ -463,6 +502,12 @@ size_t metrics_snapshot(char *buf, size_t cap)
         "\"admission_rejected_table_full\":%lld,"
         "\"backlog_depth\":%ld,"
         "\"backlog_depth_max\":%ld,"
+        "\"listen_drops\":%lld,"
+        "\"accept_errors\":%lld,"
+        "\"accept_error_emfile\":%lld,"
+        "\"accept_error_enfile\":%lld,"
+        "\"accept_error_econnaborted\":%lld,"
+        "\"accept_error_other\":%lld,"
         "\"el_loops\":%d",
         atomic_load_explicit(&g_accepted_connections, memory_order_relaxed),
         atomic_load_explicit(&g_completed_requests, memory_order_relaxed),
@@ -507,6 +552,12 @@ size_t metrics_snapshot(char *buf, size_t cap)
             memory_order_relaxed),
         atomic_load_explicit(&g_backlog_depth,             memory_order_relaxed),
         atomic_load_explicit(&g_backlog_depth_max,         memory_order_relaxed),
+        atomic_load_explicit(&g_listen_drops,              memory_order_relaxed),
+        atomic_load_explicit(&g_accept_errors,             memory_order_relaxed),
+        atomic_load_explicit(&g_accept_error_emfile,       memory_order_relaxed),
+        atomic_load_explicit(&g_accept_error_enfile,       memory_order_relaxed),
+        atomic_load_explicit(&g_accept_error_econnaborted, memory_order_relaxed),
+        atomic_load_explicit(&g_accept_error_other,        memory_order_relaxed),
         atomic_load_explicit(&g_el_loop_count,             memory_order_relaxed));
 
     int nloops = atomic_load_explicit(&g_el_loop_count, memory_order_relaxed);

@@ -10,12 +10,23 @@ duration="${2:-5}"
 min_hardware_agnostic_rps="${3:-1000}"
 calibration_seconds="${4:-2}"
 
+# Phase 5: when set by run_benchmark_pinned.sh (or a caller), pin the server and
+# the generator so a noisy neighbor cannot migrate onto the measured cores.
+pin_args=()
+if [ -n "${BENCH_SERVER_CPUS:-}" ]; then
+    pin_args+=(--server-cpus "$BENCH_SERVER_CPUS")
+fi
+if [ -n "${BENCH_CLIENT_CPUS:-}" ]; then
+    pin_args+=(--client-cpus "$BENCH_CLIENT_CPUS")
+fi
+
 # Calibrate once before the matrix. Individual scenarios reuse the per-machine
 # cache, so calibration work is not part of any scenario's measured duration.
 if ! python3 "$script_dir/http_benchmark.py" \
     --calibrate only \
     --calibrate-force \
-    --calibration-seconds "$calibration_seconds"; then
+    --calibration-seconds "$calibration_seconds" \
+    "${pin_args[@]}"; then
     echo "calibration failed; matrix not run" >&2
     exit 2
 fi
@@ -43,6 +54,7 @@ do
         --timeout 30 \
         --calibrate on \
         --log-file "$log_file" \
+        "${pin_args[@]}" \
         "${extra_args[@]}"; then
         matrix_status=1
     fi

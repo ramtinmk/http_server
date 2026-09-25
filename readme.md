@@ -243,6 +243,49 @@ The harness uses only Python's standard library and validates response framing
 Server metrics are exported through `HTTP_SERVER_METRICS_FILE`; access logging
 is disabled while the benchmark owns the server (`HTTP_SERVER_ACCESS_LOG=0`).
 
+### OS and deployment tuning
+
+At startup the server prints the host limits it depends on (soft/hard
+`RLIMIT_NOFILE`, `net.core.somaxconn`, the effective listen backlog, and
+`tcp_rmem`/`tcp_wmem`) and raises the soft FD limit up to the hard limit when
+needed. It refuses to start when the effective soft limit is below the
+connection budget `MAX_ACTIVE_CONNECTIONS + 64 + 3 × event-loop-count`, so a
+misconfigured host fails loudly instead of dropping connections. Set
+`HTTP_SERVER_CPU_SET` (a `taskset`-style list such as `0-3`) to pin the whole
+server; invalid ranges are fatal.
+
+Check a host before a benchmark and exit non-zero if a requirement is unmet:
+
+```
+python3 scripts/http_benchmark.py --check-env                 # ulimit, somaxconn, cores
+python3 scripts/http_benchmark.py --check-env --require-governor --expect-cores 8
+```
+
+`--check-env` also writes the same host fingerprint (including `somaxconn`,
+`effective_backlog`, `tcp_rmem`/`tcp_wmem`, and `cpu_governor`) that every CSV
+row carries, plus `server_listen_drops` and accept-error counters aggregated
+from the server metrics snapshot.
+
+For reproducible runs, use the pinning wrapper, which splits the online CPUs
+between the server and the generator and verifies the environment first:
+
+```
+./scripts/run_benchmark_pinned.sh                     # server 0-3, client 4-7 on 8 cores
+HPIN_SERVER_CPUS=0-1 HPIN_CLIENT_CPUS=2-3 ./scripts/run_benchmark_pinned.sh
+```
+
+`docker-compose.yml` encodes the same envelope for container runs: `nofile`
+65536, `net.core.somaxconn=4096`, 2 CPU / 512 MiB limits, and a 512-process
+`pids_limit`.
+
+The fixed measurement envelope is `BACKLOG=1024`, `MAX_ACTIVE_CONNECTIONS=1024`
+(legacy `THREAD_POOL_SIZE=16` on the `USE_EVENT_LOOP=0` path), matrix
+`--concurrency 32`, and the descriptor ceiling above; compose runs report
+envelope-normalized numbers because the CPU/memory cap, not the bare host,
+bounds them. Require the performance governor for comparable runs:
+`cpupower frequency-set -g performance`, or write `performance` to each
+`/sys/devices/system/cpu/cpu*/cpufreq/scaling_governor`.
+
 ## Roadmap
 
 | Phase | Focus                                    | Status                                             |
@@ -251,10 +294,14 @@ is disabled while the benchmark owns the server (`HTTP_SERVER_ACCESS_LOG=0`).
 | 2     | Concurrency: thread pool (`pthread`)     | Done — retained as the `USE_EVENT_LOOP=0` path     |
 | 3     | Nonblocking `epoll` event loop           | Done — default dispatch                            |
 | 4     | Multi-loop scaling and backpressure      | Implemented — one loop per CPU core (`SO_REUSEPORT`), capacity admission |
-| 5     | OS and deployment tuning                 | Active — `plans/scaling-plan-phase5.md`            |
+| 5     | OS and deployment tuning                 | Done — `plans/scaling-plan-phase5.md`              |
 
-Not yet implemented: TLS/HTTPS, CGI, reverse proxy, dynamic configuration, and
-directory listing. See `plans/` for the specifications behind each phase.
+The next program takes this to production: HTTP/1.1 + TLS static serving, secure
+document-root handling, sandboxing, observability, and a hardened systemd
+deployment. See `plans/production-http-server.md`.
+
+Still out of scope: HTTP/2, CGI, reverse proxy, dynamic content, and directory
+listing. See `plans/` for the specifications behind each phase.
 
 ## Learning milestones
 

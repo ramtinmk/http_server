@@ -35,10 +35,13 @@
 - `./bin/http_server` must be launched from the repository root because static files (`home.html` and `hello.html`) are opened via relative paths. The default port is `8081`.
 - The default build runs nonblocking epoll event loops (`USE_EVENT_LOOP=1` in `include/server_config.h`), not the older blocking thread-pool dispatch path. It starts one loop per online CPU core by default (`EL_THREAD_COUNT=0` auto-detects; a positive value overrides, and `1` is the single-loop control) and each loop binds a `SO_REUSEPORT` listener.
 - Benchmark runs can use `HTTP_SERVER_METRICS_FILE=<path>` for server metrics; benchmark output is appended under `benchmarks/`.
+- Startup preflights the host: it prints/raises `RLIMIT_NOFILE` and refuses to start unless the effective soft limit is at least `MAX_ACTIVE_CONNECTIONS + REQUIRED_NOFILE_HEADROOM + REQUIRED_NOFILE_PER_LOOP × event-loop-count`. `HTTP_SERVER_CPU_SET` (taskset list, e.g. `0-3`) pins the server; invalid ranges are fatal.
+- `python3 scripts/http_benchmark.py --check-env` verifies ulimit, `net.core.somaxconn`, core count, and (with `--require-governor`) the CPU governor; it exits non-zero naming the unmet requirement. `scripts/run_benchmark_pinned.sh` pins server/generator to disjoint CPU sets before running the matrix.
 
 ## Plans
 
 - Before editing any file under `plans/`, read the root `plan-spec.md`; it defines required metadata, categories, phase structure, and acceptance criteria. Project-specific facts belong here, not in `plan-spec.md`.
+- the changes made to the system should be incrementally check marked in the plan's each phase todolist
 
 ## Code Map
 

@@ -84,6 +84,37 @@
 #define REQUIRED_NOFILE_HEADROOM 64
 #endif
 
+/* --- Phase 5: OS and deployment preflight ------------------------------- */
+
+/*
+ * Extra descriptors reserved per event-loop thread on top of
+ * REQUIRED_NOFILE_HEADROOM.  Each loop owns an epoll fd, a wake eventfd, and
+ * a SO_REUSEPORT listener (the first loop reuses the primary listener).  The
+ * startup preflight sizes the required soft RLIMIT_NOFILE as
+ *   MAX_ACTIVE_CONNECTIONS + REQUIRED_NOFILE_HEADROOM + per-loop fds,
+ * so a host with many cores does not under-reserve descriptors.
+ */
+#ifndef REQUIRED_NOFILE_PER_LOOP
+#define REQUIRED_NOFILE_PER_LOOP 3
+#endif
+
+/*
+ * Paths under /proc/sys that Phase 5 reads to verify the host can honor the
+ * configured backlog and TCP buffer limits.  The server only reads and
+ * reports these; it never mutates host state.
+ */
+#define PROC_SOMAXCONN   "/proc/sys/net/core/somaxconn"
+#define PROC_TCP_RMEM    "/proc/sys/net/ipv4/tcp_rmem"
+#define PROC_TCP_WMEM    "/proc/sys/net/ipv4/tcp_wmem"
+
+/*
+ * Environment variable holding a CPU affinity list for the server, in the
+ * same form as taskset(1) / sched_setaffinity(2) (e.g. "0-3" or "0,2,4").
+ * Unset by default: enabling affinity is only justified by a measured result,
+ * and the applied mask is printed at startup for the record.
+ */
+#define ENV_CPU_SET "HTTP_SERVER_CPU_SET"
+
 /* --- Event-loop model selection ---------------------------------------- */
 
 /* Set to 1 to run the Phase 3 single-threaded epoll event loop instead of
