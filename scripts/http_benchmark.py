@@ -42,6 +42,12 @@ CALIBRATION_CACHE_VERSION = 1
 CALIBRATION_PAYLOAD_MAX = 1024 * 1024
 CALIBRATION_PAYLOAD_MIN = 1024
 
+# Phase 5: the server's documented constant resource envelope. These mirror
+# include/server_config.h so --check-env can verify the host can honor them.
+SERVER_BACKLOG_DEFAULT = 1024
+NOFILE_HEADROOM = 64
+NOFILE_PER_LOOP = 3
+
 
 CSV_FIELDS = (
     "timestamp_utc", "commit_id", "scenario", "host", "port", "mode",
@@ -90,6 +96,13 @@ CSV_FIELDS = (
     "server_admission_rejected_capacity", "server_admission_rejected_table_full",
     "server_backlog_depth", "server_backlog_depth_max",
     "server_el_loops", "server_el_loop_wakeups", "server_el_loop_accepted",
+    # Phase 5 OS/deployment tuning fingerprint and listener health (trailing
+    # additions preserve backward compatibility; older rows migrate empty).
+    "somaxconn", "effective_backlog", "tcp_rmem_min", "tcp_rmem_default",
+    "tcp_rmem_max", "tcp_wmem_min", "tcp_wmem_default", "tcp_wmem_max",
+    "cpu_governor", "server_listen_drops", "server_accept_errors",
+    "server_accept_error_emfile", "server_accept_error_enfile",
+    "server_accept_error_econnaborted", "server_accept_error_other",
 )
 
 SCENARIOS = {
@@ -196,6 +209,185 @@ def _read_cpu_max_mhz():
         return 0.0
 
 
+def _read_sysctl_text(path):
+    """Return a /proc/sys or sysfs value as stripped text, or '' if unreadable."""
+    return _read_text(path).strip()
+
+
+def _read_sysctl_int(path):
+    """Return the first integer in a sysctl file, or 0 when unreadable."""
+    tokens = _read_sysctl_text(path).split()
+    try:
+        return int(tokens[0])
+    except (IndexError, ValueError):
+        return 0
+
+
+def _read_sysctl_triple(path):
+    """Return the (min, default, max) triple of a sysctl vector, or zeros."""
+    tokens = _read_sysctl_text(path).split()
+    if len(tokens) != 3:
+        return (0, 0, 0)
+    try:
+        return tuple(int(token) for token in tokens)
+    except ValueError:
+        return (0, 0, 0)
+
+
+def _read_cpu_governor():
+    """Return cpu0's scaling governor, or 'unknown' when cpufreq is absent."""
+    return (
+        _read_sysctl_text(
+            "/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor"
+        )
+        or "unknown"
+    )
+
+
+def environment_fingerprint(server_backlog=SERVER_BACKLOG_DEFAULT):
+    """Return the Phase 5 host/deployment fields recorded with every run."""
+    somaxconn = _read_sysctl_int("/proc/sys/net/core/somaxconn")
+    rmem_min, rmem_default, rmem_max = _read_sysctl_triple(
+        "/proc/sys/net/ipv4/tcp_rmem"
+    )
+    wmem_min, wmem_default, wmem_max = _read_sysctl_triple(
+        "/proc/sys/net/ipv4/tcp_wmem"
+    )
+    effective_backlog = (
+        min(server_backlog, somaxconn) if somaxconn > 0 else server_backlog
+    )
+    return {
+        "somaxconn": somaxconn,
+        "effective_backlog": effective_backlog,
+        "tcp_rmem_min": rmem_min,
+        "tcp_rmem_default": rmem_default,
+        "tcp_rmem_max": rmem_max,
+        "tcp_wmem_min": wmem_min,
+        "tcp_wmem_default": wmem_default,
+        "tcp_wmem_max": wmem_max,
+        "cpu_governor": _read_cpu_governor(),
+    }
+
+
+def check_environment(hardware, server_backlog=SERVER_BACKLOG_DEFAULT,
+                      server_max_connections=SERVER_BACKLOG_DEFAULT,
+                      require_governor=False, expect_cores=0,
+                      expect_cpus=None):
+    """Return a list of unmet environment requirements (empty means pass).
+
+    Each entry names the exact requirement so `--check-env` can exit non-zero
+    with an actionable message instead of producing a noisy, incomparable run.
+    """
+    unmet = []
+
+    somaxconn = int(hardware.get("somaxconn", 0) or 0)
+    if somaxconn < server_backlog:
+        unmet.append(
+            "somaxconn=%d is below the configured backlog=%d; raise "
+            "net.core.somaxconn" % (somaxconn, server_backlog)
+        )
+
+    required_nofile = (
+        server_max_connections + NOFILE_HEADROOM +
+        NOFILE_PER_LOOP * max(1, int(hardware.get("cpu_logical_cores", 1) or 1))
+    )
+    nofile_soft = int(hardware.get("ulimit_nofile_soft", 0) or 0)
+    if nofile_soft < required_nofile:
+        unmet.append(
+            "ulimit_nofile_soft=%d is below the required %d "
+            "(max-connections=%d + headroom=%d + %d/loop * cores=%d); raise "
+            "ulimit -n / LimitNOFILE" % (
+                nofile_soft, required_nofile, server_max_connections,
+                NOFILE_HEADROOM, NOFILE_PER_LOOP,
+                int(hardware.get("cpu_logical_cores", 1) or 1),
+            )
+        )
+
+    if expect_cores:
+        logical = int(hardware.get("cpu_logical_cores", 0) or 0)
+        if logical != expect_cores:
+            unmet.append(
+                "expected %d logical cores but found %d" % (expect_cores, logical)
+            )
+
+    if require_governor:
+        governor = str(hardware.get("cpu_governor", "unknown") or "unknown")
+        if governor != "performance":
+            unmet.append(
+                "cpu_governor=%s is not 'performance'; run "
+                "`cpupower frequency-set -g performance` (or the sysfs "
+                "equivalent)" % governor
+            )
+
+    if expect_cpus:
+        try:
+            allowed = os.sched_getaffinity(0)
+        except (AttributeError, OSError):
+            allowed = None
+        if allowed is None:
+            unmet.append(
+                "requested pinning to CPUs %s but this platform does not "
+                "expose sched_getaffinity" % expect_cpus
+            )
+        else:
+            requested = _parse_cpu_list(expect_cpus)
+            if requested is None:
+                unmet.append("--expect-cpus=%s is not a valid CPU list" % expect_cpus)
+            elif not requested.issubset(allowed):
+                missing = sorted(requested - allowed)
+                unmet.append(
+                    "requested CPUs %s are not all in the current affinity mask "
+                    "(missing %s); pin with taskset first" % (
+                        expect_cpus,
+                        ",".join(str(cpu) for cpu in missing),
+                    )
+                )
+
+    return unmet
+
+
+def _parse_cpu_list(spec):
+    """Parse a taskset-style CPU list ('0-3,8') into a set, or None if invalid."""
+    cpus = set()
+    for part in str(spec).split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "-" in part:
+            first, separator, last = part.partition("-")
+            if not separator:
+                return None
+            try:
+                first_i, last_i = int(first), int(last)
+            except ValueError:
+                return None
+            if first_i < 0 or last_i < first_i:
+                return None
+            cpus.update(range(first_i, last_i + 1))
+        else:
+            try:
+                cpu = int(part)
+            except ValueError:
+                return None
+            if cpu < 0:
+                return None
+            cpus.add(cpu)
+    return cpus or None
+
+
+def pin_current_process(cpu_spec):
+    """Pin this process to a taskset-style CPU list; raise on failure."""
+    cpus = _parse_cpu_list(cpu_spec)
+    if cpus is None:
+        raise ValueError("--client-cpus=%s is not a valid CPU list" % cpu_spec)
+    try:
+        os.sched_setaffinity(0, cpus)
+    except (AttributeError, OSError) as exc:
+        raise RuntimeError(
+            "could not pin client to CPUs %s: %s" % (cpu_spec, exc)
+        )
+
+
 def _read_compiler_flags():
     """Return normalized server compiler flags when compile_commands is present."""
     repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -232,7 +424,7 @@ def _read_compiler_flags():
     return os.environ.get("CFLAGS", "unknown")
 
 
-def hardware_fingerprint():
+def hardware_fingerprint(server_backlog=SERVER_BACKLOG_DEFAULT):
     records = _cpuinfo_records()
     logical_cores = os.cpu_count() or len(records) or 1
     model = next((record.get("model name") or record.get("Processor")
@@ -287,6 +479,7 @@ def hardware_fingerprint():
         "ulimit_nofile_hard": nofile_hard,
         "page_size_kb": page_size_kb,
     }
+    fingerprint.update(environment_fingerprint(server_backlog))
     machine_material = "|".join(str(fingerprint[key]) for key in (
         "cpu_model", "cpu_logical_cores", "cpu_physical_cores",
         "memory_total_kb", "page_size_kb",
@@ -902,6 +1095,12 @@ def read_server_metrics(path):
         "server_admission_rejected_table_full": 0,
         "server_backlog_depth": 0,
         "server_backlog_depth_max": 0,
+        "server_listen_drops": 0,
+        "server_accept_errors": 0,
+        "server_accept_error_emfile": 0,
+        "server_accept_error_enfile": 0,
+        "server_accept_error_econnaborted": 0,
+        "server_accept_error_other": 0,
         "server_el_loops": 0,
         "server_el_loop_wakeups": "",
         "server_el_loop_accepted": "",
@@ -945,6 +1144,12 @@ def read_server_metrics(path):
         "server_admission_rejected_table_full": "admission_rejected_table_full",
         "server_backlog_depth": "backlog_depth",
         "server_backlog_depth_max": "backlog_depth_max",
+        "server_listen_drops": "listen_drops",
+        "server_accept_errors": "accept_errors",
+        "server_accept_error_emfile": "accept_error_emfile",
+        "server_accept_error_enfile": "accept_error_enfile",
+        "server_accept_error_econnaborted": "accept_error_econnaborted",
+        "server_accept_error_other": "accept_error_other",
         "server_el_loops": "el_loops",
     }
     for field, key in mapping.items():
@@ -1377,6 +1582,23 @@ def parse_args(argv):
                         help="JSON metrics snapshot written by the server")
     parser.add_argument("--print-hardware", action="store_true",
                         help="print hardware metadata and exit without load")
+    parser.add_argument("--check-env", action="store_true",
+                        help="verify the host environment and exit non-zero when "
+                             "a requirement is unmet")
+    parser.add_argument("--require-governor", action="store_true",
+                        help="with --check-env, require the performance governor")
+    parser.add_argument("--expect-cores", type=int, default=0,
+                        help="with --check-env, required logical-core count")
+    parser.add_argument("--expect-cpus", default=None,
+                        help="with --check-env, required CPU affinity list, e.g. 0-3")
+    parser.add_argument("--server-backlog", type=int, default=SERVER_BACKLOG_DEFAULT,
+                        help="server BACKLOG used to derive the effective backlog")
+    parser.add_argument("--server-max-connections", type=int, default=1024,
+                        help="server MAX_ACTIVE_CONNECTIONS for the ulimit check")
+    parser.add_argument("--server-cpus", default=None,
+                        help="pin the server process with taskset -c (e.g. 0-3)")
+    parser.add_argument("--client-cpus", default=None,
+                        help="pin this load generator with sched_setaffinity (e.g. 4-7)")
     parser.add_argument("--calibrate", choices=("on", "off", "only"), default="on",
                         help="calibrate the host, skip calibration, or calibrate and exit")
     parser.add_argument("--calibrate-force", action="store_true",
@@ -1429,7 +1651,7 @@ def parse_args(argv):
     else:
         args.specs, _ = build_specs(args)
 
-    if args.print_hardware or args.calibrate == "only":
+    if args.print_hardware or args.calibrate == "only" or args.check_env:
         if args.calibration_seconds <= 0:
             parser.error("--calibration-seconds must be greater than zero")
         return args
@@ -1446,13 +1668,29 @@ def parse_args(argv):
 
 def main(argv=None):
     args = parse_args(argv)
-    hardware = hardware_fingerprint()
+    hardware = hardware_fingerprint(args.server_backlog)
     calibration = None
     server = None
     metrics_file = args.server_metrics_file
     created_metrics_file = None
     monitor = None
     try:
+        if args.check_env:
+            unmet = check_environment(
+                hardware,
+                server_backlog=args.server_backlog,
+                server_max_connections=args.server_max_connections,
+                require_governor=args.require_governor,
+                expect_cores=args.expect_cores,
+                expect_cpus=args.expect_cpus,
+            )
+            print(json.dumps(hardware, sort_keys=True))
+            if unmet:
+                for requirement in unmet:
+                    print("FAIL: %s" % requirement, file=sys.stderr)
+                return 1
+            print("environment check passed")
+            return 0
         if args.print_hardware:
             print(json.dumps(hardware, sort_keys=True))
             if args.calibrate != "only":
@@ -1477,6 +1715,9 @@ def main(argv=None):
             }, sort_keys=True))
             return 0
 
+        if args.client_cpus:
+            pin_current_process(args.client_cpus)
+
         if not metrics_file:
             fd, metrics_file = tempfile.mkstemp(prefix="http_server_metrics_", suffix=".json")
             os.close(fd)
@@ -1490,10 +1731,18 @@ def main(argv=None):
             env = dict(os.environ)
             env["HTTP_SERVER_ACCESS_LOG"] = "0"
             env["HTTP_SERVER_METRICS_FILE"] = metrics_file
-            server = subprocess.Popen(
-                [args.server], cwd=os.getcwd(), env=env,
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            )
+            command = [args.server]
+            if args.server_cpus:
+                command = ["taskset", "-c", args.server_cpus] + command
+            try:
+                server = subprocess.Popen(
+                    command, cwd=os.getcwd(), env=env,
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                )
+            except FileNotFoundError:
+                raise RuntimeError(
+                    "--server-cpus=%s requires the taskset(1) utility on PATH"
+                    % args.server_cpus)
             wait_for_server(args.host, args.port, 5.0)
             if server.poll() is not None:
                 raise RuntimeError(
