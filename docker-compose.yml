@@ -28,6 +28,27 @@ services:
     # Other options: 'no', 'on-failure[:max-retries]', 'always'
     restart: unless-stopped
 
+    # Resource envelope. The server preflights RLIMIT_NOFILE against its
+    # connection budget (MAX_ACTIVE_CONNECTIONS + headroom + 3 per event loop),
+    # so the limits here must comfortably exceed that budget or startup is
+    # refused. 65536 leaves headroom for 1024 active connections plus several
+    # event loops. somaxconn must be at least BACKLOG (default 1024) so the
+    # listen backlog is not silently truncated.
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    sysctls:
+      net.core.somaxconn: "4096"
+
+    # Cap CPU and memory to the documented envelope so a run is reproducible.
+    # `cpus` and `mem_limit` are the Compose service-level limits honored by
+    # `docker compose up`. taskset-style pinning is not available here; the
+    # server still auto-detects the visible CPUs.
+    cpus: 2.0
+    mem_limit: 512m
+    pids_limit: 512
+
     # (Optional) Define Networks - Compose creates a default one if omitted.
     # networks:
     #  - app_network
