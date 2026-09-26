@@ -9,7 +9,7 @@
 
 ## Tests
 
-- Focused suites do not need a running server: `./bin/run_tests ring` and `./bin/run_tests thread_pool`.
+- Focused suites do not need a running server: `./bin/run_tests ring`.
 - The server suite is selected with `./bin/run_tests server` and requires `./bin/http_server` running on `127.0.0.1:8081`. Bare `./bin/run_tests` runs all suites and therefore has the same prerequisite.
 - Run the server integration suite from the repository root:
   ```bash
@@ -33,7 +33,7 @@
 ## Runtime
 
 - `./bin/http_server` must be launched from the repository root because static files (`home.html` and `hello.html`) are opened via relative paths. The default port is `8081`.
-- The default build runs nonblocking epoll event loops (`USE_EVENT_LOOP=1` in `include/server_config.h`), not the older blocking thread-pool dispatch path. It starts one loop per online CPU core by default (`EL_THREAD_COUNT=0` auto-detects; a positive value overrides, and `1` is the single-loop control) and each loop binds a `SO_REUSEPORT` listener.
+- The server runs nonblocking epoll event loops. It starts one loop per online CPU core by default (`EL_THREAD_COUNT=0` auto-detects; a positive value overrides, and `1` is the single-loop control) and each loop binds a `SO_REUSEPORT` listener.
 - Benchmark runs can use `HTTP_SERVER_METRICS_FILE=<path>` for server metrics; benchmark output is appended under `benchmarks/`.
 - Startup preflights the host: it prints/raises `RLIMIT_NOFILE` and refuses to start unless the effective soft limit is at least `MAX_ACTIVE_CONNECTIONS + REQUIRED_NOFILE_HEADROOM + REQUIRED_NOFILE_PER_LOOP × event-loop-count`. `HTTP_SERVER_CPU_SET` (taskset list, e.g. `0-3`) pins the server; invalid ranges are fatal.
 - `python3 scripts/http_benchmark.py --check-env` verifies ulimit, `net.core.somaxconn`, core count, and (with `--require-governor`) the CPU governor; it exits non-zero naming the unmet requirement. `scripts/run_benchmark_pinned.sh` pins server/generator to disjoint CPU sets before running the matrix.
@@ -47,4 +47,4 @@
 
 - `src/main.c` owns socket setup, signal handling, accept/admission control, and dispatch selection.
 - `src/event_loop.c` owns the default nonblocking epoll connection state machine; `src/http_server.c` owns HTTP parsing, static responses, keep-alive, and gzip handling.
-- `src/ring_buffer.c`, `src/thread_pool.c`, and `src/metrics.c` provide buffering, the legacy Phase 2 worker pool, and runtime metrics respectively.
+- `src/ring_buffer.c` and `src/metrics.c` provide buffering and runtime metrics respectively.

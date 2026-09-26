@@ -17,6 +17,18 @@ static inline size_t min_size(size_t a, size_t b) {
     return (a < b) ? a : b;
 }
 
+// Copies `len` bytes starting at the read cursor into `dest` without advancing
+// it, handling the two-part wrap around the physical end of the buffer.
+static void copy_from_tail(const RingBuffer *rb, char *dest, size_t len) {
+    size_t to_end = rb->capacity - rb->tail;
+    if (len <= to_end) {
+        memcpy(dest, rb->buffer + rb->tail, len);
+        return;
+    }
+    memcpy(dest, rb->buffer + rb->tail, to_end);
+    memcpy(dest + to_end, rb->buffer, len - to_end);
+}
+
 // Invariant checker used by assertions after every mutation in debug builds.
 int ring_buffer_validate(const RingBuffer *rb) {
     if (!rb || !rb->buffer || rb->capacity == 0) { return 0; }
@@ -195,21 +207,11 @@ size_t ring_buffer_read(RingBuffer *rb, char *dest, size_t dest_len) {
 
     // Cap read length to available data
     size_t bytes_to_read = min_size(dest_len, rb->size);
-    size_t to_end = rb->capacity - rb->tail;
+    copy_from_tail(rb, dest, bytes_to_read);
 
-    if (bytes_to_read <= to_end) {
-        // Continuous read
-        memcpy(dest, rb->buffer + rb->tail, bytes_to_read);
-        rb->tail += bytes_to_read;
-        if (rb->tail == rb->capacity) { rb->tail = 0;
+    rb->tail += bytes_to_read;
+    if (rb->tail >= rb->capacity) { rb->tail -= rb->capacity;
 }
-    } else {
-        // Wrap-around read
-        memcpy(dest, rb->buffer + rb->tail, to_end);
-        memcpy(dest + to_end, rb->buffer, bytes_to_read - to_end);
-        rb->tail = bytes_to_read - to_end;
-    }
-
     rb->size -= bytes_to_read;
 
     assert(ring_buffer_validate(rb));
@@ -221,15 +223,7 @@ size_t ring_buffer_peek(const RingBuffer *rb, char *dest, size_t dest_len) {
 }
 
     size_t bytes_to_peek = min_size(dest_len, rb->size);
-    size_t to_end = rb->capacity - rb->tail;
-
-    if (bytes_to_peek <= to_end) {
-        memcpy(dest, rb->buffer + rb->tail, bytes_to_peek);
-    } else {
-        memcpy(dest, rb->buffer + rb->tail, to_end);
-        memcpy(dest + to_end, rb->buffer, bytes_to_peek - to_end);
-    }
-
+    copy_from_tail(rb, dest, bytes_to_peek);
     return bytes_to_peek;
 }
 
@@ -324,13 +318,7 @@ RingLineResult ring_buffer_readline(RingBuffer *rb, char *line_buffer,
     // because the *full* line (including \r\n) must be discarded even when
     // only a truncated prefix is copied to line_buffer.
 
-    size_t part1_len = min_size(bytes_to_copy, rb->capacity - rb->tail);
-    memcpy(line_buffer, rb->buffer + rb->tail, part1_len);
-    
-    if (bytes_to_copy > part1_len) {
-        memcpy(line_buffer + part1_len, rb->buffer, bytes_to_copy - part1_len);
-    }
-    
+    copy_from_tail(rb, line_buffer, bytes_to_copy);
     line_buffer[bytes_to_copy] = '\0';
 
     // Discard the processed line from the ring buffer

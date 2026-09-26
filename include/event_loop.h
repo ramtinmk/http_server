@@ -6,16 +6,6 @@
 #include <time.h>
 #include <signal.h>
 
-/* Maximum epoll events retrieved per epoll_wait call. */
-#ifndef EL_MAX_EVENTS
-#define EL_MAX_EVENTS 256
-#endif
-
-/* How often (ms) to scan for expired connection deadlines. */
-#ifndef EL_DEADLINE_SCAN_MS
-#define EL_DEADLINE_SCAN_MS 100
-#endif
-
 /* ------------------------------------------------------------------ */
 /* Connection lifecycle states                                          */
 /* ------------------------------------------------------------------ */
@@ -23,7 +13,6 @@ typedef enum {
     CONN_READING_HEADERS,   /* Waiting for first complete request headers. */
     CONN_KEEP_ALIVE,        /* Between requests; waiting for next request.  */
     CONN_WRITING,           /* Sending response data.                       */
-    CONN_CLOSING            /* Pending close; do not register new events.   */
 } ELConnState;
 
 /* ------------------------------------------------------------------ */
@@ -34,7 +23,6 @@ typedef enum {
     CLOSE_DEADLINE,
     CLOSE_PROTOCOL_ERROR,
     CLOSE_WRITE_ERROR,
-    CLOSE_PIPELINE_LIMIT,
     CLOSE_KEEPALIVE_LIMIT,
     CLOSE_BUFFER_FULL,
     CLOSE_SHUTDOWN
@@ -67,9 +55,6 @@ typedef struct ELConnection {
 
     /* Monotonic deadline (CLOCK_MONOTONIC) */
     struct timespec deadline;
-
-    /* Diagnostics */
-    ELCloseReason  close_reason;
 
     /* Intrusive free list linkage */
     struct ELConnection *next;

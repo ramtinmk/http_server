@@ -71,12 +71,8 @@ if(TEST_SOURCES)
     
     message(STATUS "Test runner configured with sources: ${TEST_SOURCES}")
 
-    # add_test(NAME ring_buffer_tests COMMAND run_tests ring)
-    # add_test(NAME thread_pool_tests COMMAND run_tests thread_pool)
     add_test(NAME unit_tests COMMAND run_tests)
     set_tests_properties(
-        # ring_buffer_tests
-        # thread_pool_tests
         unit_tests
         PROPERTIES WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     )

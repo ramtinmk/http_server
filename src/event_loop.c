@@ -188,6 +188,13 @@ static int epoll_set_ro(EventLoop *loop, ELConnection *c)
     return epoll_mod(loop, c, EPOLLIN);
 }
 
+/* Enter the writing state and arm the response write deadline. */
+static void mark_writing(ELConnection *c)
+{
+    c->state = CONN_WRITING;
+    deadline_set(&c->deadline, WRITE_TIMEOUT_SEC);
+}
+
 /* ------------------------------------------------------------------ */
 /* Listener backpressure                                                */
 /* ------------------------------------------------------------------ */
@@ -300,10 +307,6 @@ static void drain_socket(int fd)
 /* ------------------------------------------------------------------ */
 static void conn_close(EventLoop *loop, ELConnection *c, ELCloseReason reason)
 {
-    c->close_reason = reason;
-    ELConnState prev_state = c->state;
-    c->state = CONN_CLOSING;
-
     epoll_ctl(loop->epoll_fd, EPOLL_CTL_DEL, c->fd, NULL);
     if (reason != CLOSE_SHUTDOWN) {
         drain_socket(c->fd);
@@ -311,20 +314,14 @@ static void conn_close(EventLoop *loop, ELConnection *c, ELCloseReason reason)
     close(c->fd);
     metrics_active_connection_dec();
 
-    switch (reason) {
-    case CLOSE_DEADLINE:
-        if (prev_state == CONN_WRITING) {
+    if (reason == CLOSE_DEADLINE) {
+        if (c->state == CONN_WRITING) {
             metrics_write_timeout();
         } else if (c->request_count == 0) {
             metrics_header_timeout();
         } else {
             metrics_idle_timeout();
         }
-        break;
-    case CLOSE_WRITE_ERROR:
-        break;
-    default:
-        break;
     }
 
     conn_buffer_release(c);
@@ -350,9 +347,8 @@ static int conn_open(EventLoop *loop, int fd)
 
     c->fd    = fd;
     c->state = CONN_READING_HEADERS;
-    /* Input storage is allocated lazily on the first readable event so idle
-     * connections do not pin a request buffer. */
-    c->in_buf = NULL;
+    /* in_buf is left NULL by conn_alloc and allocated lazily on the first
+     * readable event, so idle connections do not pin a request buffer. */
 
     int one = 1;
     setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
@@ -501,6 +497,39 @@ static void el_accept(EventLoop *loop)
     }
 }
 
+/*
+ * Send buf[*off .. *off+len) until the socket accepts all of it. Returns
+ * 0 when fully sent, 1 when the caller should retry on a later writable
+ * event (partial write, zero-length send, or EAGAIN), and -1 on a fatal
+ * send error. `*off` is advanced by the number of bytes accepted.
+ */
+static int send_slice(int fd, const unsigned char *buf, size_t *off, size_t len)
+{
+    size_t rem = len - *off;
+    while (rem > 0) {
+        ssize_t n = send(fd, buf + *off, rem, MSG_NOSIGNAL);
+        if (n > 0) {
+            *off += (size_t)n;
+            rem  -= (size_t)n;
+            if (rem > 0) {
+                metrics_el_partial_write();
+                return 1;
+            }
+            return 0;
+        }
+        if (n == 0)
+            return 1;
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            metrics_el_eagain();
+            return 1;
+        }
+        if (errno == EINTR)
+            continue;
+        return -1;
+    }
+    return 0;
+}
+
 /* ------------------------------------------------------------------ */
 /* el_writable                                                          */
 /* ------------------------------------------------------------------ */
@@ -515,8 +544,7 @@ static void el_writable(EventLoop *loop, ELConnection *c)
             if (c->fd < 0)
                 return;
             if (c->pq_count > 0) {
-                c->state = CONN_WRITING;
-                deadline_set(&c->deadline, WRITE_TIMEOUT_SEC);
+                mark_writing(c);
             }
         }
 
@@ -526,57 +554,24 @@ static void el_writable(EventLoop *loop, ELConnection *c)
         PendingResponse *pr = pq_head_ptr(c);
 
         /* --- Send headers --- */
-        size_t hdr_rem = pr->header_len - c->out_header_sent;
-        while (hdr_rem > 0) {
-            ssize_t n = send(c->fd, pr->header + c->out_header_sent,
-                             hdr_rem, MSG_NOSIGNAL);
-            if (n > 0) {
-                c->out_header_sent += (size_t)n;
-                hdr_rem            -= (size_t)n;
-                if (hdr_rem > 0) {
-                    metrics_el_partial_write();
-                    return;
-                }
-            } else if (n == 0) {
-                return;
-            } else {
-                if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                    metrics_el_eagain();
-                    return;
-                }
-                if (errno == EINTR)
-                    continue;
-                conn_close(loop, c, CLOSE_WRITE_ERROR);
-                return;
-            }
+        int s = send_slice(c->fd, (const unsigned char *)pr->header,
+                           &c->out_header_sent, pr->header_len);
+        if (s < 0) {
+            conn_close(loop, c, CLOSE_WRITE_ERROR);
+            return;
         }
+        if (s > 0)
+            return;
 
         /* --- Send body --- */
         if (!pr->is_head && pr->body_len > 0) {
-            size_t body_rem = pr->body_len - c->out_body_sent;
-            while (body_rem > 0) {
-                ssize_t n = send(c->fd, pr->body + c->out_body_sent,
-                                 body_rem, MSG_NOSIGNAL);
-                if (n > 0) {
-                    c->out_body_sent += (size_t)n;
-                    body_rem         -= (size_t)n;
-                    if (body_rem > 0) {
-                        metrics_el_partial_write();
-                        return;
-                    }
-                } else if (n == 0) {
-                    return;
-                } else {
-                    if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                        metrics_el_eagain();
-                        return;
-                    }
-                    if (errno == EINTR)
-                        continue;
-                    conn_close(loop, c, CLOSE_WRITE_ERROR);
-                    return;
-                }
+            s = send_slice(c->fd, pr->body, &c->out_body_sent, pr->body_len);
+            if (s < 0) {
+                conn_close(loop, c, CLOSE_WRITE_ERROR);
+                return;
             }
+            if (s > 0)
+                return;
         }
 
         /* --- Response fully sent --- */
@@ -667,15 +662,11 @@ static void el_readable(EventLoop *loop, ELConnection *c)
         return;
 
     if (c->pq_count > 0 && c->state != CONN_WRITING) {
-        c->state = CONN_WRITING;
-        deadline_set(&c->deadline, WRITE_TIMEOUT_SEC);
+        mark_writing(c);
         epoll_set_rw(loop, c);
     }
 }
 
-/* ------------------------------------------------------------------ */
-/* el_scan_deadlines                                                    */
-/* ------------------------------------------------------------------ */
 /* ------------------------------------------------------------------ */
 /* Listener drop sampling (Phase 5)                                     */
 /* ------------------------------------------------------------------ */
@@ -807,11 +798,14 @@ static void sample_listen_drops(ListenDropState *state, int listen_fd)
     state->last = current;
 }
 
+/* ------------------------------------------------------------------ */
+/* el_scan_deadlines                                                    */
+/* ------------------------------------------------------------------ */
 static void el_scan_deadlines(EventLoop *loop)
 {
     for (size_t i = 0; i < loop->pool_size; i++) {
         ELConnection *c = &loop->pool[i];
-        if (c->fd < 0 || c->state == CONN_CLOSING)
+        if (c->fd < 0)
             continue;
         if (deadline_expired(&c->deadline)) {
             metrics_el_deadline_close();
@@ -899,48 +893,6 @@ static int el_set_nonblocking(int fd)
     if (flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0)
         return -1;
     return 0;
-}
-
-/*
- * Create an additional listening socket for a loop. SO_REUSEPORT lets several
- * loops bind the same address so the kernel hashes new connections across
- * them, avoiding a userspace acceptor and its fd handoff.
- */
-static int create_reuseport_listener(void)
-{
-    int fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (fd < 0) {
-        perror("socket reuseport");
-        return -1;
-    }
-
-    int fl = fcntl(fd, F_GETFD);
-    if (fl >= 0)
-        fcntl(fd, F_SETFD, fl | FD_CLOEXEC);
-
-    int one = 1;
-    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
-#ifdef SO_REUSEPORT
-    setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &one, sizeof(one));
-#endif
-
-    struct sockaddr_in addr;
-    memset(&addr, 0, sizeof(addr));
-    addr.sin_family      = AF_INET;
-    addr.sin_port        = htons(PORT);
-    addr.sin_addr.s_addr = INADDR_ANY;
-
-    if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-        perror("bind reuseport");
-        close(fd);
-        return -1;
-    }
-    if (listen(fd, BACKLOG) < 0) {
-        perror("listen reuseport");
-        close(fd);
-        return -1;
-    }
-    return fd;
 }
 
 static int loop_init(EventLoop *loop, int listen_fd, long capacity,
@@ -1065,7 +1017,7 @@ int event_loop_run(int server_fd, volatile sig_atomic_t *running, long capacity,
 
     int status = 0;
     for (int i = 0; i < nloops; i++) {
-        int lfd = (i == 0) ? server_fd : create_reuseport_listener();
+        int lfd = (i == 0) ? server_fd : create_server_socket(1);
         if (lfd < 0) {
             status = -1;
             nloops = i; /* only initialise loops created so far */

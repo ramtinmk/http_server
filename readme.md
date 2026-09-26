@@ -8,13 +8,10 @@ benchmark target.
 
 ## Architecture
 
-- **Default dispatch:** nonblocking `epoll` event loop (`USE_EVENT_LOOP=1` in
-  `include/server_config.h`). One event loop runs per online CPU core by default
-  (`EL_THREAD_COUNT=0` auto-detects; set a positive value to override), and each
-  loop owns a `SO_REUSEPORT` listener so the kernel hashes new connections
-  across them.
-- **Legacy dispatch:** build with `USE_EVENT_LOOP=0` to run the Phase 2 blocking
-  thread pool instead.
+- **Dispatch:** nonblocking `epoll` event loop. One event loop runs per online
+  CPU core by default (`EL_THREAD_COUNT=0` auto-detects; set a positive value to
+  override), and each loop owns a `SO_REUSEPORT` listener so the kernel hashes
+  new connections across them.
 - **HTTP:** HTTP/1.1 keep-alive with Content-Length framing, request pipelining
   (up to `MAX_PIPELINE_DEPTH`, default 16), and error responses for
   `400`, `404`, `413`, and `501`.
@@ -25,7 +22,8 @@ benchmark target.
   keep-alive request cap, and read/idle/write timeouts (see
   `include/server_config.h` for every value and its default).
 - **Metrics:** set `HTTP_SERVER_METRICS_FILE=<path>` to emit periodic runtime
-  snapshots (connections, CPU/RSS, queue depth, rejected tasks, retransmits).
+  snapshots (connections, response status distribution, timeouts, event-loop
+  counters).
 
 ## Build
 
@@ -62,7 +60,6 @@ Unit suites do not need a running server:
 
 ```
 ./bin/run_tests ring
-./bin/run_tests thread_pool
 ctest --output-on-failure
 ```
 
@@ -278,9 +275,8 @@ HPIN_SERVER_CPUS=0-1 HPIN_CLIENT_CPUS=2-3 ./scripts/run_benchmark_pinned.sh
 65536, `net.core.somaxconn=4096`, 2 CPU / 512 MiB limits, and a 512-process
 `pids_limit`.
 
-The fixed measurement envelope is `BACKLOG=1024`, `MAX_ACTIVE_CONNECTIONS=1024`
-(legacy `THREAD_POOL_SIZE=16` on the `USE_EVENT_LOOP=0` path), matrix
-`--concurrency 32`, and the descriptor ceiling above; compose runs report
+The fixed measurement envelope is `BACKLOG=1024`, `MAX_ACTIVE_CONNECTIONS=1024`,
+matrix `--concurrency 32`, and the descriptor ceiling above; compose runs report
 envelope-normalized numbers because the CPU/memory cap, not the bare host,
 bounds them. Require the performance governor for comparable runs:
 `cpupower frequency-set -g performance`, or write `performance` to each
@@ -291,8 +287,8 @@ bounds them. Require the performance governor for comparable runs:
 | Phase | Focus                                    | Status                                             |
 |-------|------------------------------------------|----------------------------------------------------|
 | 1     | HTTP/1.1 protocol compliance             | Done — parsing, keep-alive, 400/404/413/501        |
-| 2     | Concurrency: thread pool (`pthread`)     | Done — retained as the `USE_EVENT_LOOP=0` path     |
-| 3     | Nonblocking `epoll` event loop           | Done — default dispatch                            |
+| 2     | Concurrency: thread pool (`pthread`)     | Removed — superseded by the event loop             |
+| 3     | Nonblocking `epoll` event loop           | Done — dispatch                                    |
 | 4     | Multi-loop scaling and backpressure      | Implemented — one loop per CPU core (`SO_REUSEPORT`), capacity admission |
 | 5     | OS and deployment tuning                 | Done — `plans/scaling-plan-phase5.md`              |
 
@@ -306,6 +302,6 @@ listing. See `plans/` for the specifications behind each phase.
 ## Learning milestones
 
 1. **Networking foundations** — Phases 1–3: HTTP/TCP framing and I/O models.
-2. **Systems programming** — Phase 2 + event loop: concurrency and nonblocking I/O.
+2. **Systems programming** — event loop: concurrency and nonblocking I/O.
 3. **Production engineering** — Phases 4–5: scaling limits, backpressure, and
    reproducible measurement.

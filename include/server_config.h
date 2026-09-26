@@ -2,7 +2,7 @@
 #define SERVER_CONFIG_H
 
 /*
- * Phase 2 resource-protection configuration.
+ * Server configuration limits.
  *
  * All limits are documented here so a benchmark result can be reproduced
  * from the values recorded in startup output and metrics snapshots.
@@ -11,25 +11,10 @@
  *   cc -DMAX_ACTIVE_CONNECTIONS=256 ...
  */
 
-/* --- Thread pool -------------------------------------------------------- */
-
-/* Number of worker threads. Test values around available CPU count. */
-#ifndef THREAD_POOL_SIZE
-#define THREAD_POOL_SIZE 16
-#endif
-
-/* Maximum tasks waiting in the queue (beyond the workers actively running).
- * When this is full, new connections are rejected without queuing. */
-#ifndef MAX_QUEUED_TASKS
-#define MAX_QUEUED_TASKS 256
-#endif
-
 /* --- Connection admission ----------------------------------------------- */
 
 /* Maximum simultaneously open (accepted and not yet closed) connections.
- * Must be <= (RLIMIT_NOFILE - REQUIRED_NOFILE_HEADROOM).
- * Setting this higher than THREAD_POOL_SIZE increases queue wait time
- * for connections beyond the worker count; it does not increase parallelism. */
+ * Must be <= (RLIMIT_NOFILE - REQUIRED_NOFILE_HEADROOM). */
 #ifndef MAX_ACTIVE_CONNECTIONS
 #define MAX_ACTIVE_CONNECTIONS 1024
 #endif
@@ -71,7 +56,7 @@
 
 /* Time allowed for a full response to be written to the socket. A slow
  * receiver that cannot drain the TCP buffer within this window is closed,
- * freeing the worker. */
+ * freeing the connection slot. */
 #ifndef WRITE_TIMEOUT_SEC
 #define WRITE_TIMEOUT_SEC 10
 #endif
@@ -115,13 +100,7 @@
  */
 #define ENV_CPU_SET "HTTP_SERVER_CPU_SET"
 
-/* --- Event-loop model selection ---------------------------------------- */
-
-/* Set to 1 to run the Phase 3 single-threaded epoll event loop instead of
- * the Phase 2 blocking thread-pool model.  Set to 0 to revert to Phase 2. */
-#ifndef USE_EVENT_LOOP
-#define USE_EVENT_LOOP 1
-#endif
+/* --- Event loop --------------------------------------------------------- */
 
 /* Maximum epoll events retrieved per epoll_wait call. */
 #ifndef EL_MAX_EVENTS

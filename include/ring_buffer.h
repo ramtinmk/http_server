@@ -2,10 +2,6 @@
 #define RING_BUFFER_H
 
 #include <stddef.h> // For size_t
-#include <string.h>
-#include <stdio.h>
-#include <errno.h>
-#include <stdlib.h>
 
 // --- Configuration ---
 #define INITIAL_RING_BUFFER_CAPACITY 8092

@@ -9,17 +9,17 @@
  *   - Graceful shutdown on SIGINT / SIGTERM.
  */
 #include "http_server.h"
-#include "thread_pool.h"
 #include "metrics.h"
 #include "server_config.h"
-#if USE_EVENT_LOOP
 #include "event_loop.h"
-#endif
 #include <sched.h>
 #include <signal.h>
 #include <errno.h>
 #include <limits.h>
+#include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
 #include <sys/resource.h>
 
 static volatile sig_atomic_t server_running = 1;
@@ -43,8 +43,6 @@ static void print_server_config(void)
     printf("=== Server Configuration ===\n");
     printf("  PORT                  : %d\n",  PORT);
     printf("  BACKLOG               : %d\n",  BACKLOG);
-    printf("  THREAD_POOL_SIZE      : %d\n",  THREAD_POOL_SIZE);
-    printf("  MAX_QUEUED_TASKS      : %d\n",  MAX_QUEUED_TASKS);
     printf("  MAX_ACTIVE_CONNECTIONS: %d\n",  MAX_ACTIVE_CONNECTIONS);
     printf("  MAX_KEEPALIVE_REQUESTS: %d\n",  MAX_KEEPALIVE_REQUESTS);
     printf("  MAX_INPUT_BUFFER_BYTES: %d\n",  MAX_INPUT_BUFFER_BYTES);
@@ -108,6 +106,11 @@ static int read_sysctl_vector(const char *path, long out[3])
  * `rl` holds the effective (post-setrlimit) limit, and the return value is
  * 0 when the effective soft limit meets `required`, -1 otherwise.
  */
+static unsigned long rlim_value(rlim_t value)
+{
+    return value == RLIM_INFINITY ? ULONG_MAX : (unsigned long)value;
+}
+
 static int enforce_nofile_limit(unsigned long required, int el_threads,
                                 struct rlimit *rl)
 {
@@ -116,8 +119,7 @@ static int enforce_nofile_limit(unsigned long required, int el_threads,
         return -1;
     }
 
-    unsigned long before = (rl->rlim_cur == RLIM_INFINITY)
-                               ? ULONG_MAX : (unsigned long)rl->rlim_cur;
+    unsigned long before = rlim_value(rl->rlim_cur);
 
     /* Try to raise the soft limit to the hard limit. EPERM is not fatal: the
      * hard limit may be lower than we want, which the check below catches. */
@@ -137,14 +139,10 @@ static int enforce_nofile_limit(unsigned long required, int el_threads,
         }
     }
 
-    unsigned long effective = (rl->rlim_cur == RLIM_INFINITY)
-                                  ? ULONG_MAX : (unsigned long)rl->rlim_cur;
+    unsigned long effective = rlim_value(rl->rlim_cur);
 
     printf("  FD limit: soft=%lu (was %lu), hard=%lu, required>=%lu\n",
-           effective, before,
-           (rl->rlim_max == RLIM_INFINITY) ? ULONG_MAX
-                                           : (unsigned long)rl->rlim_max,
-           required);
+           effective, before, rlim_value(rl->rlim_max), required);
 
     if (effective < required) {
         fprintf(stderr,
@@ -213,16 +211,6 @@ static int validate_configuration(int el_threads, long capacity)
     }
     if (BACKLOG <= 0) {
         fprintf(stderr, "FATAL: BACKLOG=%d must be positive\n", BACKLOG);
-        return -1;
-    }
-    if (THREAD_POOL_SIZE <= 0) {
-        fprintf(stderr, "FATAL: THREAD_POOL_SIZE=%d must be positive\n",
-                THREAD_POOL_SIZE);
-        return -1;
-    }
-    if (MAX_QUEUED_TASKS < 0) {
-        fprintf(stderr, "FATAL: MAX_QUEUED_TASKS=%d must not be negative\n",
-                MAX_QUEUED_TASKS);
         return -1;
     }
     if (MAX_ACTIVE_CONNECTIONS <= 0) {
@@ -455,11 +443,7 @@ int main(void)
 
     /* Resolve how many event loops to run: explicit override or one per core.
      * Needed before the descriptor preflight so per-loop fds are reserved. */
-#if USE_EVENT_LOOP
     int el_threads = event_loop_thread_count();
-#else
-    int el_threads = 1;
-#endif
 
     /* Raise the soft descriptor limit as far as the hard limit allows and
      * fail clearly when the effective limit cannot cover the configured
@@ -497,97 +481,18 @@ int main(void)
     /* Bind and listen; SO_REUSEPORT is required when several loops share the
      * port, and deliberately omitted for the single-loop control. */
     server_socket = create_server_socket(el_threads > 1);
+    if (server_socket < 0) {
+        return EXIT_FAILURE;
+    }
     printf("Server listening on port %d...\n", PORT);
 
-#if USE_EVENT_LOOP
-    /* ------------------------------------------------------------------ */
-    /* Phase 3/4: nonblocking epoll event loops.                           */
-    /* One loop runs per online CPU core (or the EL_THREAD_COUNT override). */
-    /* Values > 1 add SO_REUSEPORT listeners so the kernel distributes new  */
-    /* connections; each loop exclusively owns the sockets it accepts.      */
-    /* ------------------------------------------------------------------ */
-    printf("Dispatch model: epoll event loop (Phase 4, %d loop%s, "
-           "capacity=%ld).\n",
+    printf("Dispatch model: epoll event loop (%d loop%s, capacity=%ld).\n",
            el_threads, el_threads == 1 ? "" : "s", capacity);
     event_loop_run(server_socket, &server_running, capacity, el_threads);
 
     printf("\nShutting down server gracefully...\n");
     close(server_socket);
     metrics_reporter_stop();
-
-#else
-    /* ------------------------------------------------------------------ */
-    /* Phase 2: blocking thread-pool model.                                */
-    /* ------------------------------------------------------------------ */
-    struct sockaddr_in client_addr;
-    socklen_t addr_size = sizeof(client_addr);
-
-    ThreadPool *thread_pool = create_thread_pool(THREAD_POOL_SIZE);
-    if (thread_pool == NULL) {
-        fprintf(stderr, "Failed to create thread pool\n");
-        return EXIT_FAILURE;
-    }
-    printf("Thread pool initialized with %d threads (queue max: %d).\n",
-           THREAD_POOL_SIZE, MAX_QUEUED_TASKS);
-    printf("Dispatch model: blocking thread pool (Phase 2).\n");
-
-    /* ---------- Accept loop -------------------------------------------- */
-    while (server_running) {
-#ifdef SOCK_CLOEXEC
-        client_socket = accept4(server_socket,
-                                (struct sockaddr *)&client_addr,
-                                &addr_size,
-                                SOCK_CLOEXEC);
-#else
-        client_socket = accept(server_socket,
-                               (struct sockaddr *)&client_addr,
-                               &addr_size);
-        if (client_socket >= 0) {
-            int fl = fcntl(client_socket, F_GETFD);
-            if (fl >= 0) {
-                fcntl(client_socket, F_SETFD, fl | FD_CLOEXEC);
-            }
-        }
-#endif
-        if (client_socket == -1) {
-            if (errno == EINTR) break;
-            /* Phase 5: file accept failures by errno for overload diagnosis. */
-            if (errno != EAGAIN && errno != EWOULDBLOCK)
-                metrics_accept_error(errno);
-            perror("accept");
-            continue;
-        }
-
-        metrics_connection_accepted();
-
-        if (access_log) {
-            printf("Client connected: %s:%d\n",
-                   inet_ntoa(client_addr.sin_addr),
-                   ntohs(client_addr.sin_port));
-        }
-
-        if (metrics_active_connection_count() >= capacity) {
-            metrics_admission_rejected();
-            close(client_socket);
-            continue;
-        }
-
-        metrics_active_connection_inc();
-
-        if (add_task_to_queue(thread_pool, client_socket) != 0) {
-            metrics_active_connection_dec();
-            close(client_socket);
-        }
-    }
-    /* ---------- End of accept loop ------------------------------------- */
-
-    printf("\nShutting down server gracefully...\n");
-    close(server_socket);
-
-    destroy_thread_pool(thread_pool);
-    metrics_reporter_stop();
-    printf("Thread pool destroyed.\n");
-#endif /* USE_EVENT_LOOP */
 
     return 0;
 }

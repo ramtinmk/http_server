@@ -64,6 +64,8 @@ class HardwareBenchmarkTests(unittest.TestCase):
             rate=100.0,
             concurrency=4,
             requests=100,
+            warmup=0.0,
+            duration=2.0,
         )
         outcome = {
             "elapsed": 2.0,
@@ -72,6 +74,14 @@ class HardwareBenchmarkTests(unittest.TestCase):
             "errors": Counter(),
             "connections": 100,
             "client_cpu_seconds": 0.25,
+            "drain_seconds": 0.0,
+            "warmup_offered": 0,
+            "steady_offered": 100,
+            "steady_completed": 100,
+            "drain_completed": 0,
+            "total_statuses": Counter({200: 100}),
+            "total_errors": Counter(),
+            "per_second": {0: 50},
         }
         server_summary = {
             "server_cpu_percent": 50.0,

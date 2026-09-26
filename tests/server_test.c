@@ -28,13 +28,6 @@
 
 // --- Helper Structures ---
 typedef struct {
-    int thread_id;
-    int client_socket;
-    const char* request;
-    char* response;
-} ThreadArgs;
-
-typedef struct {
     char *raw;
     size_t raw_length;
     char *headers;
@@ -393,14 +386,6 @@ static char *send_http_request(int client_socket, const char *request) {
     return raw;
 }
 
-// Thread worker function
-static void* multithread_worker(void* thread_arg) {
-    ThreadArgs* args = (ThreadArgs*)thread_arg;
-    args->response = send_http_request(args->client_socket, args->request);
-    close(args->client_socket);
-    return NULL;
-}
-
 // --- Test Cases ---
 
 /* Basic endpoint tests establish status and body availability. More precise
@@ -659,81 +644,6 @@ void test_keep_alive() {
     free(resp2);
 
     close(client_socket);
-}
-
-// --- Multithreaded Tests (Wrappers) ---
-
-void test_multithread_load() {
-    int num_threads = 17;
-    pthread_t threads[num_threads];
-    ThreadArgs args[num_threads];
-
-    printf("       -> Spawning %d threads for concurrent requests...\n", num_threads);
-
-    for (int i = 0; i < num_threads; i++) {
-        args[i].thread_id = i;
-        args[i].client_socket = create_and_connect_socket();
-        
-        TEST_ASSERT(args[i].client_socket != -1);
-        
-        args[i].request = "GET /home HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
-        args[i].response = NULL;
-
-        if (pthread_create(&threads[i], NULL, multithread_worker, &args[i]) != 0) {
-            close(args[i].client_socket);
-            TEST_ASSERT(0 && "Thread creation failed");
-        }
-    }
-
-    // Join and Verify
-    for (int i = 0; i < num_threads; i++) {
-        pthread_join(threads[i], NULL);
-        
-        TEST_ASSERT(args[i].response != NULL);
-        if (args[i].response) {
-            TEST_ASSERT(strstr(args[i].response, "HTTP/1.1 200 OK") != NULL);
-            free(args[i].response);
-        }
-    }
-}
-
-void test_gzip_concurrency() {
-    int num_threads = 5;
-    pthread_t threads[num_threads];
-    ThreadArgs args[num_threads];
-
-    printf("       -> Spawning %d threads requesting GZIP...\n", num_threads);
-
-    const char *gzip_req = "GET /home HTTP/1.1\r\nHost: localhost\r\nAccept-Encoding: gzip\r\nConnection: close\r\n\r\n";
-
-    for (int i = 0; i < num_threads; i++) {
-        args[i].thread_id = i;
-        args[i].client_socket = create_and_connect_socket();
-        TEST_ASSERT(args[i].client_socket != -1);
-        
-        args[i].request = gzip_req;
-        args[i].response = NULL;
-
-        if (pthread_create(&threads[i], NULL, multithread_worker, &args[i]) != 0) {
-            close(args[i].client_socket);
-            TEST_ASSERT(0 && "Thread creation failed");
-        }
-    }
-
-    for (int i = 0; i < num_threads; i++) {
-        pthread_join(threads[i], NULL);
-        
-        TEST_ASSERT(args[i].response != NULL);
-        if (args[i].response) {
-            TEST_ASSERT(strstr(args[i].response, "HTTP/1.1 200 OK") != NULL);
-            
-            int has_gzip = (strstr(args[i].response, "Content-Encoding: gzip") != NULL) || 
-                           (strstr(args[i].response, "content-encoding: gzip") != NULL);
-            
-            TEST_ASSERT(has_gzip);
-            free(args[i].response);
-        }
-    }
 }
 
 // --- Phase 2 Tests ---
@@ -1211,10 +1121,8 @@ void run_server_tests() {
     RUN_TEST(test_fragmented_request, "Fragmented request delivery");
     RUN_TEST(test_pipelining,        "Pipelined requests and responses");
     RUN_TEST(test_head_response,     "HEAD response has no body");
-    // RUN_TEST(test_multithread_load, "Concurrency: 10 simultaneous requests");
-    // RUN_TEST(test_gzip_concurrency, "Concurrency: GZIP requests");
 
-    // Phase 2: resource-protection behaviour
+    // Resource-protection behaviour
     RUN_TEST(test_slow_client_header_timeout, "Phase2: Slow client closed after header timeout");
     RUN_TEST(test_keepalive_request_limit,    "Phase2: Keep-alive connection closed at request limit");
     RUN_TEST(test_input_buffer_limit,         "Phase2: Oversized input rejected with 413 or close");
