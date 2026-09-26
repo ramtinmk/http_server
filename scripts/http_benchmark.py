@@ -103,6 +103,13 @@ CSV_FIELDS = (
     "cpu_governor", "server_listen_drops", "server_accept_errors",
     "server_accept_error_emfile", "server_accept_error_enfile",
     "server_accept_error_econnaborted", "server_accept_error_other",
+    # Runtime memory-profiler fields from the server snapshot (trailing
+    # additions preserve backward compatibility; older rows migrate empty).
+    "server_memory_rss_kb", "server_memory_rss_kb_max",
+    "server_memory_pss_kb", "server_memory_pss_kb_max",
+    "server_memory_vmsize_kb", "server_memory_heap_inuse_bytes",
+    "server_memory_heap_inuse_bytes_max", "server_memory_heap_mmap_bytes",
+    "server_memory_sample_ok", "server_memory_private_dirty_kb",
 )
 
 SCENARIOS = {
@@ -1104,6 +1111,16 @@ def read_server_metrics(path):
         "server_el_loops": 0,
         "server_el_loop_wakeups": "",
         "server_el_loop_accepted": "",
+        "server_memory_rss_kb": 0,
+        "server_memory_rss_kb_max": 0,
+        "server_memory_pss_kb": 0,
+        "server_memory_pss_kb_max": 0,
+        "server_memory_vmsize_kb": 0,
+        "server_memory_heap_inuse_bytes": 0,
+        "server_memory_heap_inuse_bytes_max": 0,
+        "server_memory_heap_mmap_bytes": 0,
+        "server_memory_sample_ok": 0,
+        "server_memory_private_dirty_kb": 0,
     }
     if not path or not os.path.exists(path):
         return defaults
@@ -1151,6 +1168,16 @@ def read_server_metrics(path):
         "server_accept_error_econnaborted": "accept_error_econnaborted",
         "server_accept_error_other": "accept_error_other",
         "server_el_loops": "el_loops",
+        "server_memory_rss_kb": "rss_kb",
+        "server_memory_rss_kb_max": "rss_kb_max",
+        "server_memory_pss_kb": "pss_kb",
+        "server_memory_pss_kb_max": "pss_kb_max",
+        "server_memory_vmsize_kb": "vmsize_kb",
+        "server_memory_heap_inuse_bytes": "heap_inuse_bytes",
+        "server_memory_heap_inuse_bytes_max": "heap_inuse_bytes_max",
+        "server_memory_heap_mmap_bytes": "heap_mmap_bytes",
+        "server_memory_sample_ok": "memory_sample_ok",
+        "server_memory_private_dirty_kb": "private_dirty_kb",
     }
     for field, key in mapping.items():
         if key in data:

@@ -154,4 +154,21 @@
 #define EL_MAX_CONNECTION_TABLE 65536
 #endif
 
+/* --- Allocator ---------------------------------------------------------- */
+
+/*
+ * glibc reserves virtual address space per malloc arena (up to ~64 MB per
+ * arena on 64-bit). Left unbounded, VmSize grows with the event-loop thread
+ * count even though RSS stays flat. 2 bounds the reservation while keeping one
+ * secondary arena for allocator contention; 1 minimizes VmSize further at the
+ * cost of serializing every allocation on the main arena. A pre-set
+ * MALLOC_ARENA_MAX is respected; ENV_MALLOC_ARENA_MAX overrides this default
+ * when neither is set.
+ */
+#ifndef MALLOC_ARENA_MAX_DEFAULT
+#define MALLOC_ARENA_MAX_DEFAULT 2
+#endif
+
+#define ENV_MALLOC_ARENA_MAX "HTTP_SERVER_MALLOC_ARENA_MAX"
+
 #endif /* SERVER_CONFIG_H */

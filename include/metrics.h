@@ -44,7 +44,13 @@ void metrics_reporter_stop(void);
 
 /* Render the current counters as a single-line JSON object into `buf`.
  * Returns the number of bytes that would have been written (snprintf
- * semantics); the output is truncated if it does not fit. */
+ * semantics); the output is truncated if it does not fit.
+ *
+ * The snapshot also includes the cached memory-profiler fields (rss_kb,
+ * pss_kb, private_dirty_kb, vmsize_kb, heap_inuse_bytes, heap_mmap_bytes and
+ * the RSS/PSS/heap maxima) that the reporter thread refreshes via
+ * memory_profiler_sample(); see memory_profiler.h. Calling this without a
+ * reporter leaves those fields at their last sampled values. */
 size_t metrics_snapshot(char *buf, size_t cap);
 
 /* --- Active-connection gauge -------------------------------------------- */

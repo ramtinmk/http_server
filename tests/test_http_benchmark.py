@@ -100,6 +100,16 @@ class HardwareBenchmarkTests(unittest.TestCase):
             "server_queue_depth_max": 0,
             "server_accepted_connections": 100,
             "server_rejected_tasks": 0,
+            "server_memory_rss_kb": 4096,
+            "server_memory_rss_kb_max": 4096,
+            "server_memory_pss_kb": 2048,
+            "server_memory_pss_kb_max": 2048,
+            "server_memory_vmsize_kb": 102400,
+            "server_memory_heap_inuse_bytes": 65536,
+            "server_memory_heap_inuse_bytes_max": 65536,
+            "server_memory_heap_mmap_bytes": 0,
+            "server_memory_sample_ok": 1,
+            "server_memory_private_dirty_kb": 1024,
         }
         calibration = {
             "machine_index": 2.0,

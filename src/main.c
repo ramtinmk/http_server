@@ -22,7 +22,65 @@
 #include <unistd.h>
 #include <sys/resource.h>
 
+#if defined(__GLIBC__)
+#include <malloc.h>
+#endif
+
 static volatile sig_atomic_t server_running = 1;
+
+/* Resolved allocator arena cap for the startup report; empty when the concept
+ * does not apply (non-glibc) or was preset by the operator. */
+static char arena_cap_display[64];
+
+/* --------------------------------------------------------------------------
+ * Allocator setup
+ * -------------------------------------------------------------------------- */
+
+/*
+ * Bound glibc's per-thread malloc arenas so VmSize does not scale with the
+ * event-loop count. Each arena reserves virtual address space (not RSS); the
+ * server's allocator traffic is per-connection buffer churn on the loop
+ * threads. Called before any thread exists so every thread inherits the cap.
+ * A pre-set MALLOC_ARENA_MAX wins; otherwise HTTP_SERVER_MALLOC_ARENA_MAX
+ * overrides the compiled default. Returns 0 on success (including non-glibc
+ * and preset hosts), -1 on a malformed override.
+ */
+static int configure_allocator(void)
+{
+#if defined(__GLIBC__) && defined(M_ARENA_MAX)
+    const char *preset = getenv("MALLOC_ARENA_MAX");
+    if (preset && *preset) {
+        snprintf(arena_cap_display, sizeof(arena_cap_display),
+                 "preset by MALLOC_ARENA_MAX=%s", preset);
+        return 0;
+    }
+
+    long value = MALLOC_ARENA_MAX_DEFAULT;
+    const char *env = getenv(ENV_MALLOC_ARENA_MAX);
+    if (env && *env) {
+        errno = 0;
+        char *end = NULL;
+        long parsed = strtol(env, &end, 10);
+        if (errno != 0 || end == env || *end != '\0' || parsed < 1) {
+            fprintf(stderr, "FATAL: %s=%s is not a positive integer\n",
+                    ENV_MALLOC_ARENA_MAX, env);
+            return -1;
+        }
+        value = parsed;
+    }
+
+    if (mallopt(M_ARENA_MAX, (int)value) == 0) {
+        fprintf(stderr,
+                "WARNING: mallopt(M_ARENA_MAX, %ld) failed; leaving the "
+                "allocator default\n", value);
+        return 0;
+    }
+    snprintf(arena_cap_display, sizeof(arena_cap_display), "%ld", value);
+#else
+    arena_cap_display[0] = '\0';
+#endif
+    return 0;
+}
 
 static void shutdown_signal_handler(int sig)
 {
@@ -54,6 +112,8 @@ static void print_server_config(void)
            EL_THREAD_COUNT == 0 ? " (auto: online cores)" : "");
     printf("  EL_MAX_THREADS        : %d\n",  EL_MAX_THREADS);
     printf("  EL_MAX_CONNECTION_TABLE: %d\n", EL_MAX_CONNECTION_TABLE);
+    printf("  MALLOC_ARENA_MAX (cap) : %s\n",
+           arena_cap_display[0] ? arena_cap_display : "not applicable");
     printf("============================\n");
 }
 
@@ -422,6 +482,11 @@ static long derive_effective_capacity(const struct rlimit *rl, int el_threads)
 int main(void)
 {
     int server_socket;
+
+    /* Bound allocator address-space reservations before any thread exists. */
+    if (configure_allocator() != 0) {
+        return EXIT_FAILURE;
+    }
 
     /* Optional structured metrics snapshots for the benchmark harness. */
     const char *metrics_path = getenv("HTTP_SERVER_METRICS_FILE");

@@ -151,6 +151,20 @@ add_custom_target(saturation
     COMMENT "Running Phase 4 saturation acceptance (capacity 16)"
 )
 
+# Runtime memory-profiler soak: drive a stationary keep-alive load, sample the
+# server metrics snapshot, and write benchmarks/memory_soak.json with the RSS
+# and heap drift over the final 80% of the run. Exits non-zero when drift
+# exceeds the tolerance. See plans/memory-profiler.md.
+add_custom_target(memory-soak
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/memory_soak.py
+            --start-server --duration 300 --rate 1000 --concurrency 16
+            --output ${CMAKE_SOURCE_DIR}/benchmarks/memory_soak.json
+    DEPENDS http_server
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    USES_TERMINAL
+    COMMENT "Running memory soak (RSS/heap drift artifact)"
+)
+
 # Phase 4: static assets are precompressed/cached at startup and startup must
 # fail fast when one cannot be loaded.
 add_custom_target(startup-failfast

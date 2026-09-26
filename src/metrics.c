@@ -1,4 +1,5 @@
 #include "metrics.h"
+#include "memory_profiler.h"
 
 #include <pthread.h>
 #include <stdarg.h>
@@ -426,7 +427,9 @@ size_t metrics_snapshot(char *buf, size_t cap)
         used = appendf(buf, cap, used, "%s%lld", i ? "," : "",
                        LOAD(g_el_loop_accepted[i]));
     }
-    used = appendf(buf, cap, used, "]}");
+    used = appendf(buf, cap, used, "]");
+    used = memory_profiler_append_json(buf, cap, used);
+    used = appendf(buf, cap, used, "}");
     return used;
 }
 
@@ -446,7 +449,11 @@ static int g_reporter_interval_ms = 1000;
  */
 static void write_snapshot(const char *path)
 {
-    char json[4096];
+    /* Refresh the memory sample on this (reporter) thread so the data path
+     * never touches procfs or the allocator accounting. */
+    memory_profiler_sample();
+
+    char json[8192];
     metrics_snapshot(json, sizeof(json));
 
     char tmp[sizeof(g_reporter_path) + 8];

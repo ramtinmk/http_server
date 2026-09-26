@@ -24,6 +24,20 @@ benchmark target.
 - **Metrics:** set `HTTP_SERVER_METRICS_FILE=<path>` to emit periodic runtime
   snapshots (connections, response status distribution, timeouts, event-loop
   counters).
+- **Memory profiler:** the same snapshots carry a runtime memory sample
+  (`rss_kb`, `pss_kb`, `private_dirty_kb`, `vmsize_kb`, `heap_inuse_bytes`,
+  `heap_mmap_bytes`, RSS/PSS/heap high-water marks, plus `memory_sample_ok`).
+  The reporter thread samples `/proc/self/statm`, `/proc/self/smaps_rollup`, and
+  `mallinfo2()` (falling back to `mallinfo()`); the event-loop data path never
+  touches procfs or the allocator accounting. `private_dirty_kb` is the
+  anonymous resident footprint and a stabler heap proxy than `mallinfo()`'s
+  ratcheting in-use figure. See `include/memory_profiler.h`.
+- **Allocator arena cap:** glibc arenas are bounded with
+  `mallopt(M_ARENA_MAX, 2)` before any thread starts so VmSize does not scale
+  with the event-loop count (measured ~600 MB → ~141 MB at 8 loops, RSS
+  unchanged). Set `HTTP_SERVER_MALLOC_ARENA_MAX` to override (1 minimizes
+  VmSize); a pre-set `MALLOC_ARENA_MAX` is respected. See
+  `include/server_config.h`.
 
 ## Build
 
@@ -215,7 +229,10 @@ The Python harness implements the measurement contract in
 `plans/scaling-plan.md` and records offered rate, completed/successful/failed
 requests, status-code distribution, latency percentiles, keep-alive and
 new-connection rates, server CPU/RSS/open FDs, queue depth, active workers,
-rejected tasks, context switches, and TCP retransmits. Results are appended to
+rejected tasks, context switches, and TCP retransmits. The `server_memory_*`
+columns surface the in-process memory sample (RSS/PSS/Private_Dirty/VMS, heap,
+mmap, and high-water marks) from the server snapshot alongside the external
+`VmRSS` sample. Results are appended to
 `benchmarks/*.csv`; JSON Lines is written when `--log-file` ends in
 `.json`/`.jsonl`.
 

@@ -1,0 +1,137 @@
+{
+  "generated_utc": "2026-09-26T17:32:26Z",
+  "host": "127.0.0.1",
+  "port": 8081,
+  "config": {
+    "duration_seconds": 300.0,
+    "target_rate": 1000.0,
+    "concurrency": 16,
+    "interval_seconds": 60.0,
+    "warmup_seconds": 1.0,
+    "final_fraction": 0.8,
+    "drift_tolerance": 0.05
+  },
+  "requests_completed": 297180,
+  "samples": [
+    {
+      "t": 1.0,
+      "rss_kb": 9072,
+      "rss_kb_max": 9072,
+      "pss_kb": 7762,
+      "private_dirty_kb": 7544,
+      "vmsize_kb": 141124,
+      "heap_inuse_bytes": 34224,
+      "heap_inuse_bytes_max": 279600,
+      "heap_mmap_bytes": 7372800,
+      "memory_sample_ok": 1
+    },
+    {
+      "t": 61.003,
+      "rss_kb": 9072,
+      "rss_kb_max": 9072,
+      "pss_kb": 7802,
+      "private_dirty_kb": 7584,
+      "vmsize_kb": 141124,
+      "heap_inuse_bytes": 35040,
+      "heap_inuse_bytes_max": 279600,
+      "heap_mmap_bytes": 7372800,
+      "memory_sample_ok": 1
+    },
+    {
+      "t": 121.0,
+      "rss_kb": 9072,
+      "rss_kb_max": 9072,
+      "pss_kb": 7810,
+      "private_dirty_kb": 7592,
+      "vmsize_kb": 141124,
+      "heap_inuse_bytes": 35424,
+      "heap_inuse_bytes_max": 279600,
+      "heap_mmap_bytes": 7372800,
+      "memory_sample_ok": 1
+    },
+    {
+      "t": 181.0,
+      "rss_kb": 9072,
+      "rss_kb_max": 9072,
+      "pss_kb": 7810,
+      "private_dirty_kb": 7592,
+      "vmsize_kb": 141124,
+      "heap_inuse_bytes": 35664,
+      "heap_inuse_bytes_max": 279600,
+      "heap_mmap_bytes": 7372800,
+      "memory_sample_ok": 1
+    },
+    {
+      "t": 241.0,
+      "rss_kb": 9072,
+      "rss_kb_max": 9072,
+      "pss_kb": 7810,
+      "private_dirty_kb": 7592,
+      "vmsize_kb": 141124,
+      "heap_inuse_bytes": 35856,
+      "heap_inuse_bytes_max": 279600,
+      "heap_mmap_bytes": 7372800,
+      "memory_sample_ok": 1
+    }
+  ],
+  "drift": {
+    "rss_kb": {
+      "min": 9072,
+      "max": 9072,
+      "mean": 9072.0,
+      "relative_range": 0.0,
+      "samples": 4,
+      "gated": true
+    },
+    "pss_kb": {
+      "min": 7802,
+      "max": 7810,
+      "mean": 7808.0,
+      "relative_range": 0.001025,
+      "samples": 4,
+      "gated": true
+    },
+    "private_dirty_kb": {
+      "min": 7584,
+      "max": 7592,
+      "mean": 7590.0,
+      "relative_range": 0.001054,
+      "samples": 4,
+      "gated": false
+    },
+    "vmsize_kb": {
+      "min": 141124,
+      "max": 141124,
+      "mean": 141124.0,
+      "relative_range": 0.0,
+      "samples": 4,
+      "gated": false
+    },
+    "heap_mmap_bytes": {
+      "min": 7372800,
+      "max": 7372800,
+      "mean": 7372800.0,
+      "relative_range": 0.0,
+      "samples": 4,
+      "gated": false
+    },
+    "heap_inuse_bytes_max": {
+      "min": 279600,
+      "max": 279600,
+      "mean": 279600.0,
+      "relative_range": 0.0,
+      "samples": 4,
+      "gated": false
+    },
+    "heap_inuse_bytes": {
+      "min": 35040,
+      "max": 35856,
+      "mean": 35496.0,
+      "relative_range": 0.022989,
+      "samples": 4,
+      "gated": false
+    }
+  },
+  "passed": true,
+  "notes": []
+}
