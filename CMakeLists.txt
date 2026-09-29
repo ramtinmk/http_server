@@ -151,6 +151,37 @@ add_custom_target(saturation
     COMMENT "Running Phase 4 saturation acceptance (capacity 16)"
 )
 
+# Phase 0 lifecycle acceptance: invalid configuration must fail naming the key,
+# runtime keep-alive tuning must take effect, and SIGTERM under load must drain
+# without truncation. Writes benchmarks/production_phase0_lifecycle.json.
+add_custom_target(phase0-lifecycle
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/phase0_lifecycle_test.py
+    DEPENDS http_server
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    USES_TERMINAL
+    COMMENT "Running Phase 0 lifecycle acceptance (config + drain)"
+)
+
+# Phase 0 above-capacity acceptance: 2x capacity wrk run with zero client
+# timeouts and bounded 503s. Writes benchmarks/production_phase0_2x.json.
+add_custom_target(phase0-2x
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/phase0_capacity_2x.py
+    DEPENDS http_server
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    USES_TERMINAL
+    COMMENT "Running Phase 0 2x-capacity overload acceptance"
+)
+
+# Phase 0 access-log overhead acceptance: measured <5% on the keep-alive
+# scenario. Writes benchmarks/production_phase0_accesslog.json.
+add_custom_target(phase0-accesslog
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/phase0_accesslog_test.py
+    DEPENDS http_server
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    USES_TERMINAL
+    COMMENT "Running Phase 0 access-log overhead acceptance"
+)
+
 # Runtime memory-profiler soak: drive a stationary keep-alive load, sample the
 # server metrics snapshot, and write benchmarks/memory_soak.json with the RSS
 # and heap drift over the final 80% of the run. Exits non-zero when drift

@@ -2,9 +2,11 @@
 #define HTTP_SERVER_H
 
 #include <stddef.h>
+#include <time.h>
 
 #include "ring_buffer.h"
 #include "server_config.h"
+#include "config.h"
 
 /* Shared listening parameters (socket setup and startup diagnostics). */
 #define PORT 8081
@@ -26,6 +28,12 @@ typedef struct {
     int                  is_head;      /* HEAD request: skip body send.      */
     int                  force_close;  /* Close connection after this resp.  */
     int                  status;       /* HTTP status code (for metrics).    */
+
+    /* Access-log metadata, filled at parse time. Kept small so the pipeline
+     * queue stays compact when access logging is disabled. */
+    char                 method[8];
+    char                 path[256];
+    struct timespec      started;      /* CLOCK_MONOTONIC, request parse time. */
 } PendingResponse;
 
 /*
@@ -39,7 +47,7 @@ typedef struct {
  */
 int el_prepare_response(RingBuffer *rb, int force_close, int *keep_alive_out, PendingResponse *pr);
 
-int create_server_socket(int reuseport);
+int create_server_socket(const ServerConfig *cfg, int reuseport);
 int initialize_static_responses(void);
 
 #endif /* HTTP_SERVER_H */

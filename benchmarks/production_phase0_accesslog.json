@@ -1,0 +1,20 @@
+{
+  "access_log_disabled": {
+    "dropped_logs": 0,
+    "p99": 3.98,
+    "p99_unit": "ms",
+    "rps": 439219.2
+  },
+  "access_log_enabled": {
+    "dropped_logs": 0,
+    "p99": 3.81,
+    "p99_unit": "ms",
+    "rps": 440887.99
+  },
+  "capacity": 256,
+  "connections": 64,
+  "failures": [],
+  "overhead_limit": 0.05,
+  "rps_overhead": -0.0038,
+  "success": true
+}

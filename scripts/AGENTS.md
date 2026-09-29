@@ -13,8 +13,8 @@ each harness: `../docs/runbooks/reproduce-a-benchmark.md`.
 - When you add a metrics column, append it to `CSV_FIELDS` in
   `http_benchmark.py` (trailing additions keep older rows readable) and extend
   the fixture in `../tests/test_http_benchmark.py`.
-- `HTTP_SERVER_ACCESS_LOG` is currently a no-op in the server; setting it in a
-  harness does not silence anything. See `../docs/gotchas.md`.
+- `HTTP_SERVER_ACCESS_LOG=0` now genuinely disables access records; the server
+  reads it. See `../docs/gotchas.md`.
 
 ## Files
 
@@ -23,6 +23,12 @@ each harness: `../docs/runbooks/reproduce-a-benchmark.md`.
 - `run_benchmark_matrix.sh` / `run_benchmark_pinned.sh` — full matrix; the
   pinned runner splits server/client CPU sets and verifies the environment.
 - `saturation_test.py` — below/equal/above-capacity acceptance.
+- `phase0_lifecycle_test.py` — invalid-config rejection, runtime keep-alive
+  tuning, and `SIGTERM` drain; `benchmarks/production_phase0_lifecycle.json`.
+- `phase0_capacity_2x.py` — above-capacity `wrk` run at 2x capacity;
+  `benchmarks/production_phase0_2x.json`.
+- `phase0_accesslog_test.py` — access-log overhead gate (<5%);
+  `benchmarks/production_phase0_accesslog.json`.
 - `startup_failfast_test.py` — missing static asset must fail startup.
 - `memory_soak.py` — stationary keep-alive RSS/PSS drift gate.
 - `wrk_benchmark.py` / `wrk_pipeline.lua` — raw `wrk` sweeps (needs `wrk`).

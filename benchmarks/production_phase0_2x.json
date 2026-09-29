@@ -1,0 +1,38 @@
+{
+  "capacity": 256,
+  "connections": 512,
+  "failures": [],
+  "server_metrics": {
+    "accept_error_emfile": 0,
+    "accept_error_enfile": 0,
+    "active_connections": 256,
+    "active_connections_max": 256,
+    "admission_rejected_capacity": 868097,
+    "connection_capacity": 256,
+    "connection_resets": 0,
+    "listen_drops": 0,
+    "listener_disabled_count": 0,
+    "overload_responses": 868095
+  },
+  "success": true,
+  "wrk": {
+    "elapsed_seconds": 8.07,
+    "non_2xx_responses": 874540,
+    "p99": 3.87,
+    "p99_unit": "ms",
+    "raw_tail": [
+      "  Non-2xx or 3xx responses: 874540",
+      "Requests/sec: 217839.08",
+      "Transfer/sec:     63.70MB"
+    ],
+    "requests": 1757415,
+    "requests_per_sec": 217839.08,
+    "socket_errors": {
+      "connect": 0,
+      "read": 0,
+      "timeout": 0,
+      "write": 0
+    }
+  },
+  "wrk_command": "wrk -t4 -c512 -d8s --latency http://127.0.0.1:8081/home"
+}

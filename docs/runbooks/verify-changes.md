@@ -38,6 +38,20 @@ ctest --output-on-failure
 kill "$SERVER_PID" && wait "$SERVER_PID" 2>/dev/null || true
 ```
 
+## 4b. Phase 0 operational acceptance (config, drain, overload, logging)
+
+These start and stop their own server and need `wrk` on `PATH` for the load
+variants:
+
+```bash
+make phase0-lifecycle     # invalid config + SIGTERM drain, no wrk
+make phase0-2x            # 2x-capacity overload with wrk
+make phase0-accesslog     # access-log overhead gate with wrk
+make saturation           # existing Phase 4 overload acceptance
+```
+
+Each writes a JSON artifact under `benchmarks/` and exits non-zero on failure.
+
 ## 5. Lint (only if clang-tidy is installed)
 
 ```bash

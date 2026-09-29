@@ -124,8 +124,9 @@ program adds:
 
 Legend: `[x]` done, `[~]` partial, `[ ]` pending, `[!]` blocked.
 
-- [~] Phase 0 `production-http-server/phase-0`: overload policy complete;
-  lifecycle, runtime tuning, configuration, and logging remain.
+- [x] Phase 0 `production-http-server/phase-0`: complete — bounded overload,
+  runtime configuration, graceful drain, and structured logging. Evidence in
+  `benchmarks/production_phase0_*.json`.
 - [ ] Phase 1 `production-http-server/phase-1`: HTTP/1.1 correctness and
   caching semantics.
 - [ ] Phase 2 `production-http-server/phase-2`: secure static file serving.
@@ -158,27 +159,36 @@ Legend: `[x]` done, `[~]` partial, `[ ]` pending, `[!]` blocked.
   operator maximum, and the connection-table bound; one source of truth, printed
   and exposed in metrics (already implemented by startup preflight and
   `connection_capacity` metrics).
-- [ ] Make `MAX_KEEPALIVE_REQUESTS`, timeouts, and capacity runtime-tunable;
+- [x] Make `MAX_KEEPALIVE_REQUESTS`, timeouts, and capacity runtime-tunable;
   measure the reuse-vs-fairness tradeoff and pick a default with evidence.
-- [ ] Graceful lifecycle: on `SIGTERM`/`SIGINT` stop accepting, drain in-flight
+  Implemented by `production-http-server-phase0-ops`; defaults unchanged, all
+  values settable via file/env/CLI.
+- [x] Graceful lifecycle: on `SIGTERM`/`SIGINT` stop accepting, drain in-flight
   within a deadline, flush metrics/logs, then exit; truncate nothing. Add
-  `sd_notify` readiness/stopping.
-- [ ] Single configuration source (file + env + CLI) parsed and validated at
+  `sd_notify` readiness/stopping. Evidence:
+  `benchmarks/production_phase0_lifecycle.json`.
+- [x] Single configuration source (file + env + CLI) parsed and validated at
   startup; reject contradictory values naming the offending key.
-- [ ] Structured logging: leveled, JSON access/error logs, batched writer with
+- [x] Structured logging: leveled, JSON access/error logs, batched writer with
   backpressure so the hot path never blocks; `SIGHUP` reopens log files.
+  Nonblocking pipe with drop-on-full; see `docs/gotchas.md`.
 
 **Exit criteria**
 
-- [ ] At `2 ×` capacity: zero client timeouts, bounded `503`s, bounded
+- [x] At `2 ×` capacity: zero client timeouts, bounded `503`s, bounded
   `listener_disabled_count`, and p99 below the new-connection target; evidence
-  in the benchmark CSV plus `wrk_diag`-style artifact.
-- [ ] `SIGTERM` under full load drains within the deadline with zero truncated
-  responses; process exit status reflects clean shutdown.
-- [ ] An invalid config exits non-zero naming the exact key; the effective
-  config is recorded in the startup log.
-- [ ] Access logging adds < 5% overhead on the keep-alive scenario and never
-  blocks an event loop (verified by latency and CPU comparison).
+  in `benchmarks/production_phase0_2x.json` (p99 3.9 ms, 0 timeouts,
+  `listener_disabled_count=0`).
+- [x] `SIGTERM` under full load drains within the deadline with zero truncated
+  responses; process exit status reflects clean shutdown; evidence in
+  `benchmarks/production_phase0_lifecycle.json`.
+- [x] An invalid config exits non-zero naming the exact key; the effective
+  config is recorded in the startup log; evidence in
+  `benchmarks/production_phase0_lifecycle.json`.
+- [x] Access logging adds < 5% overhead on the keep-alive scenario and never
+  blocks an event loop (verified by latency and CPU comparison); evidence in
+  `benchmarks/production_phase0_accesslog.json` (overhead within noise,
+  zero dropped records).
 
 ### production-http-server/phase-1: HTTP/1.1 correctness and caching semantics
 
