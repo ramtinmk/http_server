@@ -233,8 +233,23 @@ def main(argv=None):
             print("FAIL: server did not start", file=sys.stderr)
             return 2
 
-        baseline_rss = read_rss_kb(server.pid)
+        # Let every event-loop thread create its epoll/eventfd/listener before
+        # sampling the baseline; otherwise those descriptors look like growth.
         baseline_fds = count_fds(server.pid)
+        stable = 0
+        settle_deadline = now() + 2.0
+        while now() < settle_deadline:
+            current = count_fds(server.pid)
+            if current == baseline_fds:
+                stable += 1
+                if stable >= 3:
+                    break
+            else:
+                baseline_fds = current
+                stable = 0
+            time.sleep(0.05)
+
+        baseline_rss = read_rss_kb(server.pid)
         artifact["baseline"] = {"rss_kb": baseline_rss, "open_fds": baseline_fds}
 
         # --- Observation 1: below / equal / above capacity waves -----------

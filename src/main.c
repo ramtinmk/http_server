@@ -12,6 +12,9 @@
 #include "metrics.h"
 #include "server_config.h"
 #include "event_loop.h"
+#include "config.h"
+#include "log.h"
+#include "sd_notify.h"
 #include <sched.h>
 #include <signal.h>
 #include <errno.h>
@@ -94,28 +97,50 @@ static void shutdown_signal_handler(int sig)
 
 /*
  * Print every configured limit to stdout so that benchmark runs can be
- * reproduced from server logs alone.
+ * reproduced from server logs alone. Also records the effective configuration
+ * as a structured log line when a log target is active.
  */
-static void print_server_config(void)
+static void print_server_config(const ServerConfig *cfg)
 {
     printf("=== Server Configuration ===\n");
-    printf("  PORT                  : %d\n",  PORT);
-    printf("  BACKLOG               : %d\n",  BACKLOG);
-    printf("  EL_ACCEPT_BATCH_SIZE  : %d\n", EL_ACCEPT_BATCH_SIZE);
-    printf("  MAX_ACTIVE_CONNECTIONS: %d\n",  MAX_ACTIVE_CONNECTIONS);
-    printf("  MAX_KEEPALIVE_REQUESTS: %d\n",  MAX_KEEPALIVE_REQUESTS);
-    printf("  MAX_INPUT_BUFFER_BYTES: %d\n",  MAX_INPUT_BUFFER_BYTES);
+    printf("  PORT                  : %d\n",  cfg->port);
+    printf("  BACKLOG               : %d\n",  cfg->backlog);
+    printf("  EL_ACCEPT_BATCH_SIZE  : %d\n",  EL_ACCEPT_BATCH_SIZE);
+    printf("  MAX_ACTIVE_CONNECTIONS: %ld\n", cfg->max_connections);
+    printf("  MAX_KEEPALIVE_REQUESTS: %d\n",  cfg->max_keepalive_requests);
+    printf("  MAX_INPUT_BUFFER_BYTES: %d\n",  cfg->max_input_buffer_bytes);
     printf("  MAX_PIPELINE_DEPTH    : %d\n",  MAX_PIPELINE_DEPTH);
-    printf("  HEADER_READ_TIMEOUT   : %d s\n",HEADER_READ_TIMEOUT_SEC);
-    printf("  IDLE_TIMEOUT          : %d s\n",IDLE_TIMEOUT_SEC);
-    printf("  WRITE_TIMEOUT         : %d s\n",WRITE_TIMEOUT_SEC);
+    printf("  HEADER_READ_TIMEOUT   : %d s\n",cfg->header_read_timeout_sec);
+    printf("  IDLE_TIMEOUT          : %d s\n",cfg->idle_timeout_sec);
+    printf("  WRITE_TIMEOUT         : %d s\n",cfg->write_timeout_sec);
+    printf("  SHUTDOWN_DRAIN_TIMEOUT: %d s\n",cfg->shutdown_drain_timeout_sec);
     printf("  EL_THREAD_COUNT       : %d%s\n",  EL_THREAD_COUNT,
            EL_THREAD_COUNT == 0 ? " (auto: online cores)" : "");
     printf("  EL_MAX_THREADS        : %d\n",  EL_MAX_THREADS);
     printf("  EL_MAX_CONNECTION_TABLE: %d\n", EL_MAX_CONNECTION_TABLE);
+    printf("  LOG_LEVEL             : %s\n",  log_level_name(cfg->log_level));
+    printf("  LOG_FILE              : %s\n",
+           cfg->log_file[0] ? cfg->log_file : "(stderr)");
+    printf("  ACCESS_LOG            : %s\n",  cfg->access_log ? "on" : "off");
+    printf("  CONFIG_FILE           : %s\n",
+           cfg->config_path[0] ? cfg->config_path : "(none)");
     printf("  MALLOC_ARENA_MAX (cap) : %s\n",
            arena_cap_display[0] ? arena_cap_display : "not applicable");
     printf("============================\n");
+
+    log_msg(LOG_LEVEL_INFO,
+            "effective_config port=%d backlog=%d max_connections=%ld "
+            "max_keepalive_requests=%d max_input_buffer_bytes=%d "
+            "header_read_timeout=%d idle_timeout=%d write_timeout=%d "
+            "shutdown_drain_timeout=%d log_level=%s access_log=%d "
+            "log_file=%s config_file=%s",
+            cfg->port, cfg->backlog, cfg->max_connections,
+            cfg->max_keepalive_requests, cfg->max_input_buffer_bytes,
+            cfg->header_read_timeout_sec, cfg->idle_timeout_sec,
+            cfg->write_timeout_sec, cfg->shutdown_drain_timeout_sec,
+            log_level_name(cfg->log_level), cfg->access_log,
+            cfg->log_file[0] ? cfg->log_file : "(stderr)",
+            cfg->config_path[0] ? cfg->config_path : "(none)");
 }
 
 /*
@@ -173,7 +198,7 @@ static unsigned long rlim_value(rlim_t value)
 }
 
 static int enforce_nofile_limit(unsigned long required, int el_threads,
-                                struct rlimit *rl)
+                                long operator_max, struct rlimit *rl)
 {
     if (getrlimit(RLIMIT_NOFILE, rl) != 0) {
         perror("getrlimit RLIMIT_NOFILE");
@@ -212,7 +237,7 @@ static int enforce_nofile_limit(unsigned long required, int el_threads,
                 "loop(s)); raise the limit (ulimit -n / LimitNOFILE) or lower "
                 "%s\n",
                 effective, required,
-                (long)((MAX_ACTIVE_CONNECTIONS)),
+                operator_max,
                 REQUIRED_NOFILE_HEADROOM, REQUIRED_NOFILE_PER_LOOP,
                 el_threads,
                 ENV_MAX_CONNECTIONS);
@@ -264,46 +289,34 @@ static void report_host_limits(void)
  * value so an operator can fix it directly. Returns 0 when valid, -1 on the
  * first violation.
  */
-static int validate_configuration(int el_threads, long capacity)
+static int validate_configuration(const ServerConfig *cfg, int el_threads,
+                                  long capacity)
 {
-    if (PORT <= 0 || PORT > 65535) {
-        fprintf(stderr, "FATAL: PORT=%d is out of range 1..65535\n", PORT);
+    if (cfg->port <= 0 || cfg->port > 65535) {
+        fprintf(stderr, "FATAL: port=%d is out of range 1..65535\n", cfg->port);
         return -1;
     }
-    if (BACKLOG <= 0) {
-        fprintf(stderr, "FATAL: BACKLOG=%d must be positive\n", BACKLOG);
+    if (cfg->backlog <= 0) {
+        fprintf(stderr, "FATAL: backlog=%d must be positive\n", cfg->backlog);
         return -1;
     }
-    if (MAX_ACTIVE_CONNECTIONS <= 0) {
-        fprintf(stderr,
-                "FATAL: MAX_ACTIVE_CONNECTIONS=%d must be positive\n",
-                MAX_ACTIVE_CONNECTIONS);
+    if (cfg->max_connections <= 0) {
+        fprintf(stderr, "FATAL: max_connections=%ld must be positive\n",
+                cfg->max_connections);
         return -1;
     }
-    if (MAX_INPUT_BUFFER_BYTES <= 0) {
-        fprintf(stderr,
-                "FATAL: MAX_INPUT_BUFFER_BYTES=%d must be positive\n",
-                MAX_INPUT_BUFFER_BYTES);
+    if (cfg->max_input_buffer_bytes <= 0) {
+        fprintf(stderr, "FATAL: max_input_buffer_bytes=%d must be positive\n",
+                cfg->max_input_buffer_bytes);
         return -1;
     }
-    if (MAX_PIPELINE_DEPTH <= 0) {
-        fprintf(stderr, "FATAL: MAX_PIPELINE_DEPTH=%d must be positive\n",
-                MAX_PIPELINE_DEPTH);
-        return -1;
-    }
-    if (EL_ACCEPT_BATCH_SIZE <= 0) {
-        fprintf(stderr,
-                "FATAL: EL_ACCEPT_BATCH_SIZE=%d must be positive\n",
-                EL_ACCEPT_BATCH_SIZE);
-        return -1;
-    }
-    if (HEADER_READ_TIMEOUT_SEC <= 0 || IDLE_TIMEOUT_SEC <= 0 ||
-        WRITE_TIMEOUT_SEC <= 0) {
+    if (cfg->header_read_timeout_sec <= 0 || cfg->idle_timeout_sec <= 0 ||
+        cfg->write_timeout_sec <= 0 || cfg->shutdown_drain_timeout_sec <= 0) {
         fprintf(stderr,
                 "FATAL: timeouts must be positive (header=%d, idle=%d, "
-                "write=%d)\n",
-                HEADER_READ_TIMEOUT_SEC, IDLE_TIMEOUT_SEC,
-                WRITE_TIMEOUT_SEC);
+                "write=%d, drain=%d)\n",
+                cfg->header_read_timeout_sec, cfg->idle_timeout_sec,
+                cfg->write_timeout_sec, cfg->shutdown_drain_timeout_sec);
         return -1;
     }
     if (el_threads < 1) {
@@ -424,21 +437,14 @@ static int apply_cpu_affinity(void)
  * reproduced. Fails (returns a non-positive value) when the effective capacity
  * would be zero, which the caller treats as a fatal startup error.
  */
-static long derive_effective_capacity(const struct rlimit *rl, int el_threads)
+static long derive_effective_capacity(const ServerConfig *cfg,
+                                      const struct rlimit *rl, int el_threads)
 {
-    long operator_max = MAX_ACTIVE_CONNECTIONS;
-    const char *env = getenv(ENV_MAX_CONNECTIONS);
-    if (env && *env) {
-        errno = 0;
-        char *end = NULL;
-        long parsed = strtol(env, &end, 10);
-        if (errno != 0 || end == env || *end != '\0' || parsed <= 0) {
-            fprintf(stderr,
-                    "FATAL: %s=%s is not a positive integer\n",
-                    ENV_MAX_CONNECTIONS, env);
-            return -1;
-        }
-        operator_max = parsed;
+    long operator_max = cfg->max_connections;
+    if (operator_max <= 0) {
+        fprintf(stderr, "FATAL: max_connections=%ld must be positive\n",
+                operator_max);
+        return -1;
     }
 
     long reserved = (long)REQUIRED_NOFILE_HEADROOM +
@@ -486,14 +492,30 @@ static long derive_effective_capacity(const struct rlimit *rl, int el_threads)
  * main
  * -------------------------------------------------------------------------- */
 
-int main(void)
+static void reload_signal_handler(int sig)
 {
-    int server_socket;
+    (void)sig;
+    log_request_reopen();
+}
+
+int main(int argc, char **argv)
+{
+    ServerConfig cfg;
+    config_defaults(&cfg);
+    if (config_load(&cfg, argc, argv) != 0)
+        return EXIT_FAILURE;
+    if (cfg.help_requested) {
+        config_print_usage();
+        return EXIT_SUCCESS;
+    }
 
     /* Bound allocator address-space reservations before any thread exists. */
-    if (configure_allocator() != 0) {
+    if (configure_allocator() != 0)
         return EXIT_FAILURE;
-    }
+
+    /* Structured logging: open the target and start the writer thread. */
+    if (log_init(&cfg) != 0)
+        return EXIT_FAILURE;
 
     /* Optional structured metrics snapshots for the benchmark harness. */
     const char *metrics_path = getenv("HTTP_SERVER_METRICS_FILE");
@@ -501,7 +523,8 @@ int main(void)
         metrics_reporter_start(metrics_path, 250);
     }
 
-    /* Graceful shutdown: don't use SA_RESTART so accept() unblocks on signal. */
+    /* Graceful shutdown: don't use SA_RESTART so accept() unblocks on signal.
+     * SIGHUP reopens the log file. */
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
     sa.sa_handler = shutdown_signal_handler;
@@ -509,9 +532,11 @@ int main(void)
     sa.sa_flags = 0;
     sigaction(SIGINT,  &sa, NULL);
     sigaction(SIGTERM, &sa, NULL);
+    sa.sa_handler = reload_signal_handler;
+    sigaction(SIGHUP, &sa, NULL);
 
-    /* Print configuration and run the Phase 5 startup preflight. */
-    print_server_config();
+    /* Print the effective configuration and record it in the startup log. */
+    print_server_config(&cfg);
 
     /* Resolve how many event loops to run: explicit override or one per core.
      * Needed before the descriptor preflight so per-loop fds are reserved. */
@@ -520,51 +545,69 @@ int main(void)
     /* Raise the soft descriptor limit as far as the hard limit allows and
      * fail clearly when the effective limit cannot cover the configured
      * capacity plus reserved headroom. */
-    unsigned long required_nofile = (unsigned long)MAX_ACTIVE_CONNECTIONS +
+    unsigned long required_nofile = (unsigned long)cfg.max_connections +
                                     (unsigned long)REQUIRED_NOFILE_HEADROOM +
                                     (unsigned long)REQUIRED_NOFILE_PER_LOOP *
                                         (unsigned long)el_threads;
     struct rlimit rl;
-    if (enforce_nofile_limit(required_nofile, el_threads, &rl) != 0) {
+    if (enforce_nofile_limit(required_nofile, el_threads, cfg.max_connections,
+                             &rl) != 0) {
+        log_shutdown();
         return EXIT_FAILURE;
     }
 
-    long capacity = derive_effective_capacity(&rl, el_threads);
+    long capacity = derive_effective_capacity(&cfg, &rl, el_threads);
     if (capacity < 1) {
+        log_shutdown();
         return EXIT_FAILURE;
     }
     metrics_set_connection_capacity(capacity);
 
     report_host_limits();
 
-    if (validate_configuration(el_threads, capacity) != 0) {
+    if (validate_configuration(&cfg, el_threads, capacity) != 0) {
+        log_shutdown();
         return EXIT_FAILURE;
     }
 
     if (apply_cpu_affinity() != 0) {
+        log_shutdown();
         return EXIT_FAILURE;
     }
 
     /* Cache static responses before accepting any clients. */
     if (initialize_static_responses() != 0) {
+        log_shutdown();
         return EXIT_FAILURE;
     }
 
     /* Bind and listen; SO_REUSEPORT is required when several loops share the
      * port, and deliberately omitted for the single-loop control. */
-    server_socket = create_server_socket(el_threads > 1);
+    int server_socket = create_server_socket(&cfg, el_threads > 1);
     if (server_socket < 0) {
+        log_shutdown();
         return EXIT_FAILURE;
     }
-    printf("Server listening on port %d...\n", PORT);
 
+    printf("Server listening on port %d...\n", cfg.port);
     printf("Dispatch model: epoll event loop (%d loop%s, capacity=%ld).\n",
            el_threads, el_threads == 1 ? "" : "s", capacity);
-    event_loop_run(server_socket, &server_running, capacity, el_threads);
+
+    if (sd_notify_ready("serving") != 0)
+        fprintf(stderr, "WARNING: sd_notify READY failed\n");
+
+    int run_status = event_loop_run(server_socket, &server_running, &cfg,
+                                    capacity, el_threads);
 
     printf("\nShutting down server gracefully...\n");
+    log_msg(LOG_LEVEL_INFO, "shutdown complete status=%d dropped_logs=%lld",
+            run_status, log_dropped_total());
+    if (sd_notify_stopping("drain complete") != 0)
+        fprintf(stderr, "WARNING: sd_notify STOPPING failed\n");
+
     close(server_socket);
     metrics_reporter_stop();
+    log_shutdown();
 
-    return 0;
+    return run_status == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

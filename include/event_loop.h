@@ -2,6 +2,7 @@
 #define EVENT_LOOP_H
 
 #include "http_server.h"  /* PendingResponse is defined there */
+#include "config.h"
 #include "ring_buffer.h"
 #include <time.h>
 #include <signal.h>
@@ -35,6 +36,7 @@ typedef enum {
 typedef struct ELConnection {
     int            fd;               /* Client fd, or -1 if free.           */
     ELConnState    state;
+    char           peer[64];         /* Numeric client address (access log). */
 
     /* Input */
     RingBuffer    *in_buf;           /* Owned; freed on close.              */
@@ -78,21 +80,25 @@ typedef struct EventLoop EventLoop;
 int event_loop_thread_count(void);
 
 /*
- * Run `nloops` event loops until *running becomes 0.
+ * Run `nloops` event loops until *running becomes 0, then drain.
  *
  * server_fd must already be bound and listening; when nloops > 1 the
  * additional loops create their own SO_REUSEPORT listeners on the same port
  * (server_fd must therefore also have been bound with SO_REUSEPORT). Passing
  * nloops < 1 is treated as 1.
  *
- * `capacity` is the process-wide maximum number of simultaneously active
- * connections derived at startup. Admission is enforced atomically across all
- * loops. Listeners remain enabled at capacity: each bounded accept batch
- * rejects excess sockets promptly instead of waiting for an active slot.
+ * `cfg` supplies the runtime-tunable limits (capacity, keep-alive count,
+ * timeouts, input cap) and the shutdown drain deadline. It must outlive the
+ * loops. `capacity` is the process-wide maximum number of simultaneously
+ * active connections derived at startup; admission is enforced atomically
+ * across all loops. Listeners remain enabled at capacity: each bounded accept
+ * batch rejects excess sockets promptly instead of waiting for an active slot.
  *
- * Returns 0 on clean shutdown, -1 on fatal error.
+ * On shutdown the loops stop accepting, finish in-flight responses within
+ * cfg->shutdown_drain_timeout_sec, then close what remains. Returns 0 on clean
+ * shutdown, -1 on fatal error.
  */
-int event_loop_run(int server_fd, volatile sig_atomic_t *running, long capacity,
-                   int nloops);
+int event_loop_run(int server_fd, volatile sig_atomic_t *running,
+                   const ServerConfig *cfg, long capacity, int nloops);
 
 #endif /* EVENT_LOOP_H */

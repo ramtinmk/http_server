@@ -61,6 +61,21 @@
 #define WRITE_TIMEOUT_SEC 10
 #endif
 
+/* --- Graceful shutdown --------------------------------------------------- */
+
+/* On SIGTERM/SIGINT the server stops accepting and finishes in-flight
+ * responses for at most this many seconds before force-closing what remains.
+ * Bounds shutdown time so a stuck peer cannot delay process exit. */
+#ifndef SHUTDOWN_DRAIN_TIMEOUT_SEC
+#define SHUTDOWN_DRAIN_TIMEOUT_SEC 10
+#endif
+
+/* Timeout (ms) for a log-writer poll before it re-checks the SIGHUP reopen
+ * flag. Keeps reopen latency bounded without busy-waiting. */
+#ifndef LOG_POLL_INTERVAL_MS
+#define LOG_POLL_INTERVAL_MS 200
+#endif
+
 /* --- File-descriptor requirements --------------------------------------- */
 
 /* Minimum file-descriptor headroom required above MAX_ACTIVE_CONNECTIONS:
@@ -99,6 +114,27 @@
  * and the applied mask is printed at startup for the record.
  */
 #define ENV_CPU_SET "HTTP_SERVER_CPU_SET"
+
+/* --- Runtime configuration surface -------------------------------------- */
+
+/*
+ * Environment variable names and a key=value file plus CLI flags all feed one
+ * validated configuration (see include/config.h). Precedence is
+ * defaults < config file < environment < command line; an invalid value names
+ * the offending key and is fatal.
+ */
+#define ENV_CONFIG                  "HTTP_SERVER_CONFIG"
+#define ENV_PORT                    "HTTP_SERVER_PORT"
+#define ENV_BACKLOG                 "HTTP_SERVER_BACKLOG"
+#define ENV_MAX_KEEPALIVE_REQUESTS  "HTTP_SERVER_MAX_KEEPALIVE_REQUESTS"
+#define ENV_MAX_INPUT_BUFFER_BYTES  "HTTP_SERVER_MAX_INPUT_BUFFER_BYTES"
+#define ENV_HEADER_READ_TIMEOUT     "HTTP_SERVER_HEADER_READ_TIMEOUT"
+#define ENV_IDLE_TIMEOUT            "HTTP_SERVER_IDLE_TIMEOUT"
+#define ENV_WRITE_TIMEOUT           "HTTP_SERVER_WRITE_TIMEOUT"
+#define ENV_SHUTDOWN_DRAIN_TIMEOUT  "HTTP_SERVER_SHUTDOWN_DRAIN_TIMEOUT"
+#define ENV_LOG_LEVEL               "HTTP_SERVER_LOG_LEVEL"
+#define ENV_LOG_FILE                "HTTP_SERVER_LOG_FILE"
+#define ENV_ACCESS_LOG              "HTTP_SERVER_ACCESS_LOG"
 
 /* --- Event loop --------------------------------------------------------- */
 

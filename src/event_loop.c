@@ -2,12 +2,14 @@
 
 #include "event_loop.h"
 #include "metrics.h"
+#include "log.h"
 
 #include <sys/epoll.h>
 #include <sys/eventfd.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
+#include <arpa/inet.h>
 #include <fcntl.h>
 #include <errno.h>
 #include <time.h>
@@ -76,9 +78,16 @@ struct EventLoop {
     ELConnection    *pool;                /* Runtime-sized connection table    */
     size_t           pool_size;
     ELConnection    *free_list;
+    size_t           active_conns;        /* Live connections owned by loop     */
 
+    const ServerConfig *config;           /* Runtime-tunable limits             */
     long             capacity;            /* Process-wide active-connection cap*/
     volatile sig_atomic_t *running;
+
+    /* Graceful shutdown drain state. Once *running clears, the loop stops
+     * accepting and finishes in-flight responses until the drain deadline. */
+    int              draining;
+    struct timespec  drain_deadline;
 
     /* Accept-queue overflow sampling for this listener. */
     ListenDropState  listen_drops;
@@ -109,6 +118,17 @@ static int deadline_expired(const struct timespec *dl)
     now_mono(&now);
     return now.tv_sec > dl->tv_sec ||
            (now.tv_sec == dl->tv_sec && now.tv_nsec >= dl->tv_nsec);
+}
+
+/* Microseconds elapsed since `start` (both CLOCK_MONOTONIC). */
+static long elapsed_us(const struct timespec *start)
+{
+    struct timespec now;
+    now_mono(&now);
+    long long sec = (long long)now.tv_sec - (long long)start->tv_sec;
+    long long nsec = (long long)now.tv_nsec - (long long)start->tv_nsec;
+    long long us = sec * 1000000LL + nsec / 1000LL;
+    return us < 0 ? 0 : (long)us;
 }
 
 /* ------------------------------------------------------------------ */
@@ -179,10 +199,10 @@ static int epoll_set_ro(EventLoop *loop, ELConnection *c)
 }
 
 /* Enter the writing state and arm the response write deadline. */
-static void mark_writing(ELConnection *c)
+static void mark_writing(EventLoop *loop, ELConnection *c)
 {
     c->state = CONN_WRITING;
-    deadline_set(&c->deadline, WRITE_TIMEOUT_SEC);
+    deadline_set(&c->deadline, loop->config->write_timeout_sec);
 }
 
 /*
@@ -265,6 +285,8 @@ static void conn_close(EventLoop *loop, ELConnection *c, ELCloseReason reason)
     }
     close(c->fd);
     metrics_active_connection_dec();
+    if (loop->active_conns > 0)
+        loop->active_conns--;
 
     if (reason == CLOSE_DEADLINE) {
         if (c->state == CONN_WRITING) {
@@ -284,7 +306,8 @@ static void conn_close(EventLoop *loop, ELConnection *c, ELCloseReason reason)
 /* ------------------------------------------------------------------ */
 /* conn_open                                                            */
 /* ------------------------------------------------------------------ */
-static int conn_open(EventLoop *loop, int fd)
+static int conn_open(EventLoop *loop, int fd, const struct sockaddr *addr,
+                     socklen_t addrlen)
 {
     ELConnection *c = conn_alloc(loop);
     if (!c)
@@ -295,10 +318,22 @@ static int conn_open(EventLoop *loop, int fd)
     /* in_buf is left NULL by conn_alloc and allocated lazily on the first
      * readable event, so idle connections do not pin a request buffer. */
 
+    /* Capture the numeric peer only when access logging needs it. */
+    if (loop->config->access_log && addr) {
+        if (addr->sa_family == AF_INET) {
+            const struct sockaddr_in *in = (const struct sockaddr_in *)addr;
+            inet_ntop(AF_INET, &in->sin_addr, c->peer, sizeof(c->peer));
+        } else if (addr->sa_family == AF_INET6) {
+            const struct sockaddr_in6 *in6 = (const struct sockaddr_in6 *)addr;
+            inet_ntop(AF_INET6, &in6->sin6_addr, c->peer, sizeof(c->peer));
+        }
+    }
+    (void)addrlen;
+
     int one = 1;
     setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
 
-    deadline_set(&c->deadline, HEADER_READ_TIMEOUT_SEC);
+    deadline_set(&c->deadline, loop->config->header_read_timeout_sec);
 
     struct epoll_event ev;
     ev.events   = EPOLLIN;
@@ -307,6 +342,7 @@ static int conn_open(EventLoop *loop, int fd)
         conn_return(loop, c);
         return -1;
     }
+    loop->active_conns++;
     return 0;
 }
 
@@ -322,12 +358,13 @@ static int process_input(EventLoop *loop, ELConnection *c)
 
     while (!ring_buffer_is_empty(c->in_buf) &&
            !pq_full(c) &&
-           c->request_count < MAX_KEEPALIVE_REQUESTS)
+           c->request_count < loop->config->max_keepalive_requests)
     {
         PendingResponse pr;
         int req_ka = 0;
 
-        int force_last = (c->request_count + 1 >= MAX_KEEPALIVE_REQUESTS);
+        int force_last =
+            (c->request_count + 1 >= loop->config->max_keepalive_requests);
 
         int ret = el_prepare_response(c->in_buf, force_last, &req_ka, &pr);
         if (ret == 1) {
@@ -396,10 +433,13 @@ static void el_accept(EventLoop *loop)
     while (handled < EL_ACCEPT_BATCH_SIZE) {
 
         int fd;
+        struct sockaddr_storage peer_addr;
+        socklen_t peer_len = sizeof(peer_addr);
 #ifdef SOCK_NONBLOCK
-        fd = accept4(loop->listen_fd, NULL, NULL, SOCK_CLOEXEC | SOCK_NONBLOCK);
+        fd = accept4(loop->listen_fd, (struct sockaddr *)&peer_addr, &peer_len,
+                     SOCK_CLOEXEC | SOCK_NONBLOCK);
 #else
-        fd = accept(loop->listen_fd, NULL, NULL);
+        fd = accept(loop->listen_fd, (struct sockaddr *)&peer_addr, &peer_len);
         if (fd >= 0) {
             int flags = fcntl(fd, F_GETFL, 0);
             if (flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0) {
@@ -438,7 +478,7 @@ static void el_accept(EventLoop *loop)
             continue;
         }
 
-        if (conn_open(loop, fd) < 0) {
+        if (conn_open(loop, fd, (struct sockaddr *)&peer_addr, peer_len) < 0) {
             metrics_active_connection_dec();
             metrics_admission_rejected_reason(ADMISSION_REJECT_TABLE_FULL);
             reject_overload(fd);
@@ -493,13 +533,16 @@ static void el_writable(EventLoop *loop, ELConnection *c)
     metrics_el_writable_event();
 
     for (;;) {
-        if (c->pq_count == 0 && c->in_buf && !ring_buffer_is_empty(c->in_buf)) {
+        /* Requests already buffered when shutdown began are still processed so
+         * they are not truncated; the drain deadline bounds the extra work. */
+        if (c->pq_count == 0 && c->in_buf &&
+            !ring_buffer_is_empty(c->in_buf)) {
             if (process_input(loop, c) == -1)
                 return; /* closed */
             if (c->fd < 0)
                 return;
             if (c->pq_count > 0) {
-                mark_writing(c);
+                mark_writing(loop, c);
             }
         }
 
@@ -531,6 +574,8 @@ static void el_writable(EventLoop *loop, ELConnection *c)
 
         /* --- Response fully sent --- */
         metrics_response(pr->status);
+        log_access(c->peer, pr->method, pr->path, pr->status,
+                   pr->header_len + pr->body_len, elapsed_us(&pr->started));
         int fc = pr->force_close;
         pq_pop(c);
 
@@ -538,6 +583,12 @@ static void el_writable(EventLoop *loop, ELConnection *c)
             conn_close(loop, c, CLOSE_KEEPALIVE_LIMIT);
             return;
         }
+    }
+
+    /* Shutdown drain: no more queued responses, so release the connection. */
+    if (loop->draining) {
+        conn_close(loop, c, CLOSE_SHUTDOWN);
+        return;
     }
 
     if (!c->keep_alive) {
@@ -553,7 +604,7 @@ static void el_writable(EventLoop *loop, ELConnection *c)
     }
 
     c->state = CONN_KEEP_ALIVE;
-    deadline_set(&c->deadline, IDLE_TIMEOUT_SEC);
+    deadline_set(&c->deadline, loop->config->idle_timeout_sec);
     epoll_set_ro(loop, c);
     metrics_el_output_drained();
 }
@@ -575,7 +626,8 @@ static void el_readable(EventLoop *loop, ELConnection *c)
         metrics_buffer_leased(ring_buffer_get_capacity(c->in_buf));
     }
 
-    if (ring_buffer_get_size(c->in_buf) >= MAX_INPUT_BUFFER_BYTES) {
+    if (ring_buffer_get_size(c->in_buf) >=
+        (size_t)loop->config->max_input_buffer_bytes) {
         metrics_input_buffer_limit();
         conn_close(loop, c, CLOSE_BUFFER_FULL);
         return;
@@ -586,7 +638,8 @@ static void el_readable(EventLoop *loop, ELConnection *c)
         ssize_t n = recv(c->fd, buf, sizeof(buf), 0);
         if (n > 0) {
             ring_buffer_write(c->in_buf, buf, (size_t)n);
-            if (ring_buffer_get_size(c->in_buf) >= MAX_INPUT_BUFFER_BYTES) {
+            if (ring_buffer_get_size(c->in_buf) >=
+                (size_t)loop->config->max_input_buffer_bytes) {
                 metrics_input_buffer_limit();
                 conn_close(loop, c, CLOSE_BUFFER_FULL);
                 return;
@@ -617,7 +670,7 @@ static void el_readable(EventLoop *loop, ELConnection *c)
         return;
 
     if (c->pq_count > 0 && c->state != CONN_WRITING) {
-        mark_writing(c);
+        mark_writing(loop, c);
         epoll_set_rw(loop, c);
     }
 }
@@ -778,7 +831,21 @@ static void event_loop_main(EventLoop *loop)
 {
     struct epoll_event events[EL_MAX_EVENTS];
 
-    while (*loop->running) {
+    for (;;) {
+        if (!*loop->running) {
+            if (!loop->draining) {
+                /* Stop accepting; let in-flight responses finish. */
+                loop->draining = 1;
+                epoll_ctl(loop->epoll_fd, EPOLL_CTL_DEL, loop->listen_fd, NULL);
+                deadline_set(&loop->drain_deadline,
+                             loop->config->shutdown_drain_timeout_sec);
+            }
+            if (loop->active_conns == 0 ||
+                deadline_expired(&loop->drain_deadline)) {
+                break;
+            }
+        }
+
         int nev = epoll_wait(loop->epoll_fd, events, EL_MAX_EVENTS,
                              EL_DEADLINE_SCAN_MS);
         metrics_el_wakeup();
@@ -796,7 +863,7 @@ static void event_loop_main(EventLoop *loop)
             struct epoll_event *ev = &events[i];
 
             if (ev->data.ptr == &loop->listen_sentinel) {
-                if (ev->events & EPOLLIN)
+                if (!loop->draining && (ev->events & EPOLLIN))
                     el_accept(loop);
                 continue;
             }
@@ -827,7 +894,6 @@ static void event_loop_main(EventLoop *loop)
         }
 
         el_scan_deadlines(loop);
-
     }
 
     for (size_t i = 0; i < loop->pool_size; i++) {
@@ -848,12 +914,17 @@ static int el_set_nonblocking(int fd)
     return 0;
 }
 
-static int loop_init(EventLoop *loop, int listen_fd, long capacity,
-                     volatile sig_atomic_t *running)
+static int loop_init(EventLoop *loop, int listen_fd, const ServerConfig *config,
+                     long capacity, volatile sig_atomic_t *running)
 {
     loop->listen_fd              = listen_fd;
+    loop->config                 = config;
     loop->capacity               = capacity;
     loop->running                = running;
+    loop->active_conns           = 0;
+    loop->draining               = 0;
+    loop->drain_deadline.tv_sec  = 0;
+    loop->drain_deadline.tv_nsec = 0;
     loop->listen_drops.last      = 0;
     loop->listen_drops.primed    = 0;
     loop->epoll_fd               = -1;
@@ -937,8 +1008,8 @@ int event_loop_thread_count(void)
 
 /* event_loop_run                                                       */
 /* ------------------------------------------------------------------ */
-int event_loop_run(int server_fd, volatile sig_atomic_t *running, long capacity,
-                   int nloops)
+int event_loop_run(int server_fd, volatile sig_atomic_t *running,
+                   const ServerConfig *cfg, long capacity, int nloops)
 {
     if (capacity <= 0) {
         fprintf(stderr, "event_loop_run: invalid capacity %ld\n", capacity);
@@ -966,13 +1037,13 @@ int event_loop_run(int server_fd, volatile sig_atomic_t *running, long capacity,
 
     int status = 0;
     for (int i = 0; i < nloops; i++) {
-        int lfd = (i == 0) ? server_fd : create_server_socket(1);
+        int lfd = (i == 0) ? server_fd : create_server_socket(cfg, 1);
         if (lfd < 0) {
             status = -1;
             nloops = i; /* only initialise loops created so far */
             break;
         }
-        if (loop_init(&loops[i], lfd, capacity, running) < 0) {
+        if (loop_init(&loops[i], lfd, cfg, capacity, running) < 0) {
             if (i != 0)
                 close(lfd);
             status = -1;

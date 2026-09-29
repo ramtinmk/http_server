@@ -28,14 +28,25 @@ Sharp edges that cost time. Each entry says what bites and how to avoid it.
   `-DCMAKE_C_FLAGS="-DEL_THREAD_COUNT=4"` and rebuild, or edit
   `include/server_config.h`. The same applies to every limit in that header. See
   `docs/env-vars.md`.
-- **`HTTP_SERVER_ACCESS_LOG` is currently dead.** The benchmark scripts set it
-  to `0`, but nothing under `src/` reads it. It cannot silence anything because
-  there is no access-log path.
+- **`HTTP_SERVER_ACCESS_LOG` is now live.** Setting it to `0` disables access
+  records (the benchmark harnesses rely on this); `1` emits one JSON line per
+  completed response. Error/info records follow `HTTP_SERVER_LOG_LEVEL`.
+- **Access logging never blocks a loop, but it can drop.** Records go through an
+  `O_NONBLOCK` pipe to a writer thread; when the pipe is full the record is
+  dropped and counted (`dropped_logs` in the shutdown record) instead of
+  stalling the event loop.
+- **`SIGHUP` reopens the log file, it does not reload config.** Reopening is
+  polled by the writer thread at `LOG_POLL_INTERVAL_MS` (200 ms). Config and
+  runtime limits are read once at startup.
+- **Unknown config *file/CLI* keys are fatal; unknown environment variables are
+  ignored.** Only the named `HTTP_SERVER_*` variables are read, so unrelated
+  variables in the environment are harmless.
 - **Startup refuses to run on a low FD limit.** The check is
-  `MAX_ACTIVE_CONNECTIONS + REQUIRED_NOFILE_HEADROOM +
-  REQUIRED_NOFILE_PER_LOOP × loops`. On a many-core host the per-loop term is
-  large; either `ulimit -n` higher, lower `HTTP_SERVER_MAX_CONNECTIONS`, or pin
-  to fewer cores. The failure message names each term.
+  `max_connections + REQUIRED_NOFILE_HEADROOM + REQUIRED_NOFILE_PER_LOOP × loops`
+  using the runtime `max_connections` value (default `MAX_ACTIVE_CONNECTIONS`).
+  On a many-core host the per-loop term is large; either `ulimit -n` higher,
+  lower `HTTP_SERVER_MAX_CONNECTIONS`, or pin to fewer cores. The failure
+  message names each term.
 - **Capacity is a `min` of three things**, so raising
   `HTTP_SERVER_MAX_CONNECTIONS` alone may not raise the effective capacity. The
   startup line prints `operator_max`, `descriptor_cap`, `effective`, and what

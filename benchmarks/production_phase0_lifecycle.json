@@ -1,0 +1,46 @@
+{
+  "checks": {
+    "drain_under_load": {
+      "active_before_signal": 8,
+      "connections": 8,
+      "connections_complete": 8,
+      "drain_seconds": 0.001,
+      "exit_code": 0,
+      "pipeline_depth": 5,
+      "responses_delivered": 40,
+      "truncated_connections": 0
+    },
+    "invalid_config_command-line": {
+      "exit_code": 1,
+      "key_named": true,
+      "output": [
+        "FATAL: command line: value -3 for key 'idle_timeout' is out of range 1..86400"
+      ]
+    },
+    "invalid_config_environment": {
+      "exit_code": 1,
+      "key_named": true,
+      "output": [
+        "FATAL: HTTP_SERVER_IDLE_TIMEOUT: value 0 for key 'idle_timeout' is out of range 1..86400"
+      ]
+    },
+    "invalid_config_file": {
+      "exit_code": 1,
+      "key_named": true,
+      "output": [
+        "FATAL: /home/ai/C_http_server/benchmarks/.phase0_bad_config.conf:2: unknown configuration key 'nonsense_key'"
+      ]
+    },
+    "runtime_keepalive": {
+      "closed_after_limit": true,
+      "configured_limit": 2,
+      "responses_served": 2
+    },
+    "sd_notify": {
+      "ready": true,
+      "stopping": true
+    }
+  },
+  "failures": [],
+  "success": true
+}

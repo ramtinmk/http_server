@@ -3,6 +3,7 @@
 
 #include <signal.h>
 #include <sys/stat.h>
+#include <time.h>
 
 #include <errno.h>
 #include <fcntl.h>
@@ -18,6 +19,16 @@
 /* --- Parser limits --- */
 #define MAX_HEADERS 64
 #define MAX_HEADER_LEN 1024
+
+/* Bounded C-string copy that cannot trigger format-truncation warnings. */
+static void copy_cstr(char *dst, size_t cap, const char *src)
+{
+    if (cap == 0)
+        return;
+    size_t n = strnlen(src, cap - 1);
+    memcpy(dst, src, n);
+    dst[n] = '\0';
+}
 
 /* Response template for parser-generated errors. The body is embedded in the
  * header block, so these are sent as one complete response. */
@@ -199,7 +210,7 @@ int initialize_static_responses(void) {
     return 0;
 }
 
-int create_server_socket(int reuseport) {
+int create_server_socket(const ServerConfig *cfg, int reuseport) {
     /* Ignore SIGPIPE globally: writing to a closed client must not kill the
      * server. */
     signal(SIGPIPE, SIG_IGN);
@@ -242,7 +253,7 @@ int create_server_socket(int reuseport) {
     struct sockaddr_in server_addr;
     memset(&server_addr, 0, sizeof(server_addr));
     server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons(PORT);
+    server_addr.sin_port = htons((uint16_t)cfg->port);
     server_addr.sin_addr.s_addr = INADDR_ANY;
 
     if (bind(server_socket, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
@@ -251,7 +262,7 @@ int create_server_socket(int reuseport) {
         return -1;
     }
 
-    if (listen(server_socket, BACKLOG) < 0) {
+    if (listen(server_socket, cfg->backlog) < 0) {
         perror("listen");
         close(server_socket);
         return -1;
@@ -288,7 +299,7 @@ static void parse_request_line(char *line, HTTPRequest *req) {
         return;
     }
     *method_end = '\0';
-    snprintf(req->method, sizeof(req->method), "%s", line);
+    copy_cstr(req->method, sizeof(req->method), line);
 
     char *path_start = skip_ws(method_end + 1);
     char *path_end = strchr(path_start, ' ');
@@ -300,7 +311,7 @@ static void parse_request_line(char *line, HTTPRequest *req) {
         }
     }
     /* Without a version (HTTP/0.9) the rest of the line is the path. */
-    snprintf(req->path, sizeof(req->path), "%s", path_start);
+    copy_cstr(req->path, sizeof(req->path), path_start);
 }
 
 static int gzip_is_accepted(const char *value) {
@@ -428,6 +439,11 @@ int el_prepare_response(RingBuffer *rb, int force_close, int *keep_alive_out, Pe
 {
     if (ring_buffer_is_empty(rb)) { return 1; }
 
+    /* Access-log metadata baseline: overwritten below once the request line is
+     * parsed. Safe to leave empty for malformed requests. */
+    memset(pr, 0, sizeof(*pr));
+    clock_gettime(CLOCK_MONOTONIC, &pr->started);
+
     /* Transaction: save ring-buffer read state for rollback on NEED_DATA. */
     size_t snap_tail = rb->tail;
     size_t snap_size = rb->size;
@@ -452,6 +468,8 @@ int el_prepare_response(RingBuffer *rb, int force_close, int *keep_alive_out, Pe
     }
 
     parse_request_line(line_buf, &req);
+    copy_cstr(pr->method, sizeof(pr->method), req.method);
+    copy_cstr(pr->path, sizeof(pr->path), req.path);
     if (strlen(req.method) == 0 || strlen(req.path) == 0) {
         /* Malformed request line — consume bytes and return error response. */
         fill_static_response(pr, BAD_REQUEST_400, 400, 1);

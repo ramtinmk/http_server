@@ -43,6 +43,18 @@ benchmark target.
   unchanged). Set `HTTP_SERVER_MALLOC_ARENA_MAX` to override (1 minimizes
   VmSize); a pre-set `MALLOC_ARENA_MAX` is respected. See
   `include/server_config.h`.
+- **Configuration:** one validated surface with precedence defaults < config
+  file < environment < command line. Connection limits, keep-alive count, the
+  read/idle/write/drain timeouts, and logging are runtime-tunable; an invalid
+  or unknown key is fatal and names the key. See `docs/env-vars.md` and
+  `./bin/http_server --help`.
+- **Logging:** leveled JSON records to a file or stderr. Access logging is
+  opt-in (`HTTP_SERVER_ACCESS_LOG=1`) and writes through a nonblocking pipe to a
+  writer thread, so a slow disk drops records instead of stalling an event
+  loop. `SIGHUP` reopens the log file for rotation.
+- **Lifecycle:** `SIGTERM`/`SIGINT` stop accepting, finish in-flight responses
+  within `HTTP_SERVER_SHUTDOWN_DRAIN_TIMEOUT`, and exit 0; `sd_notify`
+  (`Type=notify`) is sent when `NOTIFY_SOCKET` is set.
 
 ## Build
 
@@ -65,6 +77,24 @@ The server must be launched from the repository root because it opens
 ```
 ./bin/http_server
 ```
+
+Configuration is a single validated surface. For example:
+
+```
+# config file (point to it with HTTP_SERVER_CONFIG or --config)
+idle_timeout = 5
+max_keepalive_requests = 1000
+log_level = info
+log_file = /var/log/http_server.jsonl
+access_log = 1
+
+# or directly on the command line / environment
+./bin/http_server --port 8081 --max-keepalive-requests 1000
+HTTP_SERVER_IDLE_TIMEOUT=5 ./bin/http_server
+```
+
+`--help` lists every key and its environment variable. An invalid or unknown
+key exits non-zero naming the key.
 
 | Path     | Response                     |
 |----------|------------------------------|

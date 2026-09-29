@@ -1,15 +1,21 @@
 # Runbook: change a configuration limit
 
-All server limits live in `include/server_config.h` (plus `PORT`/`BACKLOG` in
-`include/http_server.h`). Every one is `#ifndef`-guarded, so a compile-time
-`-D` override wins over the header default.
+Every limit has a compile-time default in `include/server_config.h` (plus
+`PORT`/`BACKLOG` in `include/http_server.h`), each `#ifndef`-guarded so a
+compile-time `-D` override wins. Most connection/timeout limits are also
+runtime-tunable through the validated config surface (file/env/CLI); see
+`docs/runbooks/configure-and-reload.md`.
 
 ## 1. Pick the default
 
 Edit the `#define` in `include/server_config.h`. Keep the comment above it
 accurate — these comments are the design rationale. If the limit has a validated
-range or interacts with another (for example `MAX_ACTIVE_CONNECTIONS` vs
+range or interacts with another (for example `max_connections` vs
 `REQUIRED_NOFILE_HEADROOM`), document that.
+
+If the limit should be runtime-tunable, also add a row to `CFG_KEYS` in
+`src/config.c`, a default in `config_defaults()`, an `ENV_*` name in
+`include/server_config.h`, and a row in `docs/env-vars.md`.
 
 ## 2. Override per build (without editing the header)
 

@@ -1,29 +1,62 @@
 # Environment Variables and Limits
 
-Two families of knobs:
+Three layers, resolved in precedence order
+**defaults < config file < environment < command line**:
 
-1. **Runtime environment variables** read with `getenv()` while the server runs.
-2. **Compile-time limits** — `#define`s in `include/server_config.h` and
+1. **Config file** — `key = value` lines, selected by `HTTP_SERVER_CONFIG` or
+   `--config <path>`. Unknown keys are fatal and name the key.
+2. **Runtime environment variables** — read with `getenv()` at startup. Each key
+   below has a matching `--<key>` / `--<key>=value` command-line flag.
+3. **Compile-time limits** — `#define`s in `include/server_config.h` and
    `include/http_server.h`, each wrapped in `#ifndef`. These are *not* shell
    variables; see [Overriding compile-time limits](#overriding-compile-time-limits).
 
-`include/server_config.h` is the single source of truth. If you add a limit,
-add it there (and here) rather than sprinkling magic numbers.
+`include/config.h` / `src/config.c` own the runtime surface;
+`include/server_config.h` owns the defaults. If you add a runtime knob, add a
+row to `CFG_KEYS` in `src/config.c`, a default in `config_defaults()`, and an
+`ENV_*` name in `include/server_config.h`, then document it here.
 
-## Runtime environment variables
+## Runtime configuration
+
+Keys may be written with `-` or `_` on the command line. A malformed or
+out-of-range value is fatal and names the exact key (for example
+`value 0 for key 'idle_timeout' is out of range 1..86400`).
+
+| Key / variable                     | Default                              | Effect |
+|------------------------------------|--------------------------------------|--------|
+| `config` / `HTTP_SERVER_CONFIG`    | unset                                | Config file path. |
+| `port` / `HTTP_SERVER_PORT`        | `PORT` (8081)                        | Listen port (1..65535). |
+| `backlog` / `HTTP_SERVER_BACKLOG`  | `BACKLOG` (1024)                     | `listen(2)` backlog; effective value clamped by `net.core.somaxconn`. |
+| `max_connections` / `HTTP_SERVER_MAX_CONNECTIONS` | `MAX_ACTIVE_CONNECTIONS` (1024) | Operator cap on active connections; effective capacity is `min(this, rlimit-derived, EL_MAX_CONNECTION_TABLE)`. |
+| `max_keepalive_requests` / `HTTP_SERVER_MAX_KEEPALIVE_REQUESTS` | `MAX_KEEPALIVE_REQUESTS` (100) | Requests per connection before the server forces `Connection: close`. |
+| `max_input_buffer_bytes` / `HTTP_SERVER_MAX_INPUT_BUFFER_BYTES` | `MAX_INPUT_BUFFER_BYTES` (65536) | Per-connection buffered request cap; exceeded → `413`. |
+| `header_read_timeout` / `HTTP_SERVER_HEADER_READ_TIMEOUT` | `HEADER_READ_TIMEOUT_SEC` (5) | Seconds to deliver complete headers after accept. |
+| `idle_timeout` / `HTTP_SERVER_IDLE_TIMEOUT` | `IDLE_TIMEOUT_SEC` (30) | Keep-alive idle seconds between requests. |
+| `write_timeout` / `HTTP_SERVER_WRITE_TIMEOUT` | `WRITE_TIMEOUT_SEC` (10) | Seconds to drain a full response. |
+| `shutdown_drain_timeout` / `HTTP_SERVER_SHUTDOWN_DRAIN_TIMEOUT` | `SHUTDOWN_DRAIN_TIMEOUT_SEC` (10) | Seconds `SIGTERM`/`SIGINT` may spend draining in-flight responses. |
+| `log_level` / `HTTP_SERVER_LOG_LEVEL` | `info` | `error`, `warn`, `info`, or `debug`. |
+| `log_file` / `HTTP_SERVER_LOG_FILE` | unset (stderr) | JSON log target. `SIGHUP` reopens it (for logrotate). |
+| `access_log` / `HTTP_SERVER_ACCESS_LOG` | `0` | Emit one JSON access record per completed response. |
+
+### Operational variables
 
 | Variable                       | Default                              | Effect |
 |--------------------------------|--------------------------------------|--------|
-| `HTTP_SERVER_METRICS_FILE`     | unset                                | Path for periodic single-line JSON snapshots. Starts a detached reporter thread at a 250 ms cadence that atomically rewrites the file. See `src/main.c:492`. |
-| `HTTP_SERVER_MAX_CONNECTIONS`  | `MAX_ACTIVE_CONNECTIONS` (1024)      | Operator cap on simultaneously active connections. Effective capacity is `min(this, rlimit-derived, EL_MAX_CONNECTION_TABLE)`; a non-positive or malformed value is fatal. See `src/main.c:423`. |
-| `HTTP_SERVER_CPU_SET`          | unset                                | `taskset(1)`-style CPU list (`0-3`, `0,2,4`) that pins the process via `sched_setaffinity`. Unset means no pinning. Invalid syntax/range is fatal. See `src/main.c:331`. |
-| `HTTP_SERVER_MALLOC_ARENA_MAX` | `MALLOC_ARENA_MAX_DEFAULT` (2)       | glibc arena cap applied with `mallopt(M_ARENA_MAX, …)` before threads start. `1` minimizes VmSize but serializes allocations; a non-positive/malformed value is fatal. Ignored when `MALLOC_ARENA_MAX` is preset. See `src/main.c:59`. |
-| `MALLOC_ARENA_MAX`             | unset                                | glibc's own preset. When set, the server respects it and does not call `mallopt`. See `src/main.c:51`. |
-| `HTTP_SERVER_ACCESS_LOG`       | unset                                | **Currently a no-op.** The benchmark scripts set it to `0`, but no code in `src/` reads it. Do not rely on it to silence logging (there is no access-log path). |
+| `HTTP_SERVER_METRICS_FILE`     | unset                                | Path for periodic single-line JSON snapshots (250 ms cadence, atomic rewrite). |
+| `HTTP_SERVER_CPU_SET`          | unset                                | `taskset(1)`-style CPU list (`0-3`, `0,2,4`) applied with `sched_setaffinity`. Invalid syntax/range is fatal. |
+| `HTTP_SERVER_MALLOC_ARENA_MAX` | `MALLOC_ARENA_MAX_DEFAULT` (2)       | glibc arena cap applied before threads start. Ignored when `MALLOC_ARENA_MAX` is preset. |
+| `MALLOC_ARENA_MAX`             | unset                                | glibc's own preset; when set the server respects it. |
+| `NOTIFY_SOCKET`                | unset                                | When set, the server sends `READY=1` after binding and `STOPPING=1` on shutdown (systemd `Type=notify`). |
+
+Command-line flags mirror the key names plus `--config` and `--help`; for
+example `--max-keepalive-requests 10 --idle-timeout 5`. `EL_THREAD_COUNT` is
+*not* runtime-tunable — it stays compile-time by convention.
 
 ## Compile-time limits
 
-All values live in `include/server_config.h` unless noted.
+All values live in `include/server_config.h` unless noted. Values that also
+appear as runtime keys above are the **defaults**; a runtime value overrides
+the compiled default without a rebuild.
 
 | Macro                        | Default | Meaning |
 |------------------------------|--------:|---------|
@@ -36,6 +69,8 @@ All values live in `include/server_config.h` unless noted.
 | `HEADER_READ_TIMEOUT_SEC`    | 5       | Time to deliver complete request headers after accept. |
 | `IDLE_TIMEOUT_SEC`           | 30      | Keep-alive idle time between requests. |
 | `WRITE_TIMEOUT_SEC`          | 10      | Time to drain a full response to the socket. |
+| `SHUTDOWN_DRAIN_TIMEOUT_SEC` | 10      | Default drain deadline on `SIGTERM`/`SIGINT`. |
+| `LOG_POLL_INTERVAL_MS`       | 200     | Log-writer poll tick (ms); bounds `SIGHUP` reopen latency. |
 | `REQUIRED_NOFILE_HEADROOM`   | 64      | Non-connection descriptors reserved above capacity. |
 | `REQUIRED_NOFILE_PER_LOOP`   | 3       | Extra descriptors per loop (epoll fd, wake eventfd, listener). |
 | `EL_THREAD_COUNT`            | 0       | Event-loop count. `0` = one per online core; positive = explicit override; `1` = single-loop control. **Compile-time only.** |
