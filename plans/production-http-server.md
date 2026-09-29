@@ -5,7 +5,7 @@ category: program
 status: active
 owner: agent
 created: 2026-09-25
-updated: 2026-09-25
+updated: 2026-09-29
 related: [scaling-plan, scaling-phase-5-os-tuning, scaling-phase-4-scale-accept, hardware-agnostic-benchmark, formally-verify-c-http-server-with-lean]
 ---
 
@@ -124,8 +124,8 @@ program adds:
 
 Legend: `[x]` done, `[~]` partial, `[ ]` pending, `[!]` blocked.
 
-- [ ] Phase 0 `production-http-server/phase-0`: operational safety and overload
-  semantics.
+- [~] Phase 0 `production-http-server/phase-0`: overload policy complete;
+  lifecycle, runtime tuning, configuration, and logging remain.
 - [ ] Phase 1 `production-http-server/phase-1`: HTTP/1.1 correctness and
   caching semantics.
 - [ ] Phase 2 `production-http-server/phase-2`: secure static file serving.
@@ -149,13 +149,15 @@ Legend: `[x]` done, `[~]` partial, `[ ]` pending, `[!]` blocked.
 
 **Work**
 
-- [ ] Replace listener-disable starvation with a bounded overload policy:
+- [x] Replace listener-disable starvation with a bounded overload policy:
   accept, then send a complete `503 Service Unavailable` and close, or refuse
   quickly; document the queue/deadline. Reconcile with the Phase 4
-  saturation design and keep `listener_disabled_count` bounded.
-- [ ] Derive effective connection capacity at runtime from `RLIMIT_NOFILE`,
+  saturation design and keep `listener_disabled_count` bounded. Verified by
+  `benchmarks/production_phase0_overload.json`.
+- [x] Derive effective connection capacity at runtime from `RLIMIT_NOFILE`,
   operator maximum, and the connection-table bound; one source of truth, printed
-  and exposed in metrics.
+  and exposed in metrics (already implemented by startup preflight and
+  `connection_capacity` metrics).
 - [ ] Make `MAX_KEEPALIVE_REQUESTS`, timeouts, and capacity runtime-tunable;
   measure the reuse-vs-fairness tradeoff and pick a default with evidence.
 - [ ] Graceful lifecycle: on `SIGTERM`/`SIGINT` stop accepting, drain in-flight
@@ -411,8 +413,8 @@ Program completion requires all of:
 
 ## Risks and rollback
 
-- **Overload change destabilizes Phase 4 saturation behavior** → Land it behind
-  the existing saturation scenario with a control run; revert the policy flag
+- **Overload change destabilizes Phase 4 saturation behavior** → Compare it with
+  the recorded Phase 4 control evidence; revert the isolated accept/reject policy
   if `listener_disabled_count`, drops, or resets regress.
 - **TLS integration stalls loops or regresses throughput** → Keep TLS behind a
   config toggle and a separate listener; plaintext remains the reference path

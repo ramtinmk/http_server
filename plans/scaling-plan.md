@@ -449,11 +449,12 @@ design cannot scale efficiently when many persistent or slow connections exist.
 (`scaling-phase-4-scale-accept`, `plans/scaling-plan-phase4.md`, section B) and
 are kept here as the originating evidence and rationale.
 
-The active-connection limit is currently a hard compile-time admission cap.
-When `MAX_ACTIVE_CONNECTIONS` is lower than the offered concurrency, the event
-loop accepts additional sockets and closes them immediately. That behavior is
-bounded, but it is not graceful for clients that expect a response and can
-surface as large numbers of `wrk` read errors.
+At the time of the observation below, the active-connection limit was a hard
+compile-time admission cap. When `MAX_ACTIVE_CONNECTIONS` was lower than the
+offered concurrency, the event loop accepted additional sockets and closed them
+immediately. The production Phase 0 overload policy now supersedes that behavior
+with bounded accept-and-reject batches; the numbers below remain evidence of the
+original failure mode.
 
 Observed evidence on 2026-09-20:
 
@@ -477,14 +478,11 @@ above the configured limit.
 - [ ] Replace the fixed-size event-loop connection table with runtime-sized
   state, or document and enforce the maximum supported table size separately
   from the descriptor limit.
-- [ ] Define listener backpressure for saturation. Prefer disabling listener
-  read interest while the connection table is full and re-enabling it after a
-  close; document backlog behavior and the conditions under which a client may
-  still receive a connect timeout or refusal.
-- [ ] If user-space rejection is required, provide a bounded overload policy
-  with a complete `503 Service Unavailable` response where safe, otherwise
-  close before accepting request data. Never accept and silently reset a
-  request merely because the configured connection cap was reached.
+- [x] Define listener overload behavior: keep listener read interest enabled,
+  accept excess sockets in bounded batches, return a complete `503 Service
+  Unavailable` where possible, and reset promptly otherwise. Document remaining
+  kernel backlog/refusal behavior in `docs/architecture.md` (implemented under
+  `production-http-server/phase-0`).
 - [ ] Decouple idle keep-alive state from request buffers and response storage.
   Release or shrink input/output storage when a connection is idle so memory
   scales with active requests rather than the connection-table size.

@@ -14,6 +14,14 @@ and in the nearest directory's `AGENTS.md`.
 | Task recipes (add a route, reproduce a benchmark)| `docs/runbooks/`              |
 | Phase specs and intent                           | `plans/` (read `plan-spec.md` first) |
 
+## Git branch selection
+
+- At the start of a coding task, inspect the current branch and working tree. Follow an explicit branch name or instruction in the prompt; otherwise use the criteria below.
+- Create a topic branch before editing for a standalone feature, bug fix, substantial refactor, or experiment when the current branch is the shared/default branch. Use a short task-based name such as `feature/<name>`, `fix/<name>`, `refactor/<name>`, or `experiment/<name>`.
+- Stay on the current branch for small, localized changes, documentation-only work, follow-ups to work already on a suitable topic branch, or when the prompt clearly asks to continue the current branch.
+- Never switch branches with unrelated uncommitted changes present, and never stash, discard, commit, or push changes unless asked. If a new branch seems warranted but the worktree is dirty, preserve it and ask before switching; otherwise continue on the current branch when safe.
+- Do not create branches for informational questions. Do not commit or push as an automatic consequence of creating a branch.
+
 ## Update the docs in every iteration
 
 Documentation is part of the change, not a follow-up task. **Every iteration

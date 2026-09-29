@@ -87,8 +87,8 @@ int event_loop_thread_count(void);
  *
  * `capacity` is the process-wide maximum number of simultaneously active
  * connections derived at startup. Admission is enforced atomically across all
- * loops, and each loop disables its listener interest while the global table
- * is full (listener backpressure).
+ * loops. Listeners remain enabled at capacity: each bounded accept batch
+ * rejects excess sockets promptly instead of waiting for an active slot.
  *
  * Returns 0 on clean shutdown, -1 on fatal error.
  */

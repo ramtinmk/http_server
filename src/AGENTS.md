@@ -11,7 +11,10 @@ event loop. Directory-wide rules (build, tests, plans) are in `../AGENTS.md`.
   Keep `EL_THREAD_COUNT` compile-time; do not read it from the environment.
 - `event_loop.c` — the nonblocking `epoll` state machine. One instance per
   thread; a connection is owned by exactly one loop. Response pointers are
-  borrowed from cached/static memory and must never be freed here.
+  borrowed from cached/static memory and must never be freed here. Each
+  listener pass handles at most `EL_ACCEPT_BATCH_SIZE` accepted sockets; at
+  capacity it attempts a nonblocking 503 and closes promptly rather than
+  disabling listener interest.
 - `http_server.c` — socket creation, HTTP parsing, and static/gzip caching.
   `el_prepare_response()` is transactional: roll the ring buffer back to its
   saved `tail`/`size` on incomplete input, or pipelining corrupts.

@@ -21,6 +21,11 @@ benchmark target.
 - **Resource guards:** bounded active connections, per-connection input cap,
   keep-alive request cap, and read/idle/write timeouts (see
   `include/server_config.h` for every value and its default).
+- **Overload behavior:** at connection capacity, each event loop accepts and
+  rejects excess sockets in bounded batches. It attempts a complete `503`
+  response without blocking; if that cannot be sent immediately, it closes the
+  socket promptly with a reset. Listener interest stays enabled, so excess
+  connections do not wait for an active slot to free before being rejected.
 - **Metrics:** set `HTTP_SERVER_METRICS_FILE=<path>` to emit periodic runtime
   snapshots (connections, response status distribution, timeouts, event-loop
   counters).

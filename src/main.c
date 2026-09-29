@@ -101,6 +101,7 @@ static void print_server_config(void)
     printf("=== Server Configuration ===\n");
     printf("  PORT                  : %d\n",  PORT);
     printf("  BACKLOG               : %d\n",  BACKLOG);
+    printf("  EL_ACCEPT_BATCH_SIZE  : %d\n", EL_ACCEPT_BATCH_SIZE);
     printf("  MAX_ACTIVE_CONNECTIONS: %d\n",  MAX_ACTIVE_CONNECTIONS);
     printf("  MAX_KEEPALIVE_REQUESTS: %d\n",  MAX_KEEPALIVE_REQUESTS);
     printf("  MAX_INPUT_BUFFER_BYTES: %d\n",  MAX_INPUT_BUFFER_BYTES);
@@ -288,6 +289,12 @@ static int validate_configuration(int el_threads, long capacity)
     if (MAX_PIPELINE_DEPTH <= 0) {
         fprintf(stderr, "FATAL: MAX_PIPELINE_DEPTH=%d must be positive\n",
                 MAX_PIPELINE_DEPTH);
+        return -1;
+    }
+    if (EL_ACCEPT_BATCH_SIZE <= 0) {
+        fprintf(stderr,
+                "FATAL: EL_ACCEPT_BATCH_SIZE=%d must be positive\n",
+                EL_ACCEPT_BATCH_SIZE);
         return -1;
     }
     if (HEADER_READ_TIMEOUT_SEC <= 0 || IDLE_TIMEOUT_SEC <= 0 ||

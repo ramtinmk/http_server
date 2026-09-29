@@ -20,7 +20,7 @@ counter:
 | Client stopped reading mid-response | `write_timeout` | `WRITE_TIMEOUT_SEC` (10 s) |
 | Client sent more than the buffer cap | `input_buffer_limit` | `MAX_INPUT_BUFFER_BYTES` (64 KB) |
 | Connection closed by the scanner | `el_deadline_close` | aggregate |
-| Capacity/backpressure, not a timeout | `rejected_connections`, `listener_disabled`, `backlog_depth_max` | `HTTP_SERVER_MAX_CONNECTIONS` |
+| Capacity overload, not a timeout | `admission_rejected_capacity`, `overload_responses`, `connection_resets`, `backlog_depth_max` | `HTTP_SERVER_MAX_CONNECTIONS`, `EL_ACCEPT_BATCH_SIZE` |
 
 ## 2. Reproduce deterministically
 
@@ -39,10 +39,13 @@ existing test's raw-socket script.
 
 - A timeout means the deadline expired; the close reason is `CLOSE_DEADLINE`
   and the matching counter increments.
-- Overload closes/resets are `CLOSE_BUFFER_FULL`/`CLOSE_SHUTDOWN` paths and bump
-  `metrics_listen_drops`/accept-error counters or `metrics_overload_response`.
-  Check `rejected_connections` and `connection_capacity` in the snapshot before
-  blaming a timeout.
+- At capacity, the event loop accepts and rejects excess sockets in bounded
+  batches. It attempts a nonblocking 503 and promptly resets if the response
+  cannot be sent in full; `listener_disabled_count` stays zero. Check
+  `admission_rejected_capacity`, `overload_responses`, `connection_resets`, and
+  `connection_capacity` in the snapshot before blaming a timeout. Reproduce
+  with `python3 scripts/saturation_test.py --capacity 16`; the repeatable
+  artifact is `benchmarks/production_phase0_overload.json`.
 - Header-size rejections (`431`/`414`) come from parser limits
   (`MAX_HEADERS`, `MAX_HEADER_LEN` in `src/http_server.c`), not timeouts.
 

@@ -41,6 +41,7 @@ All values live in `include/server_config.h` unless noted.
 | `EL_THREAD_COUNT`            | 0       | Event-loop count. `0` = one per online core; positive = explicit override; `1` = single-loop control. **Compile-time only.** |
 | `EL_MAX_THREADS`             | 64      | Upper bound / clamp on the loop count. |
 | `EL_MAX_EVENTS`              | 256     | Max events per `epoll_wait`. |
+| `EL_ACCEPT_BATCH_SIZE`       | 64      | Maximum accepted sockets handled per listener event dispatch; bounds overload rejection work before the loop services other events. |
 | `EL_DEADLINE_SCAN_MS`        | 100     | Deadline-scanner interval (ms). |
 | `EL_MAX_CONNECTION_TABLE`    | 65536   | Hard upper bound on the runtime connection table. |
 | `MALLOC_ARENA_MAX_DEFAULT`   | 2       | Default glibc arena cap when no env override/preset. |

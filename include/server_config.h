@@ -102,6 +102,13 @@
 
 /* --- Event loop --------------------------------------------------------- */
 
+/* Maximum accepted sockets processed by one listener event dispatch. Under
+ * sustained overload, a finite batch keeps rejection work from monopolizing
+ * the owning event loop; level-triggered epoll schedules the listener again. */
+#ifndef EL_ACCEPT_BATCH_SIZE
+#define EL_ACCEPT_BATCH_SIZE 64
+#endif
+
 /* Maximum epoll events retrieved per epoll_wait call. */
 #ifndef EL_MAX_EVENTS
 #define EL_MAX_EVENTS 256

@@ -40,6 +40,12 @@ Sharp edges that cost time. Each entry says what bites and how to avoid it.
   `HTTP_SERVER_MAX_CONNECTIONS` alone may not raise the effective capacity. The
   startup line prints `operator_max`, `descriptor_cap`, `effective`, and what
   limited it.
+- **Over-capacity connections are accepted and rejected in bounded batches.**
+  The server attempts a complete nonblocking 503, then resets promptly if the
+  socket cannot accept the whole response. `EL_ACCEPT_BATCH_SIZE` limits work
+  per listener dispatch; when the process is unable to accept at all (for
+  example, descriptor exhaustion), normal kernel backlog timeout/refusal
+  behavior can still occur.
 - **A single-loop build intentionally fails to share the port.** `SO_REUSEPORT`
   is only set when multiple loops are enabled, so a second accidental instance
   fails to bind instead of silently splitting traffic.

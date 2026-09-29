@@ -69,7 +69,6 @@ struct EventLoop {
     int              id;                  /* 0-based loop index (diagnostics)  */
     int              epoll_fd;
     int              listen_fd;
-    int              listen_enabled;      /* EPOLLIN currently registered?     */
     int              wake_fd;             /* eventfd used to break epoll_wait  */
     ELConnection     listen_sentinel;     /* epoll tag for the listener        */
     ELConnection     wake_sentinel;       /* epoll tag for the wake eventfd    */
@@ -81,9 +80,7 @@ struct EventLoop {
     long             capacity;            /* Process-wide active-connection cap*/
     volatile sig_atomic_t *running;
 
-    long             listener_disabled_at_ms; /* -1 while listener is enabled */
-
-    /* Phase 5: accept-queue overflow sampling for this listener. */
+    /* Accept-queue overflow sampling for this listener. */
     ListenDropState  listen_drops;
 
     /* Per-loop diagnostics, reported at shutdown alongside the aggregate
@@ -98,13 +95,6 @@ struct EventLoop {
 static void now_mono(struct timespec *ts)
 {
     clock_gettime(CLOCK_MONOTONIC, ts);
-}
-
-static long now_ms(void)
-{
-    struct timespec ts;
-    now_mono(&ts);
-    return (long)ts.tv_sec * 1000L + ts.tv_nsec / 1000000L;
 }
 
 static void deadline_set(struct timespec *dl, int seconds)
@@ -195,15 +185,10 @@ static void mark_writing(ELConnection *c)
     deadline_set(&c->deadline, WRITE_TIMEOUT_SEC);
 }
 
-/* ------------------------------------------------------------------ */
-/* Listener backpressure                                                */
-/* ------------------------------------------------------------------ */
-
 /*
  * Number of connections waiting in the kernel accept queue for a listening
  * socket. On Linux, TCP_INFO's tcpi_unacked reports the accept-queue depth for
- * a listener; this is the "backlog pressure" observed while read interest is
- * disabled. Returns -1 when the platform does not report it.
+ * a listener. Returns -1 when the platform does not report it.
  */
 static long listener_backlog_depth(int fd)
 {
@@ -214,47 +199,6 @@ static long listener_backlog_depth(int fd)
         return (long)info.tcpi_unacked;
 #endif
     return -1;
-}
-
-static void listener_set_enabled(EventLoop *loop, int enabled)
-{
-    if (loop->listen_fd < 0 || loop->listen_enabled == enabled)
-        return;
-
-    struct epoll_event ev;
-    memset(&ev, 0, sizeof(ev));
-    ev.events   = enabled ? EPOLLIN : 0;
-    ev.data.ptr = &loop->listen_sentinel;
-    if (epoll_ctl(loop->epoll_fd, EPOLL_CTL_MOD, loop->listen_fd, &ev) != 0) {
-        perror("epoll_ctl listener");
-        return;
-    }
-    loop->listen_enabled = enabled;
-    if (!enabled) {
-        if (loop->listener_disabled_at_ms < 0)
-            loop->listener_disabled_at_ms = now_ms();
-        metrics_listener_disabled();
-        metrics_backlog_depth(listener_backlog_depth(loop->listen_fd));
-    } else {
-        if (loop->listener_disabled_at_ms >= 0) {
-            metrics_listener_enabled(now_ms() - loop->listener_disabled_at_ms);
-            loop->listener_disabled_at_ms = -1;
-        }
-    }
-}
-
-static void maybe_enable_listener(EventLoop *loop)
-{
-    if (loop->listen_enabled)
-        return;
-
-    /* Still disabled: sample how many clients are queued behind the
-     * backpressure so a saturation run can see the backlog build. */
-    metrics_backlog_depth(listener_backlog_depth(loop->listen_fd));
-
-    if (metrics_active_connection_count() < loop->capacity) {
-        listener_set_enabled(loop, 1);
-    }
 }
 
 /* ------------------------------------------------------------------ */
@@ -302,6 +246,14 @@ static void drain_socket(int fd)
     }
 }
 
+/* Overload closes are especially hot under connection floods. Consume at most
+ * one small chunk so draining a client cannot dominate the event-loop batch. */
+static void drain_overload_socket(int fd)
+{
+    char buf[4096];
+    (void)recv(fd, buf, sizeof(buf), 0);
+}
+
 /* ------------------------------------------------------------------ */
 /* conn_close                                                           */
 /* ------------------------------------------------------------------ */
@@ -327,13 +279,6 @@ static void conn_close(EventLoop *loop, ELConnection *c, ELCloseReason reason)
     conn_buffer_release(c);
     conn_return(loop, c);
     metrics_el_connection_closed();
-
-    /* A closed connection frees a global slot: re-enable this loop's
-     * listener if it was disabled for backpressure. During shutdown the
-     * listener is never re-enabled. */
-    if (loop->running && *loop->running) {
-        maybe_enable_listener(loop);
-    }
 }
 
 /* ------------------------------------------------------------------ */
@@ -415,19 +360,29 @@ static int process_input(EventLoop *loop, ELConnection *c)
 /* ------------------------------------------------------------------ */
 static void reject_overload(int fd)
 {
-    drain_socket(fd);
+    int replied = 0;
     if (g_overload_len) {
         ssize_t n = send(fd, g_overload_response, g_overload_len, MSG_NOSIGNAL);
         if (n == (ssize_t)g_overload_len) {
             metrics_overload_response();
+            metrics_response(503);
+            replied = 1;
         } else {
             metrics_connection_reset();
         }
     } else {
         metrics_connection_reset();
     }
-    shutdown(fd, SHUT_WR);
-    drain_socket(fd);
+
+    if (replied) {
+        shutdown(fd, SHUT_WR);
+        drain_overload_socket(fd);
+    } else {
+        /* A partial nonblocking write is not a valid HTTP response. Reset it
+         * promptly rather than leaving a truncated response to time out. */
+        struct linger reset = {1, 0};
+        setsockopt(fd, SOL_SOCKET, SO_LINGER, &reset, sizeof(reset));
+    }
     close(fd);
 }
 
@@ -436,13 +391,9 @@ static void reject_overload(int fd)
 /* ------------------------------------------------------------------ */
 static void el_accept(EventLoop *loop)
 {
-    for (;;) {
-        /* Listener backpressure: stop accepting while the process-wide table
-         * is full. Pending connections wait in the kernel accept queue. */
-        if (metrics_active_connection_count() >= loop->capacity) {
-            listener_set_enabled(loop, 0);
-            return;
-        }
+    unsigned int handled = 0;
+    int sampled_backlog = 0;
+    while (handled < EL_ACCEPT_BATCH_SIZE) {
 
         int fd;
 #ifdef SOCK_NONBLOCK
@@ -475,12 +426,16 @@ static void el_accept(EventLoop *loop)
             perror("accept");
             return;
         }
+        handled++;
 
         if (!metrics_connection_admit(loop->capacity)) {
             metrics_admission_rejected_reason(ADMISSION_REJECT_CAPACITY);
+            if (!sampled_backlog) {
+                metrics_backlog_depth(listener_backlog_depth(loop->listen_fd));
+                sampled_backlog = 1;
+            }
             reject_overload(fd);
-            listener_set_enabled(loop, 0);
-            return;
+            continue;
         }
 
         if (conn_open(loop, fd) < 0) {
@@ -873,8 +828,6 @@ static void event_loop_main(EventLoop *loop)
 
         el_scan_deadlines(loop);
 
-        /* Another loop may have freed global capacity. */
-        maybe_enable_listener(loop);
     }
 
     for (size_t i = 0; i < loop->pool_size; i++) {
@@ -899,10 +852,8 @@ static int loop_init(EventLoop *loop, int listen_fd, long capacity,
                      volatile sig_atomic_t *running)
 {
     loop->listen_fd              = listen_fd;
-    loop->listen_enabled         = 0;
     loop->capacity               = capacity;
     loop->running                = running;
-    loop->listener_disabled_at_ms = -1;
     loop->listen_drops.last      = 0;
     loop->listen_drops.primed    = 0;
     loop->epoll_fd               = -1;
@@ -942,8 +893,6 @@ static int loop_init(EventLoop *loop, int listen_fd, long capacity,
         perror("epoll_ctl listener");
         return -1;
     }
-    loop->listen_enabled = 1;
-
     ev.events   = EPOLLIN;
     ev.data.ptr = &loop->wake_sentinel;
     if (epoll_ctl(loop->epoll_fd, EPOLL_CTL_ADD, loop->wake_fd, &ev) < 0) {

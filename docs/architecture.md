@@ -29,7 +29,7 @@ invariants must hold when you change the code.
 | File                        | Owns                                                                 |
 |-----------------------------|----------------------------------------------------------------------|
 | `src/main.c`                | Socket setup, allocator cap, startup preflight, signal handling, effective capacity, loop-count resolution, dispatch selection |
-| `src/event_loop.c`          | Nonblocking per-loop connection state machine, pipeline queue, deadlines, admission/backpressure, listen-drop sampling |
+| `src/event_loop.c`          | Nonblocking per-loop connection state machine, pipeline queue, deadlines, admission/overload handling, listen-drop sampling |
 | `src/http_server.c`         | Socket creation, HTTP/1.1 parsing, static asset + gzip caching, response selection |
 | `src/ring_buffer.c`         | Bounded circular byte buffer and line reader with rollback           |
 | `src/metrics.c`             | Lock-free counters, JSON snapshot rendering, reporter thread         |
@@ -85,18 +85,24 @@ CONN_READING_HEADERS --complete request--> (enqueue response) --+
 
 Close reasons are enumerated in `ELCloseReason` (`include/event_loop.h:21`).
 
-## Admission and backpressure
+## Admission and overload
 
 - A new connection is admitted only if the process-wide active gauge is below
   the effective capacity (atomic). When a loop's own connection table is full,
   the reject reason is `ADMISSION_REJECT_TABLE_FULL`; the global cap yields
   `ADMISSION_REJECT_CAPACITY` (`include/metrics.h:71`).
-- When the global table is full, each loop **disables its listener read
-  interest** (`listener_set_enabled`) and re-enables it after the next close
-  (`maybe_enable_listener()`), letting the kernel queue/hold clients
-  (backlog pressure) instead of dropping them.
-- Above capacity with no free slot, the loop may emit a `503` overload response
-  (`build_overload_response()`, `reject_overload()`) rather than a reset.
+- Each listener dispatch accepts at most `EL_ACCEPT_BATCH_SIZE` sockets. The
+  limit gives other events a chance to run under a connection flood; level-
+  triggered epoll will schedule another listener pass while connections remain
+  queued.
+- At capacity, accepted sockets do not consume a connection-table slot. The
+  loop attempts a complete nonblocking `503`. After a full response it consumes
+  at most 4 KiB of pending input and closes; if the response cannot be sent in
+  full it resets the socket promptly. No listener-disable starvation occurs;
+  brief kernel accept-queue occupancy is serviced in later
+  bounded batches. If the process cannot accept because descriptors are
+  exhausted, kernel backlog limits and TCP timeout/refusal behavior still
+  apply.
 
 ## Static assets and gzip
 

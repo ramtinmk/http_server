@@ -145,10 +145,8 @@ void metrics_set_connection_capacity(long capacity);
  * is enforced atomically rather than per loop. */
 int metrics_connection_admit(long capacity);
 
-/* Listener backpressure: the event loop disables accept interest while the
- * connection table is full and re-enables it after a close. The first call
- * records a new disabled transition; the second records the disabled
- * duration in milliseconds. */
+/* Legacy listener-disable counters retained in snapshots for compatibility.
+ * The current overload policy keeps listeners enabled, so these remain zero. */
 void metrics_listener_disabled(void);
 void metrics_listener_enabled(long disabled_ms);
 
@@ -167,10 +165,8 @@ void metrics_connection_reset(void);
 void metrics_buffer_leased(size_t bytes);
 void metrics_buffer_returned(size_t bytes);
 
-/* Backlog pressure: number of connections waiting in the kernel accept queue
- * while listener read interest is disabled. Sampled by the event loop; the
- * high-water mark shows how many clients were held by backpressure. Negative
- * samples (unsupported) are ignored. */
+/* Backlog pressure: sampled on overload while the listener remains enabled.
+ * Negative samples (unsupported) are ignored. */
 void metrics_backlog_depth(long depth);
 
 /* --- Phase 5: listener drops and accept errors -------------------------- */

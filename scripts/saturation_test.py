@@ -1,17 +1,19 @@
 #!/usr/bin/env python3
-"""Phase 4 saturation acceptance test.
+"""Phase 0 overload-policy end-to-end acceptance test.
 
 Starts the server with a reduced, operator-set connection capacity and drives
-three observations required by plans/scaling-plan-phase4.md section B:
+the Phase 0 overload contract plus post-drain resource checks:
 
-  1. Fixed-rate request waves below, equal to, and above the configured
-     capacity. Every wave must complete responses without a read-error storm.
-  2. Listener backpressure: saturating the table disables the listener, and a
-     freed slot re-enables it so a fresh client is served.
+  1. Concurrent request waves below, equal to, and above the configured
+     capacity. Excess clients must receive a complete 503 or a prompt refusal,
+     never wait for their client timeout.
+  2. Saturating the table leaves listener interest enabled; a freed slot still
+     permits a fresh client to be served.
   3. Post-drain cleanup: active connections and leased buffer bytes return to
      zero, and RSS / descriptors return to their pre-test baseline.
 
-The run writes a repeatable JSON artifact to benchmarks/phase4_saturation.json
+The run writes a repeatable JSON artifact to
+benchmarks/production_phase0_overload.json
 and exits non-zero when any acceptance condition fails.
 """
 
@@ -27,7 +29,8 @@ import time
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_PORT = 8081
-ARTIFACT = os.path.join(REPO_ROOT, "benchmarks", "phase4_saturation.json")
+ARTIFACT = os.path.join(REPO_ROOT, "benchmarks",
+                        "production_phase0_overload.json")
 
 
 def now():
@@ -109,7 +112,9 @@ def read_one_response(sock, timeout):
         if not chunk:
             return data, False
         body += chunk
-    status_ok = head.startswith(b"HTTP/1.1 200") or head.startswith(b"HTTP/1.1 404")
+    status_ok = (head.startswith(b"HTTP/1.1 200") or
+                 head.startswith(b"HTTP/1.1 404") or
+                 head.startswith(b"HTTP/1.1 503"))
     return data, status_ok
 
 
@@ -124,12 +129,13 @@ def request_worker(host, port, timeout, results):
             raw, ok = read_one_response(sock, timeout)
         entry["latency_ms"] = (now() - started) * 1000.0
         first_line = raw.split(b"\r\n", 1)[0] if raw else b""
-        if first_line[:12] == b"HTTP/1.1 503":
-            entry["status"] = 503
-            entry["error"] = "overload"
-            entry["ok"] = False
-        elif ok:
-            entry["status"] = 200 if b"200" in first_line else 404
+        if ok:
+            if first_line.startswith(b"HTTP/1.1 200"):
+                entry["status"] = 200
+            elif first_line.startswith(b"HTTP/1.1 503"):
+                entry["status"] = 503
+            else:
+                entry["status"] = 404
             entry["ok"] = True
         else:
             entry["error"] = "framing"
@@ -161,6 +167,7 @@ def run_wave(host, port, concurrency, timeout):
     elapsed = max(1e-6, now() - started)
 
     completed = sum(1 for entry in results if entry["ok"])
+    status_503 = sum(1 for entry in results if entry["status"] == 503)
     errors = {}
     for entry in results:
         if entry["error"]:
@@ -170,6 +177,7 @@ def run_wave(host, port, concurrency, timeout):
         "concurrency": concurrency,
         "offered": len(results),
         "completed": completed,
+        "status_503": status_503,
         "elapsed_seconds": round(elapsed, 4),
         "throughput_rps": round(completed / elapsed, 2),
         "p99_ms": round(percentile(latencies, 0.99), 3),
@@ -206,7 +214,7 @@ def main(argv=None):
         return 2
 
     metrics_file = os.path.join(REPO_ROOT, "benchmarks",
-                                ".phase4_saturation_metrics.json")
+                                ".production_phase0_overload_metrics.json")
     env = dict(os.environ)
     env["HTTP_SERVER_ACCESS_LOG"] = "0"
     env["HTTP_SERVER_MAX_CONNECTIONS"] = str(args.capacity)
@@ -239,32 +247,27 @@ def main(argv=None):
             concurrency = max(1, concurrency)
             wave = run_wave(args.host, args.port, concurrency, args.timeout)
             artifact["waves"][name] = wave
-            print("wave=%-5s concurrency=%d completed=%d p99=%.1fms errors=%s" %
-                  (name, concurrency, wave["completed"], wave["p99_ms"],
-                   wave["errors"]))
+            print("wave=%-5s concurrency=%d completed=%d 503=%d p99=%.1fms "
+                  "errors=%s" %
+                  (name, concurrency, wave["completed"], wave["status_503"],
+                   wave["p99_ms"], wave["errors"]))
             if wave["completed"] == 0:
                 failures.append("wave %s completed no responses" % name)
-            if wave["errors"].get("reset", 0) > 0:
-                failures.append("wave %s saw resets: %d" % (
-                    name, wave["errors"]["reset"]))
-            # A read-error storm would be receive/reset errors far exceeding
-            # the number of completed responses.
-            read_errors = (wave["errors"].get("receive", 0) +
-                           wave["errors"].get("reset", 0))
-            if read_errors > max(4, wave["completed"]):
-                failures.append("wave %s read-error storm: %d errors vs %d "
-                                "completed" % (name, read_errors,
-                                               wave["completed"]))
+            if wave["errors"].get("timeout", 0) > 0:
+                failures.append("wave %s saw client timeouts: %d" % (
+                    name, wave["errors"]["timeout"]))
+            if wave["errors"].get("framing", 0) > 0:
+                failures.append("wave %s saw incomplete HTTP responses: %d" % (
+                    name, wave["errors"]["framing"]))
 
-        # --- Observation 2: listener backpressure toggles ------------------
+        # --- Observation 2: capacity remains fail-fast --------------------
         idle = open_idle_connections(args.host, args.port, args.capacity,
                                      args.timeout)
         deadline = now() + 3.0
         saturated = {}
         while now() < deadline:
             saturated = read_metrics(metrics_file)
-            if (saturated.get("active_connections", 0) >= args.capacity and
-                    saturated.get("listener_disabled_count", 0) >= 1):
+            if saturated.get("active_connections", 0) >= args.capacity:
                 break
             time.sleep(0.05)
         artifact["checks"]["saturated_metrics"] = {
@@ -289,14 +292,45 @@ def main(argv=None):
                   saturated.get("admission_rejected_table_full")))
         if saturated.get("active_connections", 0) < args.capacity:
             failures.append("connection table never reached capacity")
-        if saturated.get("listener_disabled_count", 0) < 1:
-            failures.append("listener was never disabled under saturation")
+        if saturated.get("listener_disabled_count", 0) != 0:
+            failures.append("listener was disabled under saturation")
         if saturated.get("connection_capacity") != args.capacity:
             failures.append("reported capacity %s != requested %d" % (
                 saturated.get("connection_capacity"), args.capacity))
         if saturated.get("buffer_bytes_current", 0) != 0:
             failures.append("idle connections retained input buffers: %s bytes" %
                             saturated.get("buffer_bytes_current"))
+
+        # Force overload while all slots are occupied. A quick TCP refusal is
+        # valid; the important bound is that no client waits to its timeout.
+        overloaded = run_wave(args.host, args.port, args.capacity * 2,
+                              args.timeout)
+        artifact["checks"]["overload_while_full"] = overloaded
+        if overloaded["errors"].get("timeout", 0) > 0:
+            failures.append("overload while full caused client timeouts")
+        if (overloaded["status_503"] == 0 and
+                overloaded["errors"].get("reset", 0) == 0 and
+                overloaded["errors"].get("connect", 0) == 0):
+            failures.append("overload produced neither a 503 nor a prompt refusal")
+
+        deadline = now() + 3.0
+        overload_metrics = {}
+        while now() < deadline:
+            overload_metrics = read_metrics(metrics_file)
+            if overload_metrics.get("admission_rejected_capacity", 0) > 0:
+                break
+            time.sleep(0.05)
+        artifact["checks"]["overload_metrics"] = {
+            key: overload_metrics.get(key) for key in (
+                "connection_capacity", "admission_rejected_capacity",
+                "overload_responses", "connection_resets",
+                "listener_disabled_count", "backlog_depth_max",
+            )
+        }
+        if overload_metrics.get("admission_rejected_capacity", 0) == 0:
+            failures.append("over-capacity accepts were not recorded")
+        if overload_metrics.get("listener_disabled_count", 0) != 0:
+            failures.append("listener was disabled during overload rejection")
 
         # Free half the slots and confirm a fresh client is served, which
         # proves the listener was re-enabled.
@@ -307,7 +341,7 @@ def main(argv=None):
         print("after freeing slots: completed=%d errors=%s" %
               (served["completed"], served["errors"]))
         if served["completed"] < 1:
-            failures.append("listener did not re-enable after a slot freed")
+            failures.append("fresh client was not served after a slot freed")
 
         for sock in idle[len(idle) // 2:]:
             sock.close()
@@ -371,7 +405,7 @@ def main(argv=None):
         for failure in failures:
             print("FAIL: %s" % failure, file=sys.stderr)
         return 1
-    print("PASS: phase 4 saturation acceptance (artifact: %s)" % args.artifact)
+    print("PASS: phase 0 overload acceptance (artifact: %s)" % args.artifact)
     return 0
 
 

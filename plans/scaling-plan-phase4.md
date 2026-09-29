@@ -5,7 +5,7 @@ category: implementation
 status: active
 owner: agent
 created: 2026-09-22
-updated: 2026-09-24
+updated: 2026-09-29
 related: [scaling-plan, scaling-phase-4-core-autoscale]
 ---
 
@@ -138,12 +138,14 @@ documented as unjustified and reverted.
 2. [ ] Replace the fixed `g_conn_pool[MAX_ACTIVE_CONNECTIONS]` with
    runtime-sized per-loop connection state, or document and enforce the maximum
    supported table size separately from the descriptor limit.
-3. [ ] Define listener backpressure: disable listener read interest while the
-   connection table is full and re-enable it after a close. Document backlog
-   behavior and when a client may still see a connect timeout or refusal.
-4. [ ] Provide a bounded overload policy: emit a complete `503 Service
-   Unavailable` where safe, otherwise close before accepting request data. Never
-   accept and silently reset a request because the configured cap was reached.
+3. [x] Define listener overload behavior: the production server keeps listener
+   read interest enabled and accepts excess sockets in bounded batches. It
+   returns a complete 503 when possible and otherwise resets promptly; brief
+   accept-queue occupancy and kernel refusal behavior are documented in
+   `docs/architecture.md` (supersedes the earlier disable/re-enable policy).
+4. [x] Provide a bounded overload policy: emit a complete `503 Service
+   Unavailable` where possible, otherwise refuse promptly. Never accept and
+   leave a request waiting for a connection slot.
 5. [ ] Decouple idle keep-alive state from request buffers and response storage;
    release or shrink input/output storage when a connection is idle so memory
    scales with active requests, not table size.
@@ -216,8 +218,9 @@ documented as unjustified and reverted.
 2. [ ] Saturation at `-c` below, equal to, and above capacity produces the
    documented bounded outcome and returns active connections, buffers, tasks,
    descriptors, and RSS to baseline after drain.
-3. [ ] Listener interest is disabled while the table is full and re-enabled after
-   a close.
+3. [x] Listener interest remains enabled during saturation; bounded acceptance
+   rejects excess sockets promptly and a freed slot serves a fresh client
+   (`scripts/saturation_test.py`).
 4. [ ] Existing ring, thread-pool, and server suites remain green.
 
 ## Validation
@@ -243,10 +246,9 @@ documented as unjustified and reverted.
 
 - [ ] A recorded profile identifies the single-loop limiter, and every scaling
   change cites that evidence.
-- [ ] The saturation/backpressure follow-up is complete: effective capacity is
-  derived and enforced, listener backpressure is implemented, overload responses
-  are bounded, idle connections release request/response storage, and saturation
-  metrics are present.
+- [ ] The saturation follow-up is complete: effective capacity is derived and
+  enforced, bounded listener overload behavior is implemented, idle connections
+  release request/response storage, and saturation metrics are present.
 - [ ] The above-limit saturation run has a documented bounded outcome with no
   unexplained read-error storm.
 - [ ] Multiple event-loop threads (when enabled) preserve strict response
@@ -270,9 +272,9 @@ documented as unjustified and reverted.
   runs `EL_THREAD_COUNT > 1` under keep-alive and pipelining.
 - **Unbounded memory or descriptor growth** → Enforce effective capacity and
   buffer limits before allocation; rerun the leak campaign after every change.
-- **Overload regressions** → Preserve the close-on-admission-failure control
-  behavior, then add backpressure and bounded `503` incrementally, with the
-  above-limit acceptance test as the gate.
+- **Overload regressions** → Keep the bounded accept/reject policy independently
+  reversible and compare above-capacity runs with the recorded control evidence;
+  use the saturation acceptance harness as the gate.
 - **Performance regression despite correctness** → Keep the Phase 3
   `EL_THREAD_COUNT=1` configuration as the control and benchmark output;
   revert the scaling change while retaining tests and metrics, then use the

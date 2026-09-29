@@ -1,0 +1,94 @@
+{
+  "after": {
+    "open_fds": 99,
+    "rss_kb": 3716
+  },
+  "baseline": {
+    "open_fds": 99,
+    "rss_kb": 3556
+  },
+  "capacity": 16,
+  "checks": {
+    "after_free": {
+      "completed": 1,
+      "concurrency": 1,
+      "elapsed_seconds": 0.0005,
+      "errors": {},
+      "offered": 1,
+      "p99_ms": 0.256,
+      "status_503": 0,
+      "throughput_rps": 2066.67
+    },
+    "drained_metrics": {
+      "active_connections": 0,
+      "buffer_bytes_current": 0,
+      "connection_resets": 0,
+      "listener_disabled_count": 0,
+      "overload_responses": 32
+    },
+    "overload_metrics": {
+      "admission_rejected_capacity": 32,
+      "backlog_depth_max": 0,
+      "connection_capacity": 16,
+      "connection_resets": 0,
+      "listener_disabled_count": 0,
+      "overload_responses": 32
+    },
+    "overload_while_full": {
+      "completed": 32,
+      "concurrency": 32,
+      "elapsed_seconds": 0.0066,
+      "errors": {},
+      "offered": 32,
+      "p99_ms": 1.427,
+      "status_503": 32,
+      "throughput_rps": 4873.47
+    },
+    "saturated_metrics": {
+      "active_connections": 16,
+      "active_connections_max": 16,
+      "admission_rejected_capacity": 0,
+      "admission_rejected_table_full": 0,
+      "backlog_depth": 0,
+      "backlog_depth_max": 0,
+      "buffer_bytes_current": 0,
+      "connection_capacity": 16,
+      "el_loops": 16,
+      "listener_disabled_count": 0
+    }
+  },
+  "failures": [],
+  "success": true,
+  "waves": {
+    "above": {
+      "completed": 48,
+      "concurrency": 48,
+      "elapsed_seconds": 0.0094,
+      "errors": {},
+      "offered": 48,
+      "p99_ms": 2.183,
+      "status_503": 0,
+      "throughput_rps": 5133.1
+    },
+    "below": {
+      "completed": 8,
+      "concurrency": 8,
+      "elapsed_seconds": 0.002,
+      "errors": {},
+      "offered": 8,
+      "p99_ms": 0.763,
+      "status_503": 0,
+      "throughput_rps": 4025.44
+    },
+    "equal": {
+      "completed": 16,
+      "concurrency": 16,
+      "elapsed_seconds": 0.0033,
+      "errors": {},
+      "offered": 16,
+      "p99_ms": 1.686,
+      "status_503": 0,
+      "throughput_rps": 4789.09
+    }
+  }
+}
