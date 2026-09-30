@@ -557,42 +557,53 @@ No performance optimization should merge unless these remain green.
 - [x] HEAD response tests.
 - [x] Gzip decompression and chunked-framing tests.
 - [x] Existing server endpoint tests.
-- [~] 404 and unsupported-method tests (covered); 400, 413, and 431 are not yet
-  exercised.
-- [ ] Multiple spaces between method, path, and version.
-- [ ] Header names with different casing.
-- [ ] Duplicate headers.
-- [ ] Conflicting `Content-Length`.
-- [ ] `Transfer-Encoding` handling.
-- [ ] Request-smuggling-style header combinations.
-- [ ] Absolute-form request targets.
-- [ ] Empty header values.
-- [ ] Very long request lines.
+- [~] 404 and unsupported-method tests (covered); 400 and 431 are now exercised
+  by the Phase 1 conformance corpus; 413 is exercised only as
+  "413 or close" by `test_input_buffer_limit`.
+- [x] Multiple spaces between method, path, and version.
+- [x] Header names with different casing.
+- [x] Duplicate headers.
+- [x] Conflicting `Content-Length`.
+- [x] `Transfer-Encoding` handling.
+- [x] Request-smuggling-style header combinations.
+- [x] Absolute-form request targets.
+- [x] Empty header values.
+- [x] Very long request lines.
 
 ### Connection behavior
 
-- [ ] Client closes during a partial write.
-- [ ] Client closes during a partial read.
-- [ ] `EPIPE`.
-- [ ] `ECONNRESET`.
+- [x] Client closes during a partial write (`test_el_client_close_during_write`).
+- [x] Client closes during a partial read (`test_el_abrupt_client_close`, plus
+  the partial-request cycles in `test_el_capacity_and_fd_leak`).
+- [x] `EPIPE`/`ECONNRESET` absorbed on the write path (RST and FIN variants in
+  `test_el_client_close_during_write`; `MSG_NOSIGNAL` plus `SIG_IGN`).
 - [x] SIGPIPE prevention (`SIG_IGN` plus `MSG_NOSIGNAL`).
-- [ ] Keep-alive timeout while partially reading headers.
-- [ ] Pipelined request after a response error.
-- [ ] `Connection: close`.
-- [ ] HTTP/1.0 behavior, if supported or deliberately rejected.
-- [~] Slow-client timeout and overload tests (the benchmark has a
-  `slow-clients` scenario; there is no automated regression test yet).
+- [x] Keep-alive timeout while partially reading headers
+  (`test_slow_client_header_timeout`).
+- [x] Pipelined request after a response error
+  (`test_el_pipelined_after_error`: 404 then 200 on one socket).
+- [x] `Connection: close`.
+- [x] HTTP/1.0 behavior, if supported or deliberately rejected.
+- [x] Slow-client timeout and overload tests (`test_slow_client_header_timeout`
+  plus the admission-cap 503 path in `test_el_capacity_and_fd_leak`).
 
 ### Resource safety
 
-- [ ] Maximum active connections.
-- [ ] Maximum per-connection input buffer.
-- [ ] Maximum output buffer.
-- [ ] Maximum queued work.
-- [ ] File descriptor exhaustion.
-- [ ] Memory allocation failure.
-- [ ] Repeated connect/disconnect cycles.
-- [ ] Clients that never finish headers.
+- [x] Maximum active connections (`test_el_capacity_and_fd_leak` starts a
+  capacity-8 server and proves one of nine connections gets a bounded 503).
+- [x] Maximum per-connection input buffer (`test_input_buffer_limit`).
+- [x] Maximum output buffer: responses stream from cached/owned memory with no
+  user-space output accumulation; bodies are bounded by the input cap and
+  `MAX_MULTIPART_BYTES`, and `WRITE_TIMEOUT_SEC` closes a stalled writer.
+- [x] Maximum queued work (`test_el_deep_pipeline`; `MAX_PIPELINE_DEPTH`).
+- [~] File descriptor exhaustion: admission is capped below the descriptor
+  budget and `test_el_capacity_and_fd_leak` proves disconnects do not leak
+  descriptors; forcing `EMFILE` needs the Phase 4 fault-injection harness.
+- [~] Memory allocation failure: every allocation is checked (request buffer,
+  multipart body, startup assets); injection is deferred to the Phase 4
+  fuzzing/sanitizer work.
+- [x] Repeated connect/disconnect cycles (`test_el_capacity_and_fd_leak`).
+- [x] Clients that never finish headers (`test_slow_client_header_timeout`).
 - [x] Benchmark runs with zero malformed responses and zero unexpected
   statuses.
 

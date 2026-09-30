@@ -24,9 +24,16 @@ event loop. Directory-wide rules (build, tests, plans) are in `../AGENTS.md`.
   capacity it attempts a nonblocking 503 and closes promptly rather than
   disabling listener interest. On shutdown it stops accepting and drains within
   `config->shutdown_drain_timeout_sec`.
-- `http_server.c` — socket creation, HTTP parsing, and static/gzip caching.
+- `http_server.c` — socket creation, strict HTTP/1.1 parsing, conditional
+  requests, byte ranges, content negotiation, and static/gzip caching. Response
+  headers are generated into `PendingResponse.header_buf` (with `header = NULL`)
+  rather than precomputed; `Date`, validators, and `Vary` are added there.
   `el_prepare_response()` is transactional: roll the ring buffer back to its
-  saved `tail`/`size` on incomplete input, or pipelining corrupts.
+  saved `tail`/`size` on incomplete input, or pipelining corrupts. Multiple
+  satisfiable ranges produce a bounded `206 multipart/byteranges` whose body is
+  heap-owned via `PendingResponse.owned_body` (freed by the event loop); an
+  invalid or over-bounds range-set is ignored (`200`). Request bodies are never
+  read.
 - `ring_buffer.c` — bounded circular buffer and line reader.
 - `metrics.c` — lock-free counters and JSON snapshot rendering.
 - `memory_profiler.c` — procfs/`mallinfo2` sampling, reporter thread only.

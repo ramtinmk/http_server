@@ -243,8 +243,31 @@ static PendingResponse *pq_head_ptr(ELConnection *c)
 
 static void pq_pop(ELConnection *c)
 {
+    if (c->pq_count > 0) {
+        PendingResponse *pr = &c->pq[c->pq_head];
+        free(pr->owned_body); /* multipart bodies are owned by the response */
+        pr->owned_body = NULL;
+        pr->body       = NULL;
+    }
     c->pq_head        = (c->pq_head + 1) % (MAX_PIPELINE_DEPTH + 1);
     c->pq_count--;
+    c->out_header_sent = 0;
+    c->out_body_sent   = 0;
+}
+
+/* Release every queued response, freeing any heap-owned bodies. */
+static void pq_release_all(ELConnection *c)
+{
+    for (int i = 0; i < c->pq_count; i++) {
+        PendingResponse *pr =
+            &c->pq[(c->pq_head + i) % (MAX_PIPELINE_DEPTH + 1)];
+        free(pr->owned_body);
+        pr->owned_body = NULL;
+        pr->body       = NULL;
+    }
+    c->pq_head         = 0;
+    c->pq_tail         = 0;
+    c->pq_count        = 0;
     c->out_header_sent = 0;
     c->out_body_sent   = 0;
 }
@@ -298,6 +321,7 @@ static void conn_close(EventLoop *loop, ELConnection *c, ELCloseReason reason)
         }
     }
 
+    pq_release_all(c);
     conn_buffer_release(c);
     conn_return(loop, c);
     metrics_el_connection_closed();
@@ -552,7 +576,9 @@ static void el_writable(EventLoop *loop, ELConnection *c)
         PendingResponse *pr = pq_head_ptr(c);
 
         /* --- Send headers --- */
-        int s = send_slice(c->fd, (const unsigned char *)pr->header,
+        const unsigned char *hdr =
+            (const unsigned char *)(pr->header ? pr->header : pr->header_buf);
+        int s = send_slice(c->fd, hdr,
                            &c->out_header_sent, pr->header_len);
         if (s < 0) {
             conn_close(loop, c, CLOSE_WRITE_ERROR);

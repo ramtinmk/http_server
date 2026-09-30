@@ -111,10 +111,11 @@ CONN_READING_HEADERS --complete request--> (enqueue response) --+
   loop-owned `RingBuffer` and calls `el_prepare_response()` for each, up to
   `MAX_PIPELINE_DEPTH` per read pass. Responses are queued in the connection's
   `PendingResponse pq[]` ring.
-- `el_prepare_response()` (`src/http_server.c:427`) is **transactional**: on an
+- `el_prepare_response()` (`src/http_server.c`) is **transactional**: on an
   incomplete request it restores the ring buffer's `tail`/`size` and returns 1
   so the loop buffers more bytes. On success it fills a descriptor whose
-  pointers reference **cached/static memory**.
+  `body` references **cached memory** and whose header block is either a
+  generated `header_buf` (`header = NULL`) or a static literal.
 - `el_writable()` sends header then body through `send_slice()`; when the queue
   drains the connection returns to keep-alive and its deadline is reset.
 - `el_scan_deadlines()` runs every `EL_DEADLINE_SCAN_MS` and closes connections
@@ -143,18 +144,47 @@ Close reasons are enumerated in `ELCloseReason` (`include/event_loop.h:21`).
   exhausted, kernel backlog limits and TCP timeout/refusal behavior still
   apply.
 
-## Static assets and gzip
+## Static assets and response semantics (Phase 1)
 
 - At startup `initialize_static_responses()` reads `home.html` and `hello.html`
   **by relative path** and precompresses both with zlib. This is why the server
   must run from the repository root, and why a missing asset makes startup fail.
-- Each asset stores a plain and gzip variant, and two header blocks
-  (keep-alive / close). `el_prepare_response()` picks gzip only when the client
-  sends an acceptable `Accept-Encoding: gzip` (`gzip_is_accepted()`), including
-  `q=0` refusal.
-- Routes (`src/http_server.c:493`): `/` and `/home` → `home.html`,
-  `/hello` → `hello.html`, anything else → `404`. Methods are `GET` and `HEAD`
-  only; others → `501`.
+  Each file's `st_mtime` and size build a strong `ETag` and `Last-Modified`; the
+  gzip representation gets a distinct ETag.
+- `el_prepare_response()` parses the request, then builds the response header
+  block **dynamically** into `PendingResponse.header_buf` with `header = NULL`
+  (the event loop sends `header_buf` when `header` is null). This is what makes
+  `Date`, validators, ranges, and negated encodings possible; the pre-Phase-1
+  code reused two fixed header blocks and omitted `Date`.
+- Parsing is strict (RFC 9110/9112): the request line may use runs of SP/HTAB,
+  only `HTTP/1.0`/`HTTP/1.1` are accepted (`505` otherwise), HTTP/1.1 requires a
+  `Host` header, and absolute-form targets are accepted and reduced to their
+  path. Control characters, obs-fold, duplicate/conflicting `Content-Length`,
+  and `Transfer-Encoding` are rejected (`400`/`501`); request-line and header
+  limits yield `414`/`431`.
+- Methods: `GET`/`HEAD` serve the resource; `OPTIONS` returns `204` with
+  `Allow`; `POST` returns `405` with `Allow`; unknown methods return `501`. A
+  request body is never read, so any body-bearing or body-implying request is
+  answered and closed rather than risking connection desynchronization.
+- Conditional requests: `If-None-Match` (weak comparison, `*`), then
+  `If-Modified-Since`, produce `304`; `If-Range` gates a range on a matching
+  validator.
+- Ranges are served from the **identity** representation (so bytes are
+  decodable and multipart parts stay coherent); content negotiation still picks
+  the representation for full responses. A single satisfiable
+  `Range: bytes=...` produces `206` with `Content-Range` and
+  `Accept-Ranges: bytes`; when every range-spec is valid but unsatisfiable the
+  response is `416`. Two or more satisfiable ranges produce a
+  `206 multipart/byteranges` body (`format_multipart()`); the body is assembled
+  on the heap and `PendingResponse.owned_body` tracks it for the event loop to
+  free. The set is bounded by `MAX_MULTIPART_RANGES` and `MAX_MULTIPART_BYTES`;
+  a range-set that exceeds either, or is syntactically invalid, is ignored and
+  answered with the full negotiated `200` (RFC 9110 permits ignoring `Range`).
+- Content negotiation: `Accept-Encoding` selects the gzip representation when
+  `gzip` (or `*`) has `q > 0`, identity otherwise; `Vary: Accept-Encoding` is
+  always emitted on negotiable responses, and `406` when neither is acceptable.
+- Routes (`src/http_server.c`): `/` and `/home` → `home.html`, `/hello` →
+  `hello.html`, anything else → `404`.
 
 ## Instrumentation
 
@@ -177,7 +207,13 @@ Close reasons are enumerated in `ELCloseReason` (`include/event_loop.h:21`).
 1. A connection is owned by exactly one loop; never touch another loop's
    `ELConnection`.
 2. `PendingResponse.header`/`body` point into cached or static memory; the
-   event loop must never `free()` them.
+   event loop must never `free()` them. The sole exception is
+   `PendingResponse.owned_body`: a multipart body is owned by the response and
+   `body` aliases it; the event loop frees it in `pq_pop()` after sending or in
+   `pq_release_all()` when a connection closes with responses still queued. When
+   `header` is NULL the in-struct `header_buf` is sent instead; never point
+   `header` at a response's own `header_buf`, because the pipeline queue copies
+   the struct by value and the pointer would then reference the source copy.
 3. `el_prepare_response()` must leave the ring buffer unchanged when it returns
    incomplete, or fragmented requests corrupt pipelining.
 4. The allocator cap is set before any thread starts.
