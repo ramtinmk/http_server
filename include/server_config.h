@@ -188,6 +188,16 @@
  * the offending key and is fatal.
  */
 #define ENV_CONFIG                  "HTTP_SERVER_CONFIG"
+
+/*
+ * Config file loaded when neither --config PATH nor HTTP_SERVER_CONFIG is set.
+ * CMakeLists.txt points this at the checked-in http_server.conf via
+ * -DDEFAULT_CONFIG_FILE=...; an empty string disables the fallback so the
+ * server runs on pure compiled defaults.
+ */
+#ifndef DEFAULT_CONFIG_FILE
+#define DEFAULT_CONFIG_FILE "http_server.conf"
+#endif
 #define ENV_PORT                    "HTTP_SERVER_PORT"
 #define ENV_BACKLOG                 "HTTP_SERVER_BACKLOG"
 #define ENV_MAX_KEEPALIVE_REQUESTS  "HTTP_SERVER_MAX_KEEPALIVE_REQUESTS"

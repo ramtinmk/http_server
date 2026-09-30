@@ -406,7 +406,8 @@ void config_print_usage(void)
         printf("  %-24s  env: %s\n", CFG_KEYS[i].key, CFG_KEYS[i].env);
     }
     printf("\n  --config PATH             config file (default: %s)\n",
-           ENV_CONFIG);
+           DEFAULT_CONFIG_FILE[0] ? DEFAULT_CONFIG_FILE : "(none)");
+    printf("                            env: %s\n", ENV_CONFIG);
     printf("  --help                    this message\n");
 }
 
@@ -432,6 +433,8 @@ int config_load(ServerConfig *cfg, int argc, char **argv)
         if (env && *env)
             snprintf(path, sizeof(path), "%s", env);
     }
+    if (path[0] == '\0' && DEFAULT_CONFIG_FILE[0] != '\0')
+        snprintf(path, sizeof(path), "%s", DEFAULT_CONFIG_FILE);
 
     if (path[0] != '\0' && config_load_file(cfg, path) != 0)
         return -1;

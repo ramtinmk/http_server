@@ -45,8 +45,9 @@ invariants must hold when you change the code.
 ## Configuration
 
 - `config_defaults()` seeds `ServerConfig` from `server_config.h`; then the
-  config file (`HTTP_SERVER_CONFIG` / `--config`), environment, and CLI are
-  applied in that order, each overriding the previous.
+  config file (`HTTP_SERVER_CONFIG` / `--config`, or the baked-in
+  `DEFAULT_CONFIG_FILE` when neither is set), environment, and CLI are applied
+  in that order, each overriding the previous.
 - A single `CFG_KEYS` table in `src/config.c` maps each key to its struct
   offset, type, range, and environment name. An unknown key or an
   out-of-range value is fatal and names the offending key; `--help` prints the

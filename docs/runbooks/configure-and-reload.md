@@ -7,6 +7,12 @@ is the full reference.
 
 ## 1. Choose a layer
 
+- **Built-in defaults** → the checked-in `http_server.conf` at the repository
+  root is compiled in as `DEFAULT_CONFIG_FILE` and loaded automatically when
+  neither `--config` nor `HTTP_SERVER_CONFIG` is given. Edit it to change the
+  out-of-the-box settings (it ships with `document_root = root`). Point
+  `DEFAULT_CONFIG_FILE` elsewhere at build time with
+  `-DDEFAULT_CONFIG_FILE=<path>`; set it empty to disable the fallback.
 - **Persistent host settings** → a config file, selected with
   `HTTP_SERVER_CONFIG=/etc/http_server.conf` or `--config`.
 - **Ad-hoc/benchmark overrides** → environment variables or CLI flags; higher
