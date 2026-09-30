@@ -118,9 +118,20 @@ Sharp edges that cost time. Each entry says what bites and how to avoid it.
 - **Files larger than `CACHE_MAX_FILE_BYTES` (1 MiB) are never cached or
   gzipped.** They stream identity-only but still support conditional requests
   and ranges; `Accept-Encoding: gzip` yields an identity `200`, not a `406`.
-- **The default document root is `.`.** A relative `document_root` is resolved
-  against the process working directory, so the "run from the repo root" rule
-  still applies unless an absolute root is configured.
+- **A config file is always loaded.** When neither `--config` nor
+  `HTTP_SERVER_CONFIG` is set the server loads the checked-in
+  `http_server.conf` (baked in as `DEFAULT_CONFIG_FILE`, an absolute path). The
+  file is fatal if missing, so a moved build tree needs a `cmake` re-run; set
+  `-DDEFAULT_CONFIG_FILE=` to build a server with no default file. This also
+  means `./bin/http_server` now resolves `document_root` from that file rather
+  than from the compiled `.` default.
+- **The shipped document root is `root`** (set by `http_server.conf`); the
+  compiled `DOCUMENT_ROOT` fallback is still `.`. A relative `document_root` is
+  resolved against the process working directory, so the "run from the repo
+  root" rule still applies unless an absolute root is configured. The `/home`
+  and `/hello` aliases are loaded from `home.html`/`hello.html` in the working
+  directory, **not** from `document_root`, so those files must stay at the repo
+  root for the aliases to work.
 - **Path decoding happens exactly once.** A double-encoded `%252e%252e` is
   treated as the literal filename `%2e%2e`, not as `..`; NUL (`%00`),
   backslashes, and other control bytes are `400` rather than being normalized.

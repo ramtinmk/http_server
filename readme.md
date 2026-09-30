@@ -98,15 +98,16 @@ The server must be launched from the repository root because it opens
 ./bin/http_server
 ```
 
-Configuration is a single validated surface. For example:
+Configuration is a single validated surface. The checked-in
+`http_server.conf` is compiled in as the default (it ships with
+`document_root = root`) and loaded automatically when neither `--config` nor
+`HTTP_SERVER_CONFIG` is set. Edit that file for out-of-the-box changes, or
+override per run:
 
 ```
-# config file (point to it with HTTP_SERVER_CONFIG or --config)
-idle_timeout = 5
-max_keepalive_requests = 1000
-log_level = info
-log_file = /var/log/http_server.jsonl
-access_log = 1
+# point at another config file
+HTTP_SERVER_CONFIG=/etc/http_server.conf ./bin/http_server
+./bin/http_server --config /etc/http_server.conf
 
 # or directly on the command line / environment
 ./bin/http_server --port 8081 --max-keepalive-requests 1000

@@ -52,6 +52,13 @@ target_link_libraries(http_server PRIVATE
     ZLIB::ZLIB
 )
 
+# Default config file used when neither --config nor HTTP_SERVER_CONFIG is set.
+# Baked in as an absolute path so ./bin/http_server picks up the checked-in
+# defaults regardless of the process working directory.
+target_compile_definitions(http_server PRIVATE
+    DEFAULT_CONFIG_FILE="${CMAKE_SOURCE_DIR}/http_server.conf"
+)
+
 file(GLOB TEST_SOURCES "tests/*.c")
 
 # If we found test files, build the test runner
