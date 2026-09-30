@@ -66,6 +66,8 @@ the compiled default without a rebuild.
 | `MAX_KEEPALIVE_REQUESTS`     | 100     | Requests per keep-alive connection before the server forces close. |
 | `MAX_INPUT_BUFFER_BYTES`     | 65536   | Per-connection buffered request+header cap; exceeded → `413`. |
 | `MAX_PIPELINE_DEPTH`         | 16      | Pipelined requests processed from one `recv()` pass before a new read. |
+| `MAX_MULTIPART_RANGES`       | 8       | Max satisfiable ranges in one `multipart/byteranges` `206`; more → full `200`. |
+| `MAX_MULTIPART_BYTES`        | 8192    | Max assembled `multipart/byteranges` body size; larger → full `200`. |
 | `HEADER_READ_TIMEOUT_SEC`    | 5       | Time to deliver complete request headers after accept. |
 | `IDLE_TIMEOUT_SEC`           | 30      | Keep-alive idle time between requests. |
 | `WRITE_TIMEOUT_SEC`          | 10      | Time to drain a full response to the socket. |

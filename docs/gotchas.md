@@ -66,6 +66,40 @@ Sharp edges that cost time. Each entry says what bites and how to avoid it.
   is `0`; without glibc, heap counters are `0`. Check `memory_sample_ok` before
   trusting zeroes. Sampling only happens when `HTTP_SERVER_METRICS_FILE` is set.
 
+## HTTP semantics (Phase 1)
+
+- **Multi-range requests may be answered with the full body.** Two or more
+  satisfiable ranges are assembled into a bounded `206 multipart/byteranges`
+  response; if the set exceeds `MAX_MULTIPART_RANGES`/`MAX_MULTIPART_BYTES`, or
+  is syntactically invalid, the `Range` header is ignored and the full `200` is
+  returned (RFC 9110 permits this). When at least one range is satisfiable, the
+  unsatisfiable ones are silently dropped; only an all-unsatisfiable set is
+  `416`. Do not assume every multi-range request yields multipart.
+- **Multipart bodies are the only heap-owned response bodies.** They are built
+  in `format_multipart()` and referenced by `PendingResponse.owned_body`; the
+  event loop frees them in `pq_pop()`/`pq_release_all()`. Every other body is
+  borrowed from the startup cache and must never be freed. A body leaking or
+  being double-freed here shows up under the disconnect-burst test
+  (`test_el_capacity_and_fd_leak`).
+- **The server never reads a request body.** `POST` returns `405` and any
+  `GET`/`HEAD` carrying `Content-Length > 0` returns `400`; both close the
+  connection. This avoids the connection desynchronization that occurs when
+  unread body bytes are mistaken for the next pipelined request.
+- **`Transfer-Encoding` is always rejected** (`501`, or `400` when combined
+  with `Content-Length`). Chunked request framing is not supported.
+- **The ETag differs per representation.** The gzip variant has a `-gzip` suffix
+  so a client that conditions on the identity ETag is not served stale gzip.
+- **`Date` is cached per event-loop thread and refreshed once per second**, so a
+  response's `Date` can trail wall-clock by under a second. This is intentional
+  and keeps `gmtime` off the hot path.
+- **Ranges are served from the identity representation.** A request with both
+  `Accept-Encoding: gzip` and a `Range` still gets an identity `206` (no
+  `Content-Encoding`), because a partial gzip stream is not decodable and
+  multipart parts would not be coherent. `ETag`/`Last-Modified` in a range
+  response are the identity validator; `Vary: Accept-Encoding` is still sent.
+  When the client sends `identity;q=0` the `Range` is ignored and the whole gzip
+  `200` is returned.
+
 ## Tests
 
 - **The server suite needs a running server** on `127.0.0.1:8081`:

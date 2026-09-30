@@ -15,25 +15,49 @@
 #endif
 
 /*
+ * Maximum size of a generated response header block, including an optional
+ * small (error) body embedded after the headers. Large enough for the full
+ * validator/range/negotiation header set; a response that would not fit is
+ * replaced by a minimal 500.
+ */
+#define PR_HEADER_BUF_SIZE 512
+
+/*
  * Response descriptor for the event-loop path.
  *
- * Pointers are into startup-cached or static-string (literal) memory; the
- * event loop must NEVER free them. body may be NULL when body_len == 0.
+ * `header` points either into startup-cached or static-string (literal) memory
+ * or is NULL, meaning the generated block in `header_buf` is authoritative.
+ * `body` points into cached memory; the event loop must NEVER free it. body may
+ * be NULL when body_len == 0.
+ *
+ * The one exception is `owned_body`: a multipart/byteranges body is assembled
+ * on the heap and the response owns it. When `owned_body` is non-NULL it aliases
+ * `body`, and the event loop frees it after the response is fully sent or when
+ * the connection is closed with the response still queued. Every other body is
+ * borrowed from cached/static memory and must not be freed.
+ *
+ * header_buf is part of the struct and therefore travels with the by-value
+ * copy into the pipeline queue; a response that wants dynamic headers sets
+ * `header = NULL` and fills header_buf. Never set `header` to point at
+ * `header_buf` itself: after the queue copy it would dangle.
  */
 typedef struct {
-    const char          *header;       /* Full header block to send.         */
+    const char          *header;       /* Header block, or NULL for header_buf. */
     size_t               header_len;   /* Length of header block in bytes.   */
     const unsigned char *body;         /* Body bytes (may be NULL).          */
     size_t               body_len;     /* Length of body in bytes.           */
+    unsigned char       *owned_body;   /* Heap body this response owns, or NULL. */
     int                  is_head;      /* HEAD request: skip body send.      */
     int                  force_close;  /* Close connection after this resp.  */
     int                  status;       /* HTTP status code (for metrics).    */
 
-    /* Access-log metadata, filled at parse time. Kept small so the pipeline
-     * queue stays compact when access logging is disabled. */
-    char                 method[8];
+    /* Access-log metadata, filled at parse time. */
+    char                 method[16];
     char                 path[256];
     struct timespec      started;      /* CLOCK_MONOTONIC, request parse time. */
+
+    /* Generated header block used when `header` is NULL. */
+    char                 header_buf[PR_HEADER_BUF_SIZE];
 } PendingResponse;
 
 /*

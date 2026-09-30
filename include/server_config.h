@@ -40,6 +40,24 @@
 #define MAX_PIPELINE_DEPTH 16
 #endif
 
+/* --- Byte ranges --------------------------------------------------------- */
+
+/* Maximum number of satisfiable ranges assembled into one
+ * `multipart/byteranges` response. A range request with more satisfiable ranges
+ * is answered with the full 200 body instead (RFC 9110 permits ignoring a
+ * Range header), bounding per-request work and response size. */
+#ifndef MAX_MULTIPART_RANGES
+#define MAX_MULTIPART_RANGES 8
+#endif
+
+/* Maximum size (bytes) of an assembled `multipart/byteranges` body, including
+ * boundaries and part headers. A request whose body would exceed this is
+ * answered with the full 200 body instead. Bounds the heap a single range
+ * response can request. */
+#ifndef MAX_MULTIPART_BYTES
+#define MAX_MULTIPART_BYTES 8192
+#endif
+
 /* --- Timeouts (seconds) ------------------------------------------------- */
 
 /* Time allowed for a new connection to deliver complete request headers.

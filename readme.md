@@ -13,11 +13,22 @@ benchmark target.
   override), and each loop owns a `SO_REUSEPORT` listener so the kernel hashes
   new connections across them.
 - **HTTP:** HTTP/1.1 keep-alive with Content-Length framing, request pipelining
-  (up to `MAX_PIPELINE_DEPTH`, default 16), and error responses for
-  `400`, `404`, `413`, and `501`.
+  (up to `MAX_PIPELINE_DEPTH`, default 16), and strict message parsing: only
+  `HTTP/1.0`/`HTTP/1.1` (else `505`), mandatory `Host` on HTTP/1.1, absolute-form
+  targets, and rejection of control characters, obs-fold, duplicate/conflicting
+  `Content-Length`, and `Transfer-Encoding` (no request smuggling). Error
+  responses cover `400`, `404`, `405`, `406`, `414`, `416`, `417`, `431`, `501`,
+  and `505`.
+- **Methods:** `GET`/`HEAD` serve a resource, `OPTIONS` returns `204` with
+  `Allow`, `POST` returns `405`, and unknown methods return `501`. Request
+  bodies are never read; a body-bearing request is answered and closed.
 - **Static assets:** `home.html` and `hello.html` are read once at startup and
-  cached in memory, both plain and gzip-precompressed. Gzip is served when the
-  client sends `Accept-Encoding: gzip`.
+  cached in memory, both plain and gzip-precompressed, with strong `ETag`s and
+  `Last-Modified`. Conditional requests (`If-None-Match`, `If-Modified-Since`,
+  `If-Range`) return `304`; a single `Range` returns `206`/`416` with
+  `Accept-Ranges: bytes`, and multiple satisfiable ranges return a bounded
+  `206 multipart/byteranges`. Ranges are served uncompressed; full responses
+  use `Accept-Encoding` negotiation (gzip) and emit `Vary: Accept-Encoding`.
 - **Resource guards:** bounded active connections, per-connection input cap,
   keep-alive request cap, and read/idle/write timeouts (see
   `include/server_config.h` for every value and its default).
@@ -102,6 +113,11 @@ key exits non-zero naming the key.
 | `/home`  | `home.html` (200)            |
 | `/hello` | `hello.html` (200)           |
 | other    | 404                          |
+
+`OPTIONS` returns `204` with `Allow: GET, HEAD, OPTIONS`; `POST` on any path
+returns `405` with the same `Allow`; other methods return `501`. Multi-range
+requests return a bounded `206 multipart/byteranges`; a range-set that is
+invalid or exceeds the configured bounds is answered with the full `200`.
 
 ## Tests
 
@@ -346,7 +362,9 @@ bounds them. Require the performance governor for comparable runs:
 
 The next program takes this to production: HTTP/1.1 + TLS static serving, secure
 document-root handling, sandboxing, observability, and a hardened systemd
-deployment. See `plans/production-http-server.md`.
+deployment. See `plans/production-http-server.md`; its Phase 0 (operational
+safety and overload) and Phase 1 (HTTP/1.1 correctness and caching) are
+complete, with document-root serving next.
 
 Still out of scope: HTTP/2, CGI, reverse proxy, dynamic content, and directory
 listing. See `plans/` for the specifications behind each phase.

@@ -6,6 +6,10 @@
 #include <pthread.h>
 #include <sys/select.h> // Required for select()
 #include <sys/time.h>   // Required for struct timeval
+#include <sys/wait.h>   // waitpid() for the spawned test server
+#include <dirent.h>     // /proc/<pid>/fd scanning
+#include <fcntl.h>
+#include <signal.h>
 #include <ctype.h>
 #include <errno.h>
 #include <limits.h>
@@ -82,6 +86,95 @@ static int create_and_connect_socket() {
     }
 
     return client_socket;
+}
+
+static int connect_to_port(int port) {
+    int client_socket = socket(AF_INET, SOCK_STREAM, 0);
+    if (client_socket < 0) return -1;
+
+    struct sockaddr_in server_addr;
+    memset(&server_addr, 0, sizeof(server_addr));
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons((uint16_t)port);
+    if (inet_pton(AF_INET, SERVER_IP, &server_addr.sin_addr) <= 0) {
+        close(client_socket);
+        return -1;
+    }
+    if (connect(client_socket, (struct sockaddr *)&server_addr,
+                sizeof(server_addr)) == -1) {
+        close(client_socket);
+        return -1;
+    }
+    return client_socket;
+}
+
+/*
+ * Count the open file descriptors of `pid`. Used to prove that a burst of
+ * client connects/closes (including abrupt mid-request and mid-response
+ * disconnects) does not leak descriptors in the server. Returns -1 when
+ * /proc is unavailable.
+ */
+static int count_open_fds(pid_t pid) {
+    char path[64];
+    snprintf(path, sizeof(path), "/proc/%d/fd", (int)pid);
+    DIR *dir = opendir(path);
+    if (!dir) return -1;
+    int count = 0;
+    struct dirent *entry;
+    while ((entry = readdir(dir)) != NULL) {
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
+            continue;
+        count++;
+    }
+    closedir(dir);
+    return count;
+}
+
+/*
+ * Launch a private server instance with a controlled port and connection
+ * capacity, so admission/overload behavior can be exercised without changing
+ * the shared server. Output is discarded. Returns the pid, or -1 on failure.
+ */
+static pid_t spawn_test_server(int port, int capacity) {
+    pid_t pid = fork();
+    if (pid < 0) return -1;
+    if (pid == 0) {
+        int devnull = open("/dev/null", O_RDWR);
+        if (devnull >= 0) {
+            dup2(devnull, STDOUT_FILENO);
+            dup2(devnull, STDERR_FILENO);
+            if (devnull > STDERR_FILENO) close(devnull);
+        }
+        char port_buf[16];
+        char capacity_buf[16];
+        snprintf(port_buf, sizeof(port_buf), "%d", port);
+        snprintf(capacity_buf, sizeof(capacity_buf), "%d", capacity);
+        setenv("HTTP_SERVER_PORT", port_buf, 1);
+        setenv("HTTP_SERVER_MAX_CONNECTIONS", capacity_buf, 1);
+        execl("./bin/http_server", "http_server", (char *)NULL);
+        _exit(127);
+    }
+    return pid;
+}
+
+/* Wait until `port` accepts a TCP connection, up to timeout_ms. */
+static int wait_for_server(int port, int timeout_ms) {
+    for (int waited = 0; waited < timeout_ms; waited += 50) {
+        int fd = connect_to_port(port);
+        if (fd >= 0) {
+            close(fd);
+            return 0;
+        }
+        usleep(50000);
+    }
+    return -1;
+}
+
+static void stop_test_server(pid_t pid) {
+    if (pid <= 0) return;
+    kill(pid, SIGTERM);
+    int status = 0;
+    waitpid(pid, &status, 0);
 }
 
 static void http_response_free(HttpResponse *response) {
@@ -1095,11 +1188,452 @@ void test_el_concurrent_connections(void)
     TEST_ASSERT(failures == 0);
 }
 
+/*
+ * test_byte_ranges_multipart
+ *
+ * A multi-range request must produce a 206 multipart/byteranges response whose
+ * parts carry exactly the requested slices. Fetch the full representation first,
+ * then request two ranges on the same connection and verify each part's media
+ * type, Content-Range, and bytes against the full body.
+ */
+static int multipart_extract_boundary(const char *headers, char *out, size_t cap)
+{
+    const char *key = "Content-Type: multipart/byteranges; boundary=";
+    const char *p = strstr(headers, key);
+    if (!p) return -1;
+    p += strlen(key);
+    const char *end = strstr(p, "\r\n");
+    if (!end || end == p) return -1;
+    size_t len = (size_t)(end - p);
+    if (len + 1 > cap) return -1;
+    memcpy(out, p, len);
+    out[len] = '\0';
+    return 0;
+}
+
+void test_byte_ranges_multipart(void)
+{
+    int fd = create_and_connect_socket();
+    TEST_ASSERT(fd != -1);
+
+    const char *full_req =
+        "GET /home HTTP/1.1\r\nHost: x\r\nConnection: keep-alive\r\n\r\n";
+    TEST_ASSERT(send(fd, full_req, strlen(full_req), 0) > 0);
+    HttpResponse full;
+    TEST_ASSERT(read_http_response(fd, full_req, &full) == 0);
+    TEST_ASSERT(full.status_code == 200);
+    TEST_ASSERT(full.body_length >= 40);
+
+    const char *range_req =
+        "GET /home HTTP/1.1\r\nHost: x\r\nRange: bytes=0-9,20-29\r\nConnection: close\r\n\r\n";
+    TEST_ASSERT(send(fd, range_req, strlen(range_req), 0) > 0);
+    HttpResponse resp;
+    TEST_ASSERT(read_http_response(fd, range_req, &resp) == 0);
+    TEST_ASSERT(resp.status_code == 206);
+    TEST_ASSERT(resp.headers != NULL);
+    TEST_ASSERT(strstr(resp.headers, "Content-Type: multipart/byteranges; boundary=") != NULL);
+    TEST_ASSERT(strstr(resp.headers, "Accept-Ranges: bytes") != NULL);
+
+    char boundary[128];
+    TEST_ASSERT(multipart_extract_boundary(resp.headers, boundary, sizeof(boundary)) == 0);
+
+    char closing[160];
+    snprintf(closing, sizeof(closing), "--%s--\r\n", boundary);
+    TEST_ASSERT(strstr(resp.body, closing) != NULL);
+
+    int parts = 0;
+    const char *scan = resp.body;
+    while ((scan = strstr(scan, "Content-Range: bytes ")) != NULL) {
+        size_t start = 0, end = 0, total = 0;
+        if (sscanf(scan, "Content-Range: bytes %zu-%zu/%zu",
+                   &start, &end, &total) != 3) break;
+        TEST_ASSERT(total == full.body_length);
+        const char *data = strstr(scan, "\r\n\r\n");
+        TEST_ASSERT(data != NULL);
+        data += 4;
+        size_t count = end - start + 1;
+        TEST_ASSERT(start + count <= full.body_length);
+        TEST_ASSERT(memcmp(data, full.body + start, count) == 0);
+        parts++;
+        scan = data + count;
+    }
+    TEST_ASSERT(parts == 2);
+
+    http_response_free(&full);
+    http_response_free(&resp);
+    close(fd);
+}
+
+/*
+ * test_el_client_close_during_write
+ *
+ * Send a complete request then close the socket without reading the response
+ * (alternating a graceful FIN with a reset via SO_LINGER). The server must
+ * absorb EPIPE/ECONNRESET on the write path and stay responsive.
+ */
+void test_el_client_close_during_write(void)
+{
+    const char *req =
+        "GET /home HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+
+    for (int i = 0; i < 100; i++) {
+        int fd = create_and_connect_socket();
+        if (fd < 0) continue;
+        if (send(fd, req, strlen(req), 0) < 0) {
+            close(fd);
+            continue;
+        }
+        if (i % 2 == 0) {
+            struct linger reset = {1, 0}; /* RST on close */
+            setsockopt(fd, SOL_SOCKET, SO_LINGER, &reset, sizeof(reset));
+        }
+        close(fd);
+    }
+    usleep(200000);
+
+    int fd = create_and_connect_socket();
+    TEST_ASSERT(fd != -1);
+    char *raw = send_http_request(fd, req);
+    TEST_ASSERT(raw != NULL);
+    TEST_ASSERT(strstr(raw, "HTTP/1.1 200 OK") != NULL);
+    free(raw);
+    close(fd);
+}
+
+/*
+ * test_el_pipelined_after_error
+ *
+ * Pipeline a 404 keep-alive response with a following 200 on one socket. The
+ * event loop must continue serving after an application-level error response
+ * instead of desynchronizing or dropping the queued request.
+ */
+void test_el_pipelined_after_error(void)
+{
+    int fd = create_and_connect_socket();
+    TEST_ASSERT(fd != -1);
+
+    const char *req1 =
+        "GET /nonexistent HTTP/1.1\r\nHost: x\r\nConnection: keep-alive\r\n\r\n";
+    const char *req2 =
+        "GET /home HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n";
+    char burst[512];
+    int n = snprintf(burst, sizeof(burst), "%s%s", req1, req2);
+    TEST_ASSERT(n > 0 && (size_t)n < sizeof(burst));
+    TEST_ASSERT(send(fd, burst, (size_t)n, 0) == n);
+
+    HttpResponse r1, r2;
+    TEST_ASSERT(read_http_response(fd, req1, &r1) == 0);
+    TEST_ASSERT(r1.status_code == 404);
+    TEST_ASSERT(read_http_response(fd, req2, &r2) == 0);
+    TEST_ASSERT(r2.status_code == 200);
+    TEST_ASSERT(r2.body_length > 0);
+
+    http_response_free(&r1);
+    http_response_free(&r2);
+    close(fd);
+}
+
+/*
+ * test_el_capacity_and_fd_leak
+ *
+ * Launches a private server with a small connection capacity to exercise two
+ * resource-safety gates end to end:
+ *   1. Admission cap: capacity+1 simultaneous connections yield at least one
+ *      bounded 503 (or close) while the rest are served.
+ *   2. Descriptor safety: a burst of abrupt client disconnects (before sending,
+ *      mid-response, and mid-request) must not grow the server's descriptor
+ *      count beyond a small slack.
+ */
+void test_el_capacity_and_fd_leak(void)
+{
+    const int port = 8098;
+    const int capacity = 8;
+
+    pid_t pid = spawn_test_server(port, capacity);
+    TEST_ASSERT(pid > 0);
+    if (wait_for_server(port, 5000) != 0) {
+        stop_test_server(pid);
+        TEST_ASSERT(0);
+    }
+    usleep(200000);
+    int baseline = count_open_fds(pid);
+    int have_proc = baseline >= 0;
+
+    /* --- 1. Admission cap. --- */
+    int fds[capacity + 1];
+    int opened = 0;
+    for (int i = 0; i < capacity + 1; i++) {
+        fds[i] = connect_to_port(port);
+        if (fds[i] >= 0) opened++;
+    }
+    TEST_ASSERT(opened == capacity + 1);
+
+    const char *keep_req =
+        "GET /home HTTP/1.1\r\nHost: x\r\nConnection: keep-alive\r\n\r\n";
+    int rejected = 0, served = 0;
+    for (int i = 0; i < capacity + 1; i++) {
+        send(fds[i], keep_req, strlen(keep_req), 0); /* may fail if rejected */
+        HttpResponse resp;
+        if (read_http_response(fds[i], keep_req, &resp) == 0) {
+            if (resp.status_code == 503) rejected++;
+            else if (resp.status_code == 200) served++;
+            http_response_free(&resp);
+        }
+    }
+    for (int i = 0; i < capacity + 1; i++) close(fds[i]);
+    TEST_ASSERT(rejected >= 1);
+    TEST_ASSERT(served >= 1);
+
+    /* --- 2. Descriptor safety across abrupt disconnects. --- */
+    for (int i = 0; i < 200; i++) {
+        int fd = connect_to_port(port);
+        if (fd >= 0) close(fd); /* closed before sending anything */
+    }
+    for (int i = 0; i < 200; i++) {
+        int fd = connect_to_port(port);
+        if (fd >= 0) {
+            send(fd, keep_req, strlen(keep_req), 0);
+            close(fd); /* closed while the response is in flight */
+        }
+    }
+    const char *partial = "GET /home HTTP/1.1\r\nHost: x\r\n";
+    for (int i = 0; i < 100; i++) {
+        int fd = connect_to_port(port);
+        if (fd >= 0) {
+            send(fd, partial, strlen(partial), 0);
+            close(fd); /* closed mid-request */
+        }
+    }
+    usleep(500000);
+
+    if (have_proc) {
+        int after = count_open_fds(pid);
+        TEST_ASSERT(after >= 0);
+        TEST_ASSERT(after <= baseline + 8);
+    }
+
+    stop_test_server(pid);
+}
+
+// --- Phase 1: HTTP conformance corpus ---
+
+/*
+ * A checked-in corpus of malformed, edge, and smuggling-shaped requests with
+ * the status the server must return. Each case runs on its own connection so a
+ * force-closed error response cannot leak state into the next case.
+ */
+typedef struct {
+    const char *name;
+    const char *request;
+    int         status;
+    const char *must_contain;     /* header substring, or NULL */
+    const char *must_not_contain; /* header substring, or NULL */
+} ConformanceCase;
+
+void test_http_conformance_corpus(void)
+{
+    static const ConformanceCase cases[] = {
+        /* Request-line grammar and version. */
+        {"multiple-spaces",
+         "GET    /home    HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n",
+         200, "Date: ", NULL},
+        {"tab-separated-request-line",
+         "GET\t/home\tHTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n",
+         200, NULL, NULL},
+        {"mixed-header-casing",
+         "GET /home HTTP/1.1\r\nhOsT: x\r\ncOnNeCtIoN: close\r\n\r\n",
+         200, NULL, NULL},
+        {"leading-empty-line",
+         "\r\nGET /home HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n",
+         200, NULL, NULL},
+        {"bad-version",
+         "GET /home HTTP/2.0\r\nHost: x\r\nConnection: close\r\n\r\n",
+         505, NULL, NULL},
+
+        /* Host requirements and targets. */
+        {"missing-host",
+         "GET /home HTTP/1.1\r\nConnection: close\r\n\r\n",
+         400, NULL, NULL},
+        {"http10-no-host-ok",
+         "GET /home HTTP/1.0\r\n\r\n",
+         200, NULL, NULL},
+        {"multiple-host",
+         "GET /home HTTP/1.1\r\nHost: a\r\nHost: b\r\nConnection: close\r\n\r\n",
+         400, NULL, NULL},
+        {"absolute-form",
+         "GET http://example.com/home HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n",
+         200, NULL, NULL},
+        {"absolute-form-query",
+         "GET http://example.com/home?x=1 HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n",
+         200, NULL, NULL},
+        {"origin-query-stripped",
+         "GET /home?x=1 HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n",
+         200, NULL, NULL},
+
+        /* Field syntax. */
+        {"obs-fold",
+         "GET /home HTTP/1.1\r\nHost: x\r\nX-Foo: a\r\n b\r\nConnection: close\r\n\r\n",
+         400, NULL, NULL},
+        {"control-char-value",
+         "GET /home HTTP/1.1\r\nHost: x\r\nX-Bad: a\x01b\r\nConnection: close\r\n\r\n",
+         400, NULL, NULL},
+        {"space-before-colon",
+         "GET /home HTTP/1.1\r\nHost: x\r\nX-Bad : v\r\nConnection: close\r\n\r\n",
+         400, NULL, NULL},
+        {"empty-header-value",
+         "GET /home HTTP/1.1\r\nHost: x\r\nX-Empty:\r\nConnection: close\r\n\r\n",
+         200, NULL, NULL},
+
+        /* Framing / smuggling. */
+        {"duplicate-content-length",
+         "GET /home HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\nContent-Length: 5\r\nConnection: close\r\n\r\n",
+         400, NULL, NULL},
+        {"conflicting-content-length",
+         "GET /home HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\nContent-Length: 6\r\nConnection: close\r\n\r\n",
+         400, NULL, NULL},
+        {"non-numeric-content-length",
+         "GET /home HTTP/1.1\r\nHost: x\r\nContent-Length: 5x\r\nConnection: close\r\n\r\n",
+         400, NULL, NULL},
+        {"transfer-encoding-only",
+         "GET /home HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n",
+         501, NULL, NULL},
+        {"te-plus-content-length",
+         "GET /home HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n",
+         400, NULL, NULL},
+        {"get-with-body",
+         "GET /home HTTP/1.1\r\nHost: x\r\nContent-Length: 3\r\nConnection: close\r\n\r\nabc",
+         400, NULL, NULL},
+
+        /* Method semantics. */
+        {"options-asterisk",
+         "OPTIONS * HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n",
+         204, "Allow: GET, HEAD, OPTIONS", NULL},
+        {"options-path",
+         "OPTIONS /home HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n",
+         204, "Allow: GET, HEAD, OPTIONS", NULL},
+        {"post-not-allowed",
+         "POST /home HTTP/1.1\r\nHost: x\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+         405, "Allow: GET, HEAD, OPTIONS", NULL},
+        {"delete-unknown",
+         "DELETE /home HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n",
+         501, NULL, NULL},
+        {"expect-unsupported",
+         "GET /home HTTP/1.1\r\nHost: x\r\nExpect: bogus\r\nConnection: close\r\n\r\n",
+         417, NULL, NULL},
+        {"expect-continue",
+         "GET /home HTTP/1.1\r\nHost: x\r\nExpect: 100-continue\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+         200, NULL, NULL},
+
+        /* Conditional requests. */
+        {"if-none-match-star",
+         "GET /home HTTP/1.1\r\nHost: x\r\nIf-None-Match: *\r\nConnection: close\r\n\r\n",
+         304, "ETag: ", NULL},
+        {"if-modified-since-future",
+         "GET /home HTTP/1.1\r\nHost: x\r\nIf-Modified-Since: Fri, 01 Jan 2100 00:00:00 GMT\r\nConnection: close\r\n\r\n",
+         304, NULL, NULL},
+        {"if-modified-since-past",
+         "GET /home HTTP/1.1\r\nHost: x\r\nIf-Modified-Since: Thu, 01 Jan 1970 00:00:00 GMT\r\nConnection: close\r\n\r\n",
+         200, NULL, NULL},
+
+        /* Ranges. */
+        {"range-single",
+         "GET /home HTTP/1.1\r\nHost: x\r\nRange: bytes=0-9\r\nConnection: close\r\n\r\n",
+         206, "Content-Range: bytes 0-9/", NULL},
+        {"range-suffix",
+         "GET /home HTTP/1.1\r\nHost: x\r\nRange: bytes=-10\r\nConnection: close\r\n\r\n",
+         206, "Content-Range: bytes ", NULL},
+        {"range-unsatisfiable",
+         "GET /home HTTP/1.1\r\nHost: x\r\nRange: bytes=100000-\r\nConnection: close\r\n\r\n",
+         416, "Content-Range: bytes */", NULL},
+        {"range-multi-multipart",
+         "GET /home HTTP/1.1\r\nHost: x\r\nRange: bytes=0-9,20-29\r\nConnection: close\r\n\r\n",
+         206, "Content-Type: multipart/byteranges; boundary=", NULL},
+        {"range-multi-with-unsatisfiable",
+         "GET /home HTTP/1.1\r\nHost: x\r\nRange: bytes=0-9,100000-\r\nConnection: close\r\n\r\n",
+         206, "Content-Range: bytes 0-9/", "multipart/byteranges"},
+        {"range-multi-too-many-ignored",
+         "GET /home HTTP/1.1\r\nHost: x\r\n"
+         "Range: bytes=0-1,2-3,4-5,6-7,8-9,10-11,12-13,14-15,16-17\r\nConnection: close\r\n\r\n",
+         200, "Accept-Ranges: bytes", "multipart/byteranges"},
+        {"range-invalid-last-before-first",
+         "GET /home HTTP/1.1\r\nHost: x\r\nRange: bytes=5-3\r\nConnection: close\r\n\r\n",
+         200, NULL, NULL},
+        {"range-suffix-zero-unsatisfiable",
+         "GET /home HTTP/1.1\r\nHost: x\r\nRange: bytes=-0\r\nConnection: close\r\n\r\n",
+         416, "Content-Range: bytes */", NULL},
+        {"if-range-mismatch",
+         "GET /home HTTP/1.1\r\nHost: x\r\nRange: bytes=0-9\r\nIf-Range: \"nope\"\r\nConnection: close\r\n\r\n",
+         200, NULL, NULL},
+
+        /* Content negotiation. */
+        {"accept-encoding-identity",
+         "GET /home HTTP/1.1\r\nHost: x\r\nAccept-Encoding: identity\r\nConnection: close\r\n\r\n",
+         200, "Vary: Accept-Encoding", "Content-Encoding: gzip"},
+        {"accept-encoding-gzip-q0",
+         "GET /home HTTP/1.1\r\nHost: x\r\nAccept-Encoding: gzip;q=0\r\nConnection: close\r\n\r\n",
+         200, "Vary: Accept-Encoding", "Content-Encoding: gzip"},
+        {"accept-encoding-star-q0-gzip",
+         "GET /home HTTP/1.1\r\nHost: x\r\nAccept-Encoding: *;q=0, gzip\r\nConnection: close\r\n\r\n",
+         200, "Content-Encoding: gzip", NULL},
+        {"accept-encoding-none-acceptable",
+         "GET /home HTTP/1.1\r\nHost: x\r\nAccept-Encoding: gzip;q=0, identity;q=0\r\nConnection: close\r\n\r\n",
+         406, NULL, NULL},
+    };
+
+    int fails = 0;
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        const ConformanceCase *tc = &cases[i];
+        int fd = create_and_connect_socket();
+        if (fd < 0) {
+            printf("    corpus: %s: connect failed\n", tc->name);
+            fails++;
+            continue;
+        }
+        if (send(fd, tc->request, strlen(tc->request), 0) < 0) {
+            printf("    corpus: %s: send failed\n", tc->name);
+            fails++;
+            close(fd);
+            continue;
+        }
+
+        HttpResponse resp;
+        if (read_http_response(fd, tc->request, &resp) != 0) {
+            printf("    corpus: %s: no complete response\n", tc->name);
+            fails++;
+            close(fd);
+            continue;
+        }
+        if (resp.status_code != tc->status) {
+            printf("    corpus: %s: expected %d, got %d\n",
+                   tc->name, tc->status, resp.status_code);
+            fails++;
+        }
+        if (tc->must_contain &&
+            (!resp.headers || !strstr(resp.headers, tc->must_contain))) {
+            printf("    corpus: %s: missing '%s'\n", tc->name, tc->must_contain);
+            fails++;
+        }
+        if (tc->must_not_contain && resp.headers &&
+            strstr(resp.headers, tc->must_not_contain)) {
+            printf("    corpus: %s: unexpectedly present '%s'\n",
+                   tc->name, tc->must_not_contain);
+            fails++;
+        }
+        http_response_free(&resp);
+        close(fd);
+    }
+    TEST_ASSERT(fails == 0);
+}
+
 // --- Runner ---
 
 void run_server_tests() {
     printf("=== General Server Suite ===\n");
     printf("Note: Ensure the server is running on %s:%d before starting tests.\n\n", SERVER_IP, SERVER_PORT);
+
+    /* Deliberate writes to sockets the server has closed must not kill the
+     * test runner (the server ignores SIGPIPE; the client must too). */
+    signal(SIGPIPE, SIG_IGN);
 
     // Basic Connectivity
     RUN_TEST(test_server_connectivity, "Check if server is reachable");
@@ -1128,6 +1662,13 @@ void run_server_tests() {
     RUN_TEST(test_input_buffer_limit,         "Phase2: Oversized input rejected with 413 or close");
     RUN_TEST(test_long_header_line_rejected,  "Oversized header line rejected with 431");
     RUN_TEST(test_long_request_line_rejected, "Oversized request line rejected with 414");
+
+    // Phase 1: HTTP/1.1 correctness and caching semantics
+    RUN_TEST(test_http_conformance_corpus,    "Phase1: conformance corpus (malformed/edge/smuggling)");
+    RUN_TEST(test_byte_ranges_multipart,      "Phase1: multipart/byteranges reassembly");
+    RUN_TEST(test_el_pipelined_after_error,   "Phase1: keep-alive continues after a 404");
+    RUN_TEST(test_el_client_close_during_write, "Phase1: client close/RST mid-response absorbed");
+    RUN_TEST(test_el_capacity_and_fd_leak,    "Phase1: admission cap + no FD leak on disconnect burst");
 
     // Phase 3: event-loop specific behaviour
     RUN_TEST(test_el_fragmented_headers,      "Phase3: Fragmented header delivery across recv calls");
