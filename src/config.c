@@ -75,6 +75,14 @@ static const CfgKey CFG_KEYS[] = {
       0, 0, 1, ENV_SYMLINKS },
     { "cache_budget_bytes",      CFG_LONG,     CFG_OFF(cache_budget_bytes),
       0, 0, LONG_MAX, ENV_CACHE_BUDGET_BYTES },
+    { "tls",                     CFG_BOOL,     CFG_OFF(tls_enabled), 0, 0, 1,
+      ENV_TLS },
+    { "tls_port",                CFG_INT,      CFG_OFF(tls_port), 0, 1, 65535,
+      ENV_TLS_PORT },
+    { "tls_cert_file",           CFG_STRING,   CFG_OFF(tls_cert_file),
+      CFG_SIZE(tls_cert_file), 0, 0, ENV_TLS_CERT_FILE },
+    { "tls_key_file",            CFG_STRING,   CFG_OFF(tls_key_file),
+      CFG_SIZE(tls_key_file), 0, 0, ENV_TLS_KEY_FILE },
 };
 
 #define CFG_KEY_COUNT (sizeof(CFG_KEYS) / sizeof(CFG_KEYS[0]))
@@ -100,6 +108,10 @@ void config_defaults(ServerConfig *cfg)
     cfg->hidden_files_allowed     = 0;
     cfg->symlinks_allowed         = 0;
     cfg->cache_budget_bytes       = (long)CACHE_BUDGET_BYTES_DEFAULT;
+    cfg->tls_enabled              = 0;
+    cfg->tls_port                 = TLS_PORT_DEFAULT;
+    cfg->tls_cert_file[0]         = '\0';
+    cfg->tls_key_file[0]          = '\0';
     cfg->config_path[0]           = '\0';
     cfg->help_requested           = 0;
 }

@@ -497,7 +497,11 @@ void http_server_cache_stats(long *bytes, long *entries)
         *entries = g_cache ? (long)file_cache_entry_count(g_cache) : 0;
 }
 
-int create_server_socket(const ServerConfig *cfg, int reuseport)
+/*
+ * Bind and listen on `port`. Shared by the plaintext and TLS listeners so
+ * their socket options stay identical.
+ */
+static int create_listener(int port, int backlog, int reuseport)
 {
     /* Ignore SIGPIPE globally: writing to a closed client must not kill the
      * server. */
@@ -535,7 +539,7 @@ int create_server_socket(const ServerConfig *cfg, int reuseport)
     struct sockaddr_in server_addr;
     memset(&server_addr, 0, sizeof(server_addr));
     server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons((uint16_t)cfg->port);
+    server_addr.sin_port = htons((uint16_t)port);
     server_addr.sin_addr.s_addr = INADDR_ANY;
 
     if (bind(server_socket, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
@@ -544,13 +548,23 @@ int create_server_socket(const ServerConfig *cfg, int reuseport)
         return -1;
     }
 
-    if (listen(server_socket, cfg->backlog) < 0) {
+    if (listen(server_socket, backlog) < 0) {
         perror("listen");
         close(server_socket);
         return -1;
     }
 
     return server_socket;
+}
+
+int create_server_socket(const ServerConfig *cfg, int reuseport)
+{
+    return create_listener(cfg->port, cfg->backlog, reuseport);
+}
+
+int create_tls_server_socket(const ServerConfig *cfg, int reuseport)
+{
+    return create_listener(cfg->tls_port, cfg->backlog, reuseport);
 }
 
 /* --- Response construction ----------------------------------------------- */

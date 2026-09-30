@@ -15,8 +15,9 @@ invariants must hold when you change the code.
   (`event_loop_thread_count()`, `src/event_loop.c:976`).
 - When there is more than one loop, every loop binds its own `SO_REUSEPORT`
   listener on the same port and the kernel hashes new connections across them.
-  Each loop **exclusively owns** the connections it accepts: its epoll set,
-  connection table, free list, deadline scan, and wake `eventfd`
+  When TLS is enabled each loop also binds a `SO_REUSEPORT` listener on
+  `tls_port`. Each loop **exclusively owns** the connections it accepts: its
+  epoll set, connection table, free list, deadline scan, and wake `eventfd`
   (`include/event_loop.h:63`). No connection state is shared between loops.
 - Shared between loops: the process-wide active-connection gauge and admission
   counter in `src/metrics.c` (relaxed atomics / CAS). Capacity admission is
@@ -32,6 +33,7 @@ invariants must hold when you change the code.
 | `src/config.c`              | Single validated configuration surface (defaults < file < env < CLI), range/unknown-key rejection, usage text |
 | `src/event_loop.c`          | Nonblocking per-loop connection state machine, pipeline queue, deadlines, admission/overload handling, graceful drain, listen-drop sampling |
 | `src/http_server.c`         | Socket creation, HTTP/1.1 parsing, static asset + gzip caching, document-root response selection |
+| `src/tls.c`                 | OpenSSL context/policy (TLS 1.2+, ALPN `http/1.1`), cert/key load, permission check, `SIGHUP` reload |
 | `src/path_resolver.c`       | Safe document-root path resolution (percent-decode, normalize, `openat2`/`O_NOFOLLOW`), directory index, MIME map |
 | `src/file_cache.c`          | Bounded, ref-counted LRU cache of identity/gzip representations |
 | `src/log.c`                 | Leveled JSON access/error logging; nonblocking pipe + writer thread; `SIGHUP` reopen |
@@ -71,7 +73,9 @@ invariants must hold when you change the code.
   connection instead of returning it to idle keep-alive once the drain has
   begun. Remaining connections are force-closed at the deadline.
 - `SIGHUP` does not reload configuration; it asks the log writer to reopen its
-  file. `sd_notify(STOPPING)` is emitted during shutdown.
+  file and, when TLS is enabled, sets a flag that event-loop 0 consumes on its
+  deadline tick to reload the certificate in place. `sd_notify(STOPPING)` is
+  emitted during shutdown.
 
 
 ## Startup sequence (`src/main.c`)
@@ -93,6 +97,7 @@ invariants must hold when you change the code.
    input, clamps with a warning, and fails on non-positive.
 9. Report host sysctls (`somaxconn`, `tcp_rmem`/`tcp_wmem`) read-only.
 10. `validate_configuration()`, `apply_cpu_affinity()` (`HTTP_SERVER_CPU_SET`),
+    `tls_init()` (cert/key load; no-op when disabled),
     `initialize_static_responses()`, then bind/listen, `sd_notify(READY)`, and
     enter the loops.
 
@@ -101,13 +106,14 @@ invariants must hold when you change the code.
 `ELConnState` (`include/event_loop.h:12`):
 
 ```
-CONN_READING_HEADERS --complete request--> (enqueue response) --+
-          ^                                                       |
-          |                                                       v
-          |                                              CONN_WRITING
-          |                                                       |
-          +---------------- response drained <-------------------+
-                    (idle deadline)              (keep-alive)
+CONN_TLS_HANDSHAKE --SSL_accept done--> CONN_READING_HEADERS
+   (TLS sockets only)                        |
+                                             | complete request
+                                             v
+                                  (enqueue response) --+--> CONN_WRITING
+                                                             |
+                     CONN_READING_HEADERS <-- drained <------+
+                          (idle deadline)         (keep-alive)
 ```
 
 - `process_input()` (`src/event_loop.c:371`) pulls complete requests from the
@@ -228,6 +234,32 @@ Close reasons are enumerated in `ELCloseReason` (`include/event_loop.h:21`).
   `If-Range`, single and multipart ranges (parts are `pread()` from the
   descriptor).
 
+## TLS termination (Phase 3)
+
+- `tls_init()` builds one process-wide `SSL_CTX` (`src/tls.c`) shared by every
+  loop: minimum TLS 1.2, TLS 1.3 preferred, compression and renegotiation
+  disabled, an ECDHE-only cipher list, ALPN advertising `http/1.1`, and session
+  resumption enabled. 0-RTT/early data is left disabled. `tls_new_conn()` creates
+  a per-connection server `SSL` with `SSL_MODE_ENABLE_PARTIAL_WRITE` and
+  `SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER`.
+- An accepted TLS socket enters `CONN_TLS_HANDSHAKE`. The event loop drives
+  `SSL_accept()` through `tls_handshake_step()`, re-arming `EPOLLIN`/`EPOLLOUT`
+  on `SSL_ERROR_WANT_READ`/`WANT_WRITE`; the `header_read_timeout` deadline
+  bounds the handshake. On completion the loop reads any already-buffered
+  request and continues through the normal parser/queue path.
+- TLS `SSL_read`/`SSL_write` replace `recv`/`send` on TLS connections. Because
+  TLS cannot use `sendfile(2)`, a file-backed body is streamed with a bounded
+  per-connection `pread`+`SSL_write` buffer (`TLS_FILE_BUF_SIZE`); memory and
+  multipart bodies go straight through `SSL_write`. `SSL_free()` (after a
+  best-effort `SSL_shutdown()`) runs in `conn_close()`.
+- Overload of the TLS listener closes the socket promptly rather than sending a
+  plaintext `503` that cannot be framed before a handshake.
+- TLS counters (`tls_connections`, `tls_handshakes`, `tls_resumptions`,
+  `tls_handshake_failures`) are emitted in the metrics snapshot. `SIGHUP` sets a
+  reload flag; the deadline tick of loop 0 calls `tls_reload_if_requested()` to
+  reload the certificate in place. Existing `SSL` objects keep the certificate
+  they started with, so no connection is dropped.
+
 ## Instrumentation
 
 - `src/metrics.c` counters are relaxed atomics updated on the hot path.
@@ -274,3 +306,9 @@ Close reasons are enumerated in `ELCloseReason` (`include/event_loop.h:21`).
    `path_resolver_open()`. Never build a filesystem path from a request and
    `open()` it directly: the resolver is the single audited boundary that keeps
    every open beneath the root.
+10. TLS uses one shared `SSL_CTX` and a per-connection `SSL` owned by exactly
+    one loop; a connection's `SSL` and its streaming buffer are freed in
+    `conn_close()`. Certificate/key material is loaded only through
+    `src/tls.c`, and a world-accessible private key is fatal. Reload mutates the
+    shared context's certificate only; already-established sessions and
+    handshakes keep the certificate they started with.

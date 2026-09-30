@@ -45,6 +45,12 @@ static _Atomic long       g_buffer_bytes_max;
 static _Atomic long       g_backlog_depth;
 static _Atomic long       g_backlog_depth_max;
 
+/* Phase 3: TLS termination counters (cumulative). */
+static _Atomic long long  g_tls_connections;
+static _Atomic long long  g_tls_handshakes;
+static _Atomic long long  g_tls_resumptions;
+static _Atomic long long  g_tls_handshake_failures;
+
 /* Phase 5: listener drops and accept errors by errno (cumulative). */
 static _Atomic long long  g_listen_drops;
 static _Atomic long long  g_accept_errors;
@@ -269,6 +275,13 @@ void metrics_backlog_depth(long depth)
     }
 }
 
+/* --- Phase 3: TLS termination ------------------------------------------- */
+
+void metrics_tls_connection(void)         { bump(&g_tls_connections); }
+void metrics_tls_handshake(void)          { bump(&g_tls_handshakes); }
+void metrics_tls_resumption(void)         { bump(&g_tls_resumptions); }
+void metrics_tls_handshake_failure(void)  { bump(&g_tls_handshake_failures); }
+
 /* --- Phase 5: listener drops and accept errors -------------------------- */
 
 void metrics_listen_drops(void)
@@ -373,6 +386,10 @@ size_t metrics_snapshot(char *buf, size_t cap)
         "\"accept_error_enfile\":%lld,"
         "\"accept_error_econnaborted\":%lld,"
         "\"accept_error_other\":%lld,"
+        "\"tls_connections\":%lld,"
+        "\"tls_handshakes\":%lld,"
+        "\"tls_resumptions\":%lld,"
+        "\"tls_handshake_failures\":%lld,"
         "\"el_loops\":%d",
         LOAD(g_accepted_connections),
         LOAD(g_completed_requests),
@@ -412,6 +429,10 @@ size_t metrics_snapshot(char *buf, size_t cap)
         LOAD(g_accept_error_enfile),
         LOAD(g_accept_error_econnaborted),
         LOAD(g_accept_error_other),
+        LOAD(g_tls_connections),
+        LOAD(g_tls_handshakes),
+        LOAD(g_tls_resumptions),
+        LOAD(g_tls_handshake_failures),
         LOAD(g_el_loop_count));
 
     int nloops = LOAD(g_el_loop_count);

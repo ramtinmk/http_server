@@ -17,6 +17,10 @@ event loop. Directory-wide rules (build, tests, plans) are in `../AGENTS.md`.
   block a producer; drop and count instead.
 - `sd_notify.c` — `READY`/`STOPPING` datagrams to `$NOTIFY_SOCKET`; no
   libsystemd dependency.
+- `tls.c` — OpenSSL context/policy (TLS 1.2+ min, ECDHE ciphers, ALPN
+  `http/1.1`), cert/key load with permission checks, and the `SIGHUP` reload
+  flag/consumer. The event loop owns per-connection `SSL` objects and the TLS
+  record I/O; this file never touches a connection.
 - `event_loop.c` — the nonblocking `epoll` state machine. One instance per
   thread; a connection is owned by exactly one loop. Response pointers are
   borrowed from cached/static memory and must never be freed here; the owned
@@ -25,8 +29,12 @@ event loop. Directory-wide rules (build, tests, plans) are in `../AGENTS.md`.
   listener pass handles at most `EL_ACCEPT_BATCH_SIZE` accepted sockets; at
   capacity it attempts a nonblocking 503 and closes promptly rather than
   disabling listener interest. On shutdown it stops accepting and drains within
-  `config->shutdown_drain_timeout_sec`.
-- `http_server.c` — socket creation, strict HTTP/1.1 parsing, conditional
+  `config->shutdown_drain_timeout_sec`. It also drives the optional TLS
+  listener: a `CONN_TLS_HANDSHAKE` state around `SSL_accept()`, TLS
+  `SSL_read`/`SSL_write` wrappers, and a bounded `pread`+`SSL_write` path for
+  file bodies (TLS cannot `sendfile`). Both listeners are set nonblocking.
+- `http_server.c` — socket creation (plaintext and TLS listeners via one
+  helper), strict HTTP/1.1 parsing, conditional
   requests, byte ranges, content negotiation, and static/gzip caching. Response
   headers are generated into `PendingResponse.header_buf` (with `header = NULL`)
   rather than precomputed; `Date`, validators, and `Vary` are added there.

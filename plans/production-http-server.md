@@ -136,7 +136,8 @@ Legend: `[x]` done, `[~]` partial, `[ ]` pending, `[!]` blocked.
   Document-root resolution (`openat2`/`O_NOFOLLOW`), MIME map, bounded
   ref-counted cache, `sendfile` streaming, and the traversal corpus are done.
   Evidence in `benchmarks/production_phase2_static.json`.
-- [ ] Phase 3 `production-http-server/phase-3`: TLS termination.
+- [x] Phase 3 `production-http-server/phase-3`: TLS termination. Evidence in
+  `benchmarks/production_phase3_tls.json`.
 - [ ] Phase 4 `production-http-server/phase-4`: sandboxing and robustness.
 - [ ] Phase 5 `production-http-server/phase-5`: observability and operations.
 - [ ] Phase 6 `production-http-server/phase-6`: deployment, CI, and capacity
@@ -289,26 +290,35 @@ Legend: `[x]` done, `[~]` partial, `[ ]` pending, `[!]` blocked.
 
 **Work**
 
-- [ ] Choose and integrate one library (OpenSSL or mbedTLS); record the choice
-  and version in the plan before implementation.
-- [ ] Nonblocking handshake and record I/O as explicit connection states
+- [x] Choose and integrate one library (OpenSSL or mbedTLS); record the choice
+  and version in the plan before implementation. OpenSSL 1.1.1f
+  (`production-http-server-phase3.md`).
+- [x] Nonblocking handshake and record I/O as explicit connection states
   handling `WANT_READ`/`WANT_WRITE`; bounded TLS buffers; handshake timeout;
-  no 0-RTT.
-- [ ] Protocol/cipher policy: TLS 1.2+ (prefer 1.3), secure renegotiation,
-  session resumption; ALPN advertising `http/1.1`.
-- [ ] Certificate/key loading with fail-fast validation and permission checks;
-  `SIGHUP` hot reload without dropping connections; optional SNI multi-cert.
-- [ ] Dual listeners (plaintext + TLS) toggled by config; TLS-specific metrics
+  no 0-RTT. `CONN_TLS_HANDSHAKE` in `src/event_loop.c`; `TLS_FILE_BUF_SIZE`
+  streaming buffer; `header_read_timeout` bounds the handshake.
+- [x] Protocol/cipher policy: TLS 1.2+ (prefer 1.3), secure renegotiation,
+  session resumption; ALPN advertising `http/1.1`. Renegotiation is disabled
+  outright (`SSL_OP_NO_RENEGOTIATION`); TLS 1.2 uses secure renegotiation.
+- [x] Certificate/key loading with fail-fast validation and permission checks;
+  `SIGHUP` hot reload without dropping connections; optional SNI multi-cert is
+  deferred (single certificate loads a chain; SNI multi-cert is out of scope).
+- [x] Dual listeners (plaintext + TLS) toggled by config; TLS-specific metrics
   (handshakes, resumptions, failures).
 
 **Exit criteria**
 
-- [ ] A local protocol/cipher scan (e.g. `testssl.sh`/`ssllabs`-style) reports
-  no weak protocol, cipher, or certificate finding.
-- [ ] Handshakes under load never stall an event loop; `openssl s_client` and a
-  browser complete a request.
-- [ ] TLS `hardware_agnostic_rps` is recorded and the TLS/plaintext ratio is
-  documented; cert reload drops zero connections.
+- [x] A local protocol/cipher scan (e.g. `testssl.sh`/`ssllabs`-style) reports
+  no weak protocol, cipher, or certificate finding. Evidence:
+  `benchmarks/production_phase3_tls.json` `tls` (TLSv1.3,
+  `TLS_AES_256_GCM_SHA384`, ALPN `http/1.1`); `openssl s_client` also shows
+  TLSv1.2 `ECDHE-RSA-AES128-GCM-SHA256` with secure renegotiation.
+- [x] Handshakes under load never stall an event loop; `openssl s_client` and a
+  browser complete a request. Evidence: 50 concurrent handshakes 50/50, zero
+  `tls_handshake_failures`, zero `header_timeout` in the artifact.
+- [x] TLS `hardware_agnostic_rps` is recorded and the TLS/plaintext ratio is
+  documented; cert reload drops zero connections. Evidence:
+  `benchmarks/production_phase3_tls.json` `throughput` and `reload`.
 
 ### production-http-server/phase-4: Sandboxing and robustness
 

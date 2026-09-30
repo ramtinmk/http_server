@@ -33,6 +33,9 @@ each harness: `../docs/runbooks/reproduce-a-benchmark.md`.
   corpus, large-file streaming (partial writes, slow reader), cache/fd budgets,
   and doc-root throughput vs the fixed-path baseline;
   `../benchmarks/production_phase2_static.json`.
+- `phase3_tls_test.py` — TLS acceptance: protocol/cipher/ALPN scan, small and
+  large bodies over TLS, concurrent handshakes, `SIGHUP` cert reload, and the
+  TLS/plaintext throughput ratio; `../benchmarks/production_phase3_tls.json`.
 - `startup_failfast_test.py` — missing static asset must fail startup.
 - `memory_soak.py` — stationary keep-alive RSS/PSS drift gate.
 - `wrk_benchmark.py` / `wrk_pipeline.lua` — raw `wrk` sweeps (needs `wrk`).

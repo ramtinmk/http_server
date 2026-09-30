@@ -38,6 +38,14 @@ benchmark target.
   `HTTP_SERVER_MIME_TYPES` file. Small files are cached in a byte-budgeted LRU
   (plain + gzip); larger files stream from the descriptor with nonblocking
   `sendfile` (identity only) and still honor conditionals and ranges.
+- **TLS termination (Phase 3):** set `HTTP_SERVER_TLS=1` with `tls_cert_file`
+  and `tls_key_file` to serve the same document root over HTTPS on a second
+  `tls_port` (default 8443). OpenSSL-backed: TLS 1.2 minimum, TLS 1.3 preferred,
+  ECDHE-only ciphers, ALPN advertising `http/1.1`, no compression or
+  renegotiation, session resumption, and no 0-RTT. The handshake and record I/O
+  run nonblocking inside the event loop; a `SIGHUP` reloads the certificate in
+  place without dropping connections. The plaintext listener is independent and
+  remains the fallback.
 - **Resource guards:** bounded active connections, per-connection input cap,
   keep-alive request cap, and read/idle/write timeouts (see
   `include/server_config.h` for every value and its default).
@@ -78,6 +86,9 @@ benchmark target.
 
 ## Build
 
+Requires a C11 compiler, CMake, `zlib`, and (for TLS) `libssl-dev` / OpenSSL.
+CMake fails at configure time when OpenSSL is missing.
+
 ```
 make
 ```
@@ -112,10 +123,17 @@ HTTP_SERVER_CONFIG=/etc/http_server.conf ./bin/http_server
 # or directly on the command line / environment
 ./bin/http_server --port 8081 --max-keepalive-requests 1000
 HTTP_SERVER_IDLE_TIMEOUT=5 ./bin/http_server
+
+# serve the same document root over HTTPS on a second port
+./bin/http_server --tls 1 --tls-port 8443 \
+  --tls-cert-file /etc/http_server/tls/cert.pem \
+  --tls-key-file /etc/http_server/tls/key.pem
+curl -k https://127.0.0.1:8443/hello
 ```
 
 `--help` lists every key and its environment variable. An invalid or unknown
-key exits non-zero naming the key.
+key exits non-zero naming the key. With TLS enabled, `SIGHUP` reloads the
+certificate in place (see `docs/runbooks/configure-and-reload.md`).
 
 | Path     | Response                     |
 |----------|------------------------------|
@@ -148,6 +166,15 @@ budgets, throughput) runs against a temporary document root and writes
 
 ```
 make phase2-static
+```
+
+Phase 3 TLS acceptance (protocol/cipher/ALPN scan, byte-for-byte bodies over
+TLS including a large buffered file, concurrent handshakes, and a `SIGHUP`
+certificate reload) generates a throwaway self-signed certificate, starts the
+server itself, and writes `benchmarks/production_phase3_tls.json`:
+
+```
+make phase3-tls
 ```
 
 The server suite requires `./bin/http_server` to be running from the project
@@ -385,8 +412,9 @@ bounds them. Require the performance governor for comparable runs:
 The next program takes this to production: HTTP/1.1 + TLS static serving, secure
 document-root handling, sandboxing, observability, and a hardened systemd
 deployment. See `plans/production-http-server.md`; its Phase 0 (operational
-safety and overload), Phase 1 (HTTP/1.1 correctness and caching), and Phase 2
-(secure document-root serving) are complete, with TLS termination next.
+safety and overload), Phase 1 (HTTP/1.1 correctness and caching), Phase 2
+(secure document-root serving), and Phase 3 (TLS termination) are complete,
+with sandboxing and operations next.
 
 Still out of scope: HTTP/2, CGI, reverse proxy, dynamic content, and directory
 listing. See `plans/` for the specifications behind each phase.
