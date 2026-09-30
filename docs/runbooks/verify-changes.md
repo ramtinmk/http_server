@@ -47,6 +47,7 @@ variants:
 make phase0-lifecycle     # invalid config + SIGTERM drain, no wrk
 make phase0-2x            # 2x-capacity overload with wrk
 make phase0-accesslog     # access-log overhead gate with wrk
+make phase2-static        # doc-root traversal corpus + streaming + budgets, no wrk
 make saturation           # existing Phase 4 overload acceptance
 ```
 

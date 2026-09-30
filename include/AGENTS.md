@@ -15,11 +15,20 @@ Public headers. Repo-wide rules: `../AGENTS.md`; data flow and invariants:
 - `sd_notify.h` is a dependency-free systemd readiness shim.
 - `http_server.h` defines `PendingResponse` and `PR_HEADER_BUF_SIZE`. Its
   `header`/`body` pointers alias cached or static memory; the event loop must
-  never `free()` them. The exception is `owned_body` (multipart/byteranges): it
-  aliases `body` and the event loop frees it after send or on close. When
+  never `free()` them. The owned resources are `owned_body`
+  (multipart/byteranges), `body_fd` (a streamed file, released via `close`),
+  and `cache_entry` (a pinned `FileCache` reference); the event loop releases
+  all three after send or on close. `body_fd` must be `-1` when unused. When
   `header` is NULL the in-struct `header_buf` is sent instead (never point
   `header` at a response's own `header_buf`; the queue copies the struct by
   value). The `method`/`path`/`started` fields are access-log metadata.
+- `path_resolver.h` is the document-root resolution boundary (decode, normalize,
+  `openat2`/`O_NOFOLLOW`, directory index, MIME map). Every request-derived path
+  must go through it.
+- `file_cache.h` defines `Representation` and the bounded, ref-counted cache.
+  A cached entry's bodies are borrowed by responses until
+  `file_cache_release()`; `file_cache_insert()` takes ownership of the bodies
+  it is given.
 - `event_loop.h` owns the connection state enum, close reasons, and the
   `EventLoop` contract. Document ownership in comments when you add state.
 - `metrics.h` and `memory_profiler.h` are instrumentation surfaces. Keep them

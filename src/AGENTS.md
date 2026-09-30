@@ -19,7 +19,9 @@ event loop. Directory-wide rules (build, tests, plans) are in `../AGENTS.md`.
   libsystemd dependency.
 - `event_loop.c` — the nonblocking `epoll` state machine. One instance per
   thread; a connection is owned by exactly one loop. Response pointers are
-  borrowed from cached/static memory and must never be freed here. Each
+  borrowed from cached/static memory and must never be freed here; the owned
+  resources (`owned_body`, `body_fd`, `cache_entry`) are released by
+  `pending_release()` in `pq_pop()`/`pq_release_all()`. Each
   listener pass handles at most `EL_ACCEPT_BATCH_SIZE` accepted sockets; at
   capacity it attempts a nonblocking 503 and closes promptly rather than
   disabling listener interest. On shutdown it stops accepting and drains within
@@ -33,7 +35,17 @@ event loop. Directory-wide rules (build, tests, plans) are in `../AGENTS.md`.
   satisfiable ranges produce a bounded `206 multipart/byteranges` whose body is
   heap-owned via `PendingResponse.owned_body` (freed by the event loop); an
   invalid or over-bounds range-set is ignored (`200`). Request bodies are never
-  read.
+  read. Phase 2 adds document-root routing: the `/home` and `/hello` aliases are
+  served from the startup cache; every other path goes through
+  `path_resolver_open()` and is served from the bounded cache (memory) or the
+  file descriptor (`body_fd`, streamed with `sendfile`).
+- `path_resolver.c` — the single audited path-resolution boundary: decode once,
+  normalize, enforce hidden/symlink policy, `openat2(RESOLVE_BENEATH)` with an
+  `O_NOFOLLOW` fallback, directory-index lookup, and the MIME map. Never open a
+  request-derived path anywhere else.
+- `file_cache.c` — bounded, ref-counted LRU cache of identity/gzip
+  representations. `file_cache_insert()` takes ownership of freshly read bodies;
+  eviction skips referenced entries so a borrowed in-flight body is never freed.
 - `ring_buffer.c` — bounded circular buffer and line reader.
 - `metrics.c` — lock-free counters and JSON snapshot rendering.
 - `memory_profiler.c` — procfs/`mallinfo2` sampling, reporter thread only.

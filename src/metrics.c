@@ -53,6 +53,9 @@ static _Atomic long long  g_accept_error_enfile;
 static _Atomic long long  g_accept_error_econnaborted;
 static _Atomic long long  g_accept_error_other;
 
+/* Optional cache-stats sampler invoked by the reporter while rendering. */
+static _Atomic(MetricsCacheSampler) g_cache_sampler;
+
 /* Per-loop event-loop counters, emitted as arrays in the snapshot. */
 #define METRICS_MAX_EL_LOOPS 16
 static _Atomic long long g_el_loop_wakeups[METRICS_MAX_EL_LOOPS];
@@ -428,6 +431,16 @@ size_t metrics_snapshot(char *buf, size_t cap)
                        LOAD(g_el_loop_accepted[i]));
     }
     used = appendf(buf, cap, used, "]");
+
+    MetricsCacheSampler sampler =
+        atomic_load_explicit(&g_cache_sampler, memory_order_relaxed);
+    long cache_bytes = 0, cache_entries = 0;
+    if (sampler)
+        sampler(&cache_bytes, &cache_entries);
+    used = appendf(buf, cap, used,
+                   ",\"cache_bytes\":%ld,\"cache_entries\":%ld",
+                   cache_bytes, cache_entries);
+
     used = memory_profiler_append_json(buf, cap, used);
     used = appendf(buf, cap, used, "}");
     return used;
@@ -515,4 +528,9 @@ void metrics_reporter_start(const char *path, int interval_ms)
 void metrics_reporter_stop(void)
 {
     atomic_store_explicit(&g_reporter_stop, 1, memory_order_relaxed);
+}
+
+void metrics_set_cache_sampler(MetricsCacheSampler fn)
+{
+    atomic_store_explicit(&g_cache_sampler, fn, memory_order_relaxed);
 }

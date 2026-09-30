@@ -196,6 +196,17 @@ add_custom_target(memory-soak
     COMMENT "Running memory soak (RSS/heap drift artifact)"
 )
 
+# Phase 2 static-serving acceptance: traversal/symlink/encoding corpus, large
+# file streaming, cache/fd budgets, and doc-root throughput vs the fixed-path
+# baseline. Writes benchmarks/production_phase2_static.json.
+add_custom_target(phase2-static
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/phase2_static_test.py
+    DEPENDS http_server
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    USES_TERMINAL
+    COMMENT "Running Phase 2 secure static-serving acceptance"
+)
+
 # Phase 4: static assets are precompressed/cached at startup and startup must
 # fail fast when one cannot be loaded.
 add_custom_target(startup-failfast

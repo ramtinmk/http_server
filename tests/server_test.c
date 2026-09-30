@@ -1625,6 +1625,57 @@ void test_http_conformance_corpus(void)
     TEST_ASSERT(fails == 0);
 }
 
+/*
+ * Phase 2: document-root serving against the repository root (the default
+ * document root when the server is launched per AGENTS.md). Verifies a real
+ * file is served with a MIME type, HEAD carries no body, and the resolver
+ * refuses hidden files and path traversal with the documented statuses.
+ */
+void test_docroot_static_serving() {
+    struct {
+        const char *name;
+        const char *method;
+        const char *path;
+        int         status;
+        const char *must_contain;
+    } cases[] = {
+        {"repo-file", "GET", "/readme.md", 200, "Content-Type: text/markdown"},
+        {"head-file", "HEAD", "/readme.md", 200, "Content-Length: "},
+        {"hidden",    "GET", "/.git/config", 403, NULL},
+        {"traversal", "GET", "/../etc/passwd", 403, NULL},
+        {"enc-traversal", "GET", "/%2e%2e/etc/passwd", 403, NULL},
+        {"null-byte", "GET", "/%00", 400, NULL},
+        {"missing",   "GET", "/definitely-not-here-12345", 404, NULL},
+    };
+
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        int sock = create_and_connect_socket();
+        TEST_ASSERT(sock != -1);
+
+        char request[256];
+        snprintf(request, sizeof(request),
+                 "%s %s HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+                 cases[i].method, cases[i].path);
+        TEST_ASSERT(send(sock, request, strlen(request), 0) != -1);
+
+        HttpResponse response;
+        TEST_ASSERT(read_http_response(sock, request, &response) == 0);
+        if (response.status_code != cases[i].status) {
+            printf("    docroot %s: expected %d, got %d\n", cases[i].name,
+                   cases[i].status, response.status_code);
+        }
+        TEST_ASSERT(response.status_code == cases[i].status);
+        if (cases[i].must_contain) {
+            TEST_ASSERT(strstr(response.headers, cases[i].must_contain) != NULL);
+        }
+        if (strcmp(cases[i].method, "HEAD") == 0) {
+            TEST_ASSERT(response.body_length == 0);
+        }
+        http_response_free(&response);
+        close(sock);
+    }
+}
+
 // --- Runner ---
 
 void run_server_tests() {
@@ -1669,6 +1720,9 @@ void run_server_tests() {
     RUN_TEST(test_el_pipelined_after_error,   "Phase1: keep-alive continues after a 404");
     RUN_TEST(test_el_client_close_during_write, "Phase1: client close/RST mid-response absorbed");
     RUN_TEST(test_el_capacity_and_fd_leak,    "Phase1: admission cap + no FD leak on disconnect burst");
+
+    // Phase 2: secure document-root serving
+    RUN_TEST(test_docroot_static_serving,     "Phase2: doc-root file, hidden/traversal refusal");
 
     // Phase 3: event-loop specific behaviour
     RUN_TEST(test_el_fragmented_headers,      "Phase3: Fragmented header delivery across recv calls");

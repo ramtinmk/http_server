@@ -37,6 +37,12 @@ out-of-range value is fatal and names the exact key (for example
 | `log_level` / `HTTP_SERVER_LOG_LEVEL` | `info` | `error`, `warn`, `info`, or `debug`. |
 | `log_file` / `HTTP_SERVER_LOG_FILE` | unset (stderr) | JSON log target. `SIGHUP` reopens it (for logrotate). |
 | `access_log` / `HTTP_SERVER_ACCESS_LOG` | `0` | Emit one JSON access record per completed response. |
+| `document_root` / `HTTP_SERVER_DOCUMENT_ROOT` | `DOCUMENT_ROOT` (`.`) | Directory every non-alias request path is resolved beneath. Relative paths resolve against the working directory. |
+| `index_files` / `HTTP_SERVER_INDEX_FILES` | `INDEX_FILES` (`index.html,index.htm`) | Comma-separated index file names tried for a directory; no directory listing. |
+| `mime_types` / `HTTP_SERVER_MIME_TYPES` | unset (builtin) | Optional `mime.types`-style file; entries override the builtin extension map. |
+| `hidden_files` / `HTTP_SERVER_HIDDEN_FILES` | `0` | When `1`, serve dotfiles; when `0` a leading-dot segment is `403`. |
+| `symlinks` / `HTTP_SERVER_SYMLINKS` | `0` | When `1`, follow symlinks that stay beneath the root (requires `openat2`); when `0`, any symlink is refused. |
+| `cache_budget_bytes` / `HTTP_SERVER_CACHE_BUDGET_BYTES` | `CACHE_BUDGET_BYTES_DEFAULT` (16 MiB) | Total bytes the representation cache may hold; `0` disables caching and streams every file. |
 
 ### Operational variables
 
@@ -68,6 +74,11 @@ the compiled default without a rebuild.
 | `MAX_PIPELINE_DEPTH`         | 16      | Pipelined requests processed from one `recv()` pass before a new read. |
 | `MAX_MULTIPART_RANGES`       | 8       | Max satisfiable ranges in one `multipart/byteranges` `206`; more → full `200`. |
 | `MAX_MULTIPART_BYTES`        | 8192    | Max assembled `multipart/byteranges` body size; larger → full `200`. |
+| `DOCUMENT_ROOT` *(default)*  | `.`     | Default `document_root` runtime value. |
+| `INDEX_FILES` *(default)*    | `index.html,index.htm` | Default `index_files` runtime value. |
+| `CACHE_MAX_FILE_BYTES`       | 1048576 | Largest file read into the representation cache; larger files stream via `sendfile` (identity only). |
+| `CACHE_MAX_ENTRIES`          | 256     | Hard cap on cache entries independent of the byte budget. |
+| `CACHE_BUDGET_BYTES_DEFAULT` | 16777216 | Default `cache_budget_bytes` runtime value (16 MiB); runtime `0` disables caching. |
 | `HEADER_READ_TIMEOUT_SEC`    | 5       | Time to deliver complete request headers after accept. |
 | `IDLE_TIMEOUT_SEC`           | 30      | Keep-alive idle time between requests. |
 | `WRITE_TIMEOUT_SEC`          | 10      | Time to drain a full response to the socket. |

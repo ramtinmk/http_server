@@ -1,11 +1,13 @@
 #define _GNU_SOURCE
 
 #include "event_loop.h"
+#include "file_cache.h"
 #include "metrics.h"
 #include "log.h"
 
 #include <sys/epoll.h>
 #include <sys/eventfd.h>
+#include <sys/sendfile.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
@@ -241,13 +243,28 @@ static PendingResponse *pq_head_ptr(ELConnection *c)
     return c->pq_count ? &c->pq[c->pq_head] : NULL;
 }
 
+/*
+ * Release the resources a response descriptor owns: a heap multipart body, a
+ * streamed file descriptor, or a pinned cache entry. Borrowed cached/static
+ * memory is never freed.
+ */
+static void pending_release(PendingResponse *pr)
+{
+    free(pr->owned_body);
+    pr->owned_body = NULL;
+    if (pr->body_fd >= 0) {
+        close(pr->body_fd);
+        pr->body_fd = -1;
+    }
+    file_cache_release((struct CacheEntry *)pr->cache_entry);
+    pr->cache_entry = NULL;
+    pr->body = NULL;
+}
+
 static void pq_pop(ELConnection *c)
 {
     if (c->pq_count > 0) {
-        PendingResponse *pr = &c->pq[c->pq_head];
-        free(pr->owned_body); /* multipart bodies are owned by the response */
-        pr->owned_body = NULL;
-        pr->body       = NULL;
+        pending_release(&c->pq[c->pq_head]);
     }
     c->pq_head        = (c->pq_head + 1) % (MAX_PIPELINE_DEPTH + 1);
     c->pq_count--;
@@ -255,15 +272,13 @@ static void pq_pop(ELConnection *c)
     c->out_body_sent   = 0;
 }
 
-/* Release every queued response, freeing any heap-owned bodies. */
+/* Release every queued response, freeing any owned bodies/descriptors. */
 static void pq_release_all(ELConnection *c)
 {
     for (int i = 0; i < c->pq_count; i++) {
         PendingResponse *pr =
             &c->pq[(c->pq_head + i) % (MAX_PIPELINE_DEPTH + 1)];
-        free(pr->owned_body);
-        pr->owned_body = NULL;
-        pr->body       = NULL;
+        pending_release(pr);
     }
     c->pq_head         = 0;
     c->pq_tail         = 0;
@@ -549,6 +564,36 @@ static int send_slice(int fd, const unsigned char *buf, size_t *off, size_t len)
     return 0;
 }
 
+/*
+ * Stream `len` bytes from `file_fd` starting at `*off` to the socket with
+ * sendfile(). Returns 0 when fully sent, 1 when the caller should retry on a
+ * later writable event, and -1 on a fatal error. `*off` is advanced.
+ */
+static int send_file_slice(int fd, int file_fd, off_t *off, size_t len)
+{
+    while (len > 0) {
+        ssize_t n = sendfile(fd, file_fd, off, len);
+        if (n > 0) {
+            len -= (size_t)n;
+            if (len > 0) {
+                metrics_el_partial_write();
+                return 1;
+            }
+            return 0;
+        }
+        if (n == 0)
+            return 1;
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            metrics_el_eagain();
+            return 1;
+        }
+        if (errno == EINTR)
+            continue;
+        return -1;
+    }
+    return 0;
+}
+
 /* ------------------------------------------------------------------ */
 /* el_writable                                                          */
 /* ------------------------------------------------------------------ */
@@ -589,7 +634,15 @@ static void el_writable(EventLoop *loop, ELConnection *c)
 
         /* --- Send body --- */
         if (!pr->is_head && pr->body_len > 0) {
-            s = send_slice(c->fd, pr->body, &c->out_body_sent, pr->body_len);
+            if (pr->body_fd >= 0) {
+                off_t off = pr->body_file_off + (off_t)c->out_body_sent;
+                s = send_file_slice(c->fd, pr->body_fd, &off,
+                                    pr->body_len - c->out_body_sent);
+                c->out_body_sent = (size_t)(off - pr->body_file_off);
+            } else {
+                s = send_slice(c->fd, pr->body,
+                               &c->out_body_sent, pr->body_len);
+            }
             if (s < 0) {
                 conn_close(loop, c, CLOSE_WRITE_ERROR);
                 return;

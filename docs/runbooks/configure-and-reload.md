@@ -23,6 +23,8 @@ shutdown_drain_timeout = 15
 log_level = info
 log_file = /var/log/http_server.jsonl
 access_log = 0
+document_root = /srv/www
+cache_budget_bytes = 33554432
 ```
 
 Keys may be written with `-` or `_`; they map to the same field.

@@ -31,7 +31,9 @@ invariants must hold when you change the code.
 | `src/main.c`                | Socket setup, allocator cap, startup preflight, signal handling, effective capacity, loop-count resolution, dispatch selection |
 | `src/config.c`              | Single validated configuration surface (defaults < file < env < CLI), range/unknown-key rejection, usage text |
 | `src/event_loop.c`          | Nonblocking per-loop connection state machine, pipeline queue, deadlines, admission/overload handling, graceful drain, listen-drop sampling |
-| `src/http_server.c`         | Socket creation, HTTP/1.1 parsing, static asset + gzip caching, response selection |
+| `src/http_server.c`         | Socket creation, HTTP/1.1 parsing, static asset + gzip caching, document-root response selection |
+| `src/path_resolver.c`       | Safe document-root path resolution (percent-decode, normalize, `openat2`/`O_NOFOLLOW`), directory index, MIME map |
+| `src/file_cache.c`          | Bounded, ref-counted LRU cache of identity/gzip representations |
 | `src/log.c`                 | Leveled JSON access/error logging; nonblocking pipe + writer thread; `SIGHUP` reopen |
 | `src/sd_notify.c`           | Dependency-free `sd_notify` (`READY`/`STOPPING`) over `$NOTIFY_SOCKET` |
 | `src/ring_buffer.c`         | Bounded circular byte buffer and line reader with rollback           |
@@ -183,8 +185,47 @@ Close reasons are enumerated in `ELCloseReason` (`include/event_loop.h:21`).
 - Content negotiation: `Accept-Encoding` selects the gzip representation when
   `gzip` (or `*`) has `q > 0`, identity otherwise; `Vary: Accept-Encoding` is
   always emitted on negotiable responses, and `406` when neither is acceptable.
-- Routes (`src/http_server.c`): `/` and `/home` → `home.html`, `/hello` →
-  `hello.html`, anything else → `404`.
+- Routes (`src/http_server.c`): `/home` and `/hello` are fixed legacy aliases
+  backed by the startup cache; every other path is resolved against
+  `document_root` (see below). `/` serves the root directory's index file, or
+  falls back to `home.html` when no index exists.
+
+## Document-root serving (Phase 2)
+
+- `initialize_static_responses(cfg)` configures `document_root`, `index_files`,
+  the optional `mime_types` file, the hidden-file/symlink policies, and a
+  bounded representation cache. The document root is opened once
+  (`path_resolver_init`) and every request path is resolved relative to that
+  descriptor.
+- `path_resolver_open()` (`src/path_resolver.c`) percent-decodes the request
+  path **exactly once**, rejecting NUL, backslash, DEL, and control bytes
+  (`400`) and over-long results (`414`); normalizes `.` and `..`, refusing a
+  `..` that would climb above the root and any hidden (leading-dot) segment
+  unless allowed (`403`); then opens the result with
+  `openat2(RESOLVE_BENEATH | RESOLVE_NO_MAGICLINKS [| RESOLVE_NO_SYMLINKS])`,
+  falling back to an `O_NOFOLLOW` dirfd walk on kernels without `openat2`. A
+  directory resolves to the first existing `index_files` entry (`404` if none;
+  there is no directory listing). Anything that is not a regular file is
+  refused.
+- `mime_type_for_path()` maps the file extension through a builtin table plus
+  any operator `mime.types` entries; the default is
+  `application/octet-stream`.
+- Response bodies have three forms. Memory-backed cached representations point
+  `body` into a pinned `FileCache` entry (`cache_entry`); multipart bodies are
+  heap-owned (`owned_body`); and files larger than `CACHE_MAX_FILE_BYTES` are
+  streamed from `body_fd` at `body_file_off` with nonblocking `sendfile()`.
+  The event loop releases all three forms in `pending_release()`
+  (`pq_pop()`/`pq_release_all()`).
+- The cache (`src/file_cache.c`) is an LRU with a byte budget and entry cap.
+  `file_cache_insert()` takes ownership of freshly read bodies; a cache hit
+  returns an entry with an extra reference that the response holds until the
+  event loop releases it. Eviction skips referenced entries, so an in-flight
+  response can never have its bytes freed underneath it; if the budget cannot
+  be made to fit, the file is streamed instead of cached.
+- Files above the cache threshold are served identity-only (no gzip
+  representation) and still honor `If-None-Match`/`If-Modified-Since`,
+  `If-Range`, single and multipart ranges (parts are `pread()` from the
+  descriptor).
 
 ## Instrumentation
 
@@ -207,13 +248,16 @@ Close reasons are enumerated in `ELCloseReason` (`include/event_loop.h:21`).
 1. A connection is owned by exactly one loop; never touch another loop's
    `ELConnection`.
 2. `PendingResponse.header`/`body` point into cached or static memory; the
-   event loop must never `free()` them. The sole exception is
-   `PendingResponse.owned_body`: a multipart body is owned by the response and
-   `body` aliases it; the event loop frees it in `pq_pop()` after sending or in
-   `pq_release_all()` when a connection closes with responses still queued. When
-   `header` is NULL the in-struct `header_buf` is sent instead; never point
-   `header` at a response's own `header_buf`, because the pipeline queue copies
-   the struct by value and the pointer would then reference the source copy.
+   event loop must never `free()` them. Responses own two other resources: a
+   multipart body (`owned_body`, aliased by `body`) and a streamed file
+   (`body_fd`/`body_file_off`), plus a pinned cache entry (`cache_entry`). The
+   event loop releases all of them through `pending_release()` in `pq_pop()`
+   after sending or in `pq_release_all()` when a connection closes with
+   responses still queued. When `header` is NULL the in-struct `header_buf` is
+   sent instead; never point `header` at a response's own `header_buf`, because
+   the pipeline queue copies the struct by value and the pointer would then
+   reference the source copy. `body_fd` must be `-1` (not 0) when unused, or the
+   event loop would close stdin.
 3. `el_prepare_response()` must leave the ring buffer unchanged when it returns
    incomplete, or fragmented requests corrupt pipelining.
 4. The allocator cap is set before any thread starts.
@@ -225,3 +269,7 @@ Close reasons are enumerated in `ELCloseReason` (`include/event_loop.h:21`).
 8. A log record is written with a single pipe write of at most `PIPE_BUF`
    bytes, so records from different loops never interleave; producers never
    block (drops, not stalls).
+9. Document-root paths are decoded once and opened only through
+   `path_resolver_open()`. Never build a filesystem path from a request and
+   `open()` it directly: the resolver is the single audited boundary that keeps
+   every open beneath the root.
