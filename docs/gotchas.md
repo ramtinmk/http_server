@@ -100,6 +100,31 @@ Sharp edges that cost time. Each entry says what bites and how to avoid it.
   When the client sends `identity;q=0` the `Range` is ignored and the whole gzip
   `200` is returned.
 
+## Static file serving (Phase 2)
+
+- **The server still needs `home.html`/`hello.html` in the working directory.**
+  They back the `/home`, `/hello`, and (fallback) `/` aliases; a missing asset
+  fails startup before the document root matters.
+- **Hidden means any leading-dot path segment**, not just `.git`. `/..../x`,
+  `/.env`, and `/.well-known/...` are all `403` while `hidden_files=0`. Set
+  `HTTP_SERVER_HIDDEN_FILES=1` to serve them.
+- **`symlinks=1` only follows symlinks that stay beneath the root, and needs
+  `openat2` (Linux 5.6+).** An absolute symlink (`link -> /etc/passwd`) is
+  refused even when symlinks are allowed because `RESOLVE_BENEATH` cannot prove
+  it stays in-root. On older kernels the fallback walk refuses all symlinks.
+- **Cache budget of `0` disables caching**: every file streams from its
+  descriptor (identity only), which is the simplest rollback if the cache is
+  ever suspect.
+- **Files larger than `CACHE_MAX_FILE_BYTES` (1 MiB) are never cached or
+  gzipped.** They stream identity-only but still support conditional requests
+  and ranges; `Accept-Encoding: gzip` yields an identity `200`, not a `406`.
+- **The default document root is `.`.** A relative `document_root` is resolved
+  against the process working directory, so the "run from the repo root" rule
+  still applies unless an absolute root is configured.
+- **Path decoding happens exactly once.** A double-encoded `%252e%252e` is
+  treated as the literal filename `%2e%2e`, not as `..`; NUL (`%00`),
+  backslashes, and other control bytes are `400` rather than being normalized.
+
 ## Tests
 
 - **The server suite needs a running server** on `127.0.0.1:8081`:

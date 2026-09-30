@@ -2,6 +2,7 @@
 #define HTTP_SERVER_H
 
 #include <stddef.h>
+#include <sys/types.h>
 #include <time.h>
 
 #include "ring_buffer.h"
@@ -47,6 +48,9 @@ typedef struct {
     const unsigned char *body;         /* Body bytes (may be NULL).          */
     size_t               body_len;     /* Length of body in bytes.           */
     unsigned char       *owned_body;   /* Heap body this response owns, or NULL. */
+    int                  body_fd;      /* Streamed file fd (owned), or -1.    */
+    off_t                body_file_off;/* Starting offset for the stream.    */
+    void                *cache_entry;  /* Pinned FileCache entry, or NULL.   */
     int                  is_head;      /* HEAD request: skip body send.      */
     int                  force_close;  /* Close connection after this resp.  */
     int                  status;       /* HTTP status code (for metrics).    */
@@ -72,6 +76,19 @@ typedef struct {
 int el_prepare_response(RingBuffer *rb, int force_close, int *keep_alive_out, PendingResponse *pr);
 
 int create_server_socket(const ServerConfig *cfg, int reuseport);
-int initialize_static_responses(void);
+
+/*
+ * Initialize static serving: load and precompress the legacy fixed-path assets
+ * (`home.html`/`hello.html`) and configure the Phase 2 document root, MIME map,
+ * path resolver, and bounded representation cache from `cfg`. Returns 0 on
+ * success, -1 when an asset or the document root cannot be loaded.
+ */
+int initialize_static_responses(const ServerConfig *cfg);
+
+/* Release resolver/cache resources at shutdown. */
+void shutdown_static_responses(void);
+
+/* Current representation-cache byte count and entry count (metrics sampler). */
+void http_server_cache_stats(long *bytes, long *entries);
 
 #endif /* HTTP_SERVER_H */

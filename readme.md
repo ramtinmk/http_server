@@ -29,6 +29,15 @@ benchmark target.
   `Accept-Ranges: bytes`, and multiple satisfiable ranges return a bounded
   `206 multipart/byteranges`. Ranges are served uncompressed; full responses
   use `Accept-Encoding` negotiation (gzip) and emit `Vary: Accept-Encoding`.
+- **Document root:** every non-alias path is resolved beneath
+  `HTTP_SERVER_DOCUMENT_ROOT` (default `.`) by a single safe resolver:
+  percent-decode once, normalize `.`/`..` without escaping the root, refuse
+  hidden dotfiles by default, and open with `openat2(RESOLVE_BENEATH)` /
+  `O_NOFOLLOW` (symlinks denied by default). Directories serve an index file
+  (no listing); `Content-Type` comes from a builtin MIME table plus an optional
+  `HTTP_SERVER_MIME_TYPES` file. Small files are cached in a byte-budgeted LRU
+  (plain + gzip); larger files stream from the descriptor with nonblocking
+  `sendfile` (identity only) and still honor conditionals and ranges.
 - **Resource guards:** bounded active connections, per-connection input cap,
   keep-alive request cap, and read/idle/write timeouts (see
   `include/server_config.h` for every value and its default).
@@ -109,10 +118,14 @@ key exits non-zero naming the key.
 
 | Path     | Response                     |
 |----------|------------------------------|
-| `/`      | `home.html` (200)            |
+| `/`      | document-root index, else `home.html` (200) |
 | `/home`  | `home.html` (200)            |
 | `/hello` | `hello.html` (200)           |
-| other    | 404                          |
+| other    | resolved against the document root: `200`, `403` (hidden/symlink/traversal), or `404` |
+
+Paths that would escape the document root (`..`, encoded `..`, `%00`,
+backslashes) are refused with `400`/`403`; hidden dotfiles are `403` unless
+`HTTP_SERVER_HIDDEN_FILES=1`.
 
 `OPTIONS` returns `204` with `Allow: GET, HEAD, OPTIONS`; `POST` on any path
 returns `405` with the same `Allow`; other methods return `501`. Multi-range
@@ -126,6 +139,14 @@ Unit suites do not need a running server:
 ```
 ./bin/run_tests ring
 ctest --output-on-failure
+```
+
+Phase 2 static-serving acceptance (traversal corpus, streaming, cache/fd
+budgets, throughput) runs against a temporary document root and writes
+`benchmarks/production_phase2_static.json`:
+
+```
+make phase2-static
 ```
 
 The server suite requires `./bin/http_server` to be running from the project
@@ -363,8 +384,8 @@ bounds them. Require the performance governor for comparable runs:
 The next program takes this to production: HTTP/1.1 + TLS static serving, secure
 document-root handling, sandboxing, observability, and a hardened systemd
 deployment. See `plans/production-http-server.md`; its Phase 0 (operational
-safety and overload) and Phase 1 (HTTP/1.1 correctness and caching) are
-complete, with document-root serving next.
+safety and overload), Phase 1 (HTTP/1.1 correctness and caching), and Phase 2
+(secure document-root serving) are complete, with TLS termination next.
 
 Still out of scope: HTTP/2, CGI, reverse proxy, dynamic content, and directory
 listing. See `plans/` for the specifications behind each phase.

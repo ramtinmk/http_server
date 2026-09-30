@@ -122,6 +122,15 @@ static void print_server_config(const ServerConfig *cfg)
     printf("  LOG_FILE              : %s\n",
            cfg->log_file[0] ? cfg->log_file : "(stderr)");
     printf("  ACCESS_LOG            : %s\n",  cfg->access_log ? "on" : "off");
+    printf("  DOCUMENT_ROOT         : %s\n",  cfg->document_root);
+    printf("  INDEX_FILES           : %s\n",  cfg->index_files);
+    printf("  MIME_TYPES            : %s\n",
+           cfg->mime_types_file[0] ? cfg->mime_types_file : "(builtin)");
+    printf("  HIDDEN_FILES          : %s\n",
+           cfg->hidden_files_allowed ? "allowed" : "denied");
+    printf("  SYMLINKS              : %s\n",
+           cfg->symlinks_allowed ? "allowed" : "denied");
+    printf("  CACHE_BUDGET_BYTES    : %ld\n", cfg->cache_budget_bytes);
     printf("  CONFIG_FILE           : %s\n",
            cfg->config_path[0] ? cfg->config_path : "(none)");
     printf("  MALLOC_ARENA_MAX (cap) : %s\n",
@@ -520,6 +529,7 @@ int main(int argc, char **argv)
     /* Optional structured metrics snapshots for the benchmark harness. */
     const char *metrics_path = getenv("HTTP_SERVER_METRICS_FILE");
     if (metrics_path && *metrics_path) {
+        metrics_set_cache_sampler(http_server_cache_stats);
         metrics_reporter_start(metrics_path, 250);
     }
 
@@ -575,8 +585,9 @@ int main(int argc, char **argv)
         return EXIT_FAILURE;
     }
 
-    /* Cache static responses before accepting any clients. */
-    if (initialize_static_responses() != 0) {
+    /* Cache static responses and configure the document root before accepting
+     * any clients. */
+    if (initialize_static_responses(&cfg) != 0) {
         log_shutdown();
         return EXIT_FAILURE;
     }
@@ -607,6 +618,7 @@ int main(int argc, char **argv)
 
     close(server_socket);
     metrics_reporter_stop();
+    shutdown_static_responses();
     log_shutdown();
 
     return run_status == 0 ? EXIT_SUCCESS : EXIT_FAILURE;

@@ -1,7 +1,9 @@
 #define _GNU_SOURCE
 
 #include "http_server.h"
+#include "file_cache.h"
 #include "metrics.h"
+#include "path_resolver.h"
 
 #include <signal.h>
 #include <sys/stat.h>
@@ -296,14 +298,6 @@ typedef struct {
 /* --- Cached static asset (identity and gzip variants) -------------------- */
 
 typedef struct {
-    unsigned char *body;
-    size_t         body_len;
-    time_t         mtime;
-    char           etag[48];
-    char           last_modified[40];
-} Representation;
-
-typedef struct {
     Representation plain;
     Representation gzip;
 } StaticAsset;
@@ -311,6 +305,9 @@ typedef struct {
 static StaticAsset home_asset;
 static StaticAsset hello_asset;
 static int static_responses_initialized;
+
+/* Phase 2: bounded cache for document-root representations. */
+static FileCache *g_cache;
 
 static void repr_free(Representation *rep)
 {
@@ -365,21 +362,24 @@ static int read_asset(const char *path, unsigned char **body, size_t *body_len,
 static int gzip_asset(const unsigned char *input, size_t input_len,
                       unsigned char **output, size_t *output_len)
 {
-    uLong bound = compressBound((uLong)input_len);
-    unsigned char *data = malloc(bound ? (size_t)bound : 1);
-    if (!data) {
-        errno = ENOMEM;
-        return -1;
-    }
-
     z_stream stream;
     memset(&stream, 0, sizeof(stream));
     if (deflateInit2(&stream, Z_DEFAULT_COMPRESSION, Z_DEFLATED,
                      15 + 16, 8, Z_DEFAULT_STRATEGY) != Z_OK) {
-        free(data);
         errno = EIO;
         return -1;
     }
+
+    /* deflateBound(), not compressBound(): the latter sizes zlib framing and
+     * under-estimates the gzip wrapper, which overflows for very small inputs. */
+    uLong bound = deflateBound(&stream, (uLong)input_len);
+    unsigned char *data = malloc(bound ? (size_t)bound : 1);
+    if (!data) {
+        deflateEnd(&stream);
+        errno = ENOMEM;
+        return -1;
+    }
+
     stream.next_in = (Bytef *)input;
     stream.avail_in = (uInt)input_len;
     stream.next_out = data;
@@ -399,14 +399,22 @@ static int gzip_asset(const unsigned char *input, size_t input_len,
 
 /* Build the strong validator and Last-Modified string for one representation.
  * The GZIP variant gets a distinct ETag because ETag identifies the selected
- * representation, not the underlying resource. */
-static void repr_set_validators(Representation *rep, time_t mtime,
-                                int gzip)
+ * representation, not the underlying resource. The inode is folded in so a
+ * same-second, same-size replacement still changes the validator. */
+static void repr_set_validators_inode(Representation *rep, time_t mtime,
+                                      ino_t inode, int gzip)
 {
     rep->mtime = mtime;
+    rep->inode = inode;
     format_http_date(mtime, rep->last_modified, sizeof(rep->last_modified));
-    snprintf(rep->etag, sizeof(rep->etag), "\"%llx-%zx%s\"",
-             (unsigned long long)mtime, rep->body_len, gzip ? "-gzip" : "");
+    snprintf(rep->etag, sizeof(rep->etag), "\"%llx-%llx-%zx%s\"",
+             (unsigned long long)mtime, (unsigned long long)inode, rep->body_len,
+             gzip ? "-gzip" : "");
+}
+
+static void repr_set_validators(Representation *rep, time_t mtime, int gzip)
+{
+    repr_set_validators_inode(rep, mtime, 0, gzip);
 }
 
 static int load_static_asset(const char *path, StaticAsset *asset)
@@ -425,11 +433,11 @@ static int load_static_asset(const char *path, StaticAsset *asset)
     return 0;
 }
 
-int initialize_static_responses(void)
+int initialize_static_responses(const ServerConfig *cfg)
 {
     if (static_responses_initialized) {
         return 0;
-}
+    }
     if (load_static_asset("home.html", &home_asset) != 0) {
         fprintf(stderr, "Failed to cache home.html: %s\n", strerror(errno));
         return -1;
@@ -440,8 +448,53 @@ int initialize_static_responses(void)
         repr_free(&home_asset.gzip);
         return -1;
     }
+
+    if (path_resolver_init(cfg->document_root, cfg->index_files,
+                           cfg->mime_types_file, cfg->hidden_files_allowed,
+                           cfg->symlinks_allowed) != 0) {
+        repr_free(&home_asset.plain);
+        repr_free(&home_asset.gzip);
+        repr_free(&hello_asset.plain);
+        repr_free(&hello_asset.gzip);
+        return -1;
+    }
+
+    size_t budget = (size_t)cfg->cache_budget_bytes;
+    g_cache = file_cache_create(budget, CACHE_MAX_ENTRIES);
+    if (!g_cache && budget > 0) {
+        fprintf(stderr, "Failed to allocate the representation cache\n");
+        path_resolver_shutdown();
+        repr_free(&home_asset.plain);
+        repr_free(&home_asset.gzip);
+        repr_free(&hello_asset.plain);
+        repr_free(&hello_asset.gzip);
+        return -1;
+    }
+
     static_responses_initialized = 1;
     return 0;
+}
+
+void shutdown_static_responses(void)
+{
+    if (!static_responses_initialized)
+        return;
+    file_cache_destroy(g_cache);
+    g_cache = NULL;
+    path_resolver_shutdown();
+    repr_free(&home_asset.plain);
+    repr_free(&home_asset.gzip);
+    repr_free(&hello_asset.plain);
+    repr_free(&hello_asset.gzip);
+    static_responses_initialized = 0;
+}
+
+void http_server_cache_stats(long *bytes, long *entries)
+{
+    if (bytes)
+        *bytes = g_cache ? (long)file_cache_bytes(g_cache) : 0;
+    if (entries)
+        *entries = g_cache ? (long)file_cache_entry_count(g_cache) : 0;
 }
 
 int create_server_socket(const ServerConfig *cfg, int reuseport)
@@ -511,6 +564,7 @@ static const char *reason_phrase(int status)
     case 206: return "Partial Content";
     case 304: return "Not Modified";
     case 400: return "Bad Request";
+    case 403: return "Forbidden";
     case 404: return "Not Found";
     case 405: return "Method Not Allowed";
     case 406: return "Not Acceptable";
@@ -584,6 +638,8 @@ static void format_simple(PendingResponse *pr, int status, int keep_alive,
         pr->header = NULL;
         pr->body = NULL;
         pr->body_len = 0;
+        pr->body_fd = -1;
+        pr->cache_entry = NULL;
         pr->is_head = 0;
         pr->force_close = 1;
         pr->status = 500;
@@ -594,6 +650,8 @@ static void format_simple(PendingResponse *pr, int status, int keep_alive,
     pr->header_len = (size_t)n;
     pr->body = NULL;
     pr->body_len = 0;
+    pr->body_fd = -1;
+    pr->cache_entry = NULL;
     pr->is_head = 0;
     pr->force_close = force_close;
     pr->status = status;
@@ -608,25 +666,27 @@ static void emit_status(PendingResponse *pr, int status, int keep_alive,
 }
 
 /*
- * Format a cached-representation response (200 or 206) whose body is a slice
- * of a startup-cached buffer. `is_partial` adds a Content-Range header. `body`
- * may be NULL for a HEAD with no body, but body_len always carries the
- * Content-Length the client should expect.
+ * Format a representation response (200 or 206) whose body starts `start`
+ * bytes into `rep`. `body` is the memory slice for a memory-backed
+ * representation, or NULL when `rep` is file-backed: in that case the
+ * descriptor is transferred to the response and the event loop streams it with
+ * sendfile(). `is_partial` adds a Content-Range header. body_len always carries
+ * the Content-Length a client should expect, even for HEAD.
  */
 static void format_asset(PendingResponse *pr, int status, int keep_alive,
                          int force_close, const Representation *rep,
-                         const unsigned char *body, size_t body_len,
-                         size_t full_len, size_t range_start, size_t range_end,
-                         int is_partial, int is_head, int gzip)
+                         const char *content_type,
+                         const unsigned char *body, size_t start,
+                         size_t body_len, int is_partial, int is_head, int gzip)
 {
     int ka = keep_alive && !force_close;
     const char *conn = ka ? "keep-alive" : "close";
-    char range_hdr[64];
+    char range_hdr[80];
     range_hdr[0] = '\0';
-    if (is_partial) {
+    if (is_partial && body_len > 0) {
         snprintf(range_hdr, sizeof(range_hdr),
                  "Content-Range: bytes %zu-%zu/%zu\r\n",
-                 range_start, range_end, full_len);
+                 start, start + body_len - 1, rep->body_len);
     }
 
     int n = snprintf(pr->header_buf, sizeof(pr->header_buf),
@@ -634,7 +694,7 @@ static void format_asset(PendingResponse *pr, int status, int keep_alive,
                      "Date: %s\r\n"
                      "Server: " SERVER_TOKEN "\r\n"
                      "Connection: %s\r\n"
-                     "Content-Type: " DEFAULT_CONTENT_TYPE "\r\n"
+                     "Content-Type: %s\r\n"
                      "%s"
                      "Content-Length: %zu\r\n"
                      "Accept-Ranges: bytes\r\n"
@@ -644,6 +704,7 @@ static void format_asset(PendingResponse *pr, int status, int keep_alive,
                      "Vary: Accept-Encoding\r\n"
                      "\r\n",
                      status, reason_phrase(status), http_date_now(), conn,
+                     content_type,
                      gzip ? "Content-Encoding: gzip\r\n" : "",
                      body_len, range_hdr, rep->etag, rep->last_modified);
 
@@ -656,6 +717,11 @@ static void format_asset(PendingResponse *pr, int status, int keep_alive,
     pr->header_len = (size_t)n;
     pr->body = body;
     pr->body_len = body_len;
+    pr->body_fd = -1;
+    if (!body && rep->fd >= 0) {
+        pr->body_fd = rep->fd;
+        pr->body_file_off = rep->file_off + (off_t)start;
+    }
     pr->is_head = is_head;
     pr->force_close = force_close;
     pr->status = status;
@@ -1138,51 +1204,74 @@ static int bytes_contain(const unsigned char *hay, size_t hay_len,
     return 0;
 }
 
+/* Copy `n` bytes at `off` from a representation into `dst`, whether the
+ * representation is memory-backed or file-backed. Returns 0 on success. */
+static int rep_copy(const Representation *rep, size_t off,
+                    unsigned char *dst, size_t n)
+{
+    if (rep->body) {
+        memcpy(dst, rep->body + off, n);
+        return 0;
+    }
+    size_t got = 0;
+    while (got < n) {
+        ssize_t r = pread(rep->fd, dst + got, n - got,
+                          rep->file_off + (off_t)(off + got));
+        if (r < 0 && errno == EINTR)
+            continue;
+        if (r <= 0)
+            return -1;
+        got += (size_t)r;
+    }
+    return 0;
+}
+
 /* Build a `multipart/byteranges` response body into a heap buffer the response
  * owns. Falls back to the full 200 body when the assembled size would exceed
- * MAX_MULTIPART_BYTES or allocation fails. */
+ * MAX_MULTIPART_BYTES or allocation fails. Ranges are always identity. */
 static void format_multipart(PendingResponse *pr, int keep_alive,
                              int force_close, const Representation *rep,
-                             const ByteRange *ranges, int nranges,
-                             int is_head, int gzip)
+                             const char *content_type, const ByteRange *ranges,
+                             int nranges, int is_head)
 {
     /* Pick a boundary that does not occur in the representation, as RFC 9110
-     * requires; give up after a few attempts and serve the full body. */
+     * requires; give up after a few attempts and serve the full body. For a
+     * file-backed representation we cannot scan cheaply, so the high-entropy
+     * boundary is used as-is. */
     char boundary[MULTIPART_BOUNDARY_MAX];
     size_t blen = 0;
     for (int attempt = 0; attempt < 8; attempt++) {
         make_multipart_boundary(boundary, sizeof(boundary));
         blen = strlen(boundary);
-        if (!bytes_contain(rep->body, rep->body_len, boundary, blen)) {
+        if (!rep->body || !bytes_contain(rep->body, rep->body_len, boundary, blen))
             break;
-        }
         blen = 0;
     }
     if (blen == 0) {
-        format_asset(pr, 200, keep_alive, force_close, rep, rep->body,
-                     rep->body_len, rep->body_len, 0, 0, 0, is_head, gzip);
+        format_asset(pr, 200, keep_alive, force_close, rep, content_type,
+                     rep->body, 0, rep->body_len, 0, is_head, 0);
         return;
     }
-    size_t part_hdr = 2 + blen + 2
-                    + sizeof("Content-Type: " DEFAULT_CONTENT_TYPE "\r\n") - 1
-                    + 48 + 2;
+    /* Worst case per part: boundary, content type, a 27-digit range header,
+     * CRLFCRLF, and the part bytes plus CRLF. */
+    size_t part_hdr = 2 + blen + 2 + strlen(content_type) + 64 + 64;
 
     size_t bound = 0;
     for (int i = 0; i < nranges; i++) {
         bound += part_hdr + (ranges[i].end - ranges[i].start) + 1 + 2;
     }
-    bound += 2 + blen + 2 + 2; /* closing --boundary-- CRLF */
+    bound += 2 + blen + 4; /* closing --boundary-- CRLF */
 
-    if (bound > MAX_MULTIPART_BYTES) {
-        format_asset(pr, 200, keep_alive, force_close, rep, rep->body,
-                     rep->body_len, rep->body_len, 0, 0, 0, is_head, gzip);
+    if (bound > MAX_MULTIPART_BYTES || rep->body_len == 0) {
+        format_asset(pr, 200, keep_alive, force_close, rep, content_type,
+                     rep->body, 0, rep->body_len, 0, is_head, 0);
         return;
     }
 
     unsigned char *body = malloc(bound);
     if (!body) {
-        format_asset(pr, 200, keep_alive, force_close, rep, rep->body,
-                     rep->body_len, rep->body_len, 0, 0, 0, is_head, gzip);
+        format_asset(pr, 200, keep_alive, force_close, rep, content_type,
+                     rep->body, 0, rep->body_len, 0, is_head, 0);
         return;
     }
 
@@ -1190,31 +1279,24 @@ static void format_multipart(PendingResponse *pr, int keep_alive,
     for (int i = 0; i < nranges; i++) {
         int n = snprintf((char *)body + off, bound - off,
                          "--%s\r\n"
-                         "Content-Type: " DEFAULT_CONTENT_TYPE "\r\n"
+                         "Content-Type: %s\r\n"
                          "Content-Range: bytes %zu-%zu/%zu\r\n"
                          "\r\n",
-                         boundary, ranges[i].start, ranges[i].end,
+                         boundary, content_type, ranges[i].start, ranges[i].end,
                          rep->body_len);
-        if (n < 0 || (size_t)n >= bound - off) {
-            free(body);
-            format_asset(pr, 200, keep_alive, force_close, rep, rep->body,
-                         rep->body_len, rep->body_len, 0, 0, 0, is_head, gzip);
-            return;
-        }
+        if (n < 0 || (size_t)n >= bound - off)
+            goto fail;
         off += (size_t)n;
         size_t count = ranges[i].end - ranges[i].start + 1;
-        memcpy(body + off, rep->body + ranges[i].start, count);
+        if (rep_copy(rep, ranges[i].start, body + off, count) != 0)
+            goto fail;
         off += count;
         body[off++] = '\r';
         body[off++] = '\n';
     }
     int tail = snprintf((char *)body + off, bound - off, "--%s--\r\n", boundary);
-    if (tail < 0 || (size_t)tail >= bound - off) {
-        free(body);
-        format_asset(pr, 200, keep_alive, force_close, rep, rep->body,
-                     rep->body_len, rep->body_len, 0, 0, 0, is_head, gzip);
-        return;
-    }
+    if (tail < 0 || (size_t)tail >= bound - off)
+        goto fail;
     off += (size_t)tail;
 
     int ka = keep_alive && !force_close;
@@ -1227,13 +1309,11 @@ static void format_multipart(PendingResponse *pr, int keep_alive,
                       "Content-Type: multipart/byteranges; boundary=%s\r\n"
                       "Content-Length: %zu\r\n"
                       "Accept-Ranges: bytes\r\n"
-                      "%s"
                       "ETag: %s\r\n"
                       "Last-Modified: %s\r\n"
                       "Vary: Accept-Encoding\r\n"
                       "\r\n",
                       http_date_now(), conn, boundary, off,
-                      gzip ? "Content-Encoding: gzip\r\n" : "",
                       rep->etag, rep->last_modified);
     if (hn < 0 || (size_t)hn >= sizeof(pr->header_buf)) {
         free(body);
@@ -1245,10 +1325,17 @@ static void format_multipart(PendingResponse *pr, int keep_alive,
     pr->header_len = (size_t)hn;
     pr->body = body;
     pr->body_len = off;
+    pr->body_fd = -1;
     pr->owned_body = body;
     pr->is_head = is_head;
     pr->force_close = force_close;
     pr->status = 206;
+    return;
+
+fail:
+    free(body);
+    format_asset(pr, 200, keep_alive, force_close, rep, content_type,
+                 rep->body, 0, rep->body_len, 0, is_head, 0);
 }
 
 /* --- Method classification ----------------------------------------------- */
@@ -1279,7 +1366,8 @@ static int method_class(const char *method)
 /* --- Response selection -------------------------------------------------- */
 
 static void select_asset_response(const HTTPRequest *req, StaticAsset *asset,
-                                  int force_close, PendingResponse *pr)
+                                  const char *content_type, int force_close,
+                                  PendingResponse *pr)
 {
     int gzip_ok = 0, identity_ok = 1;
     parse_accept_encoding(req->has_accept_encoding ? req->accept_encoding : NULL,
@@ -1335,20 +1423,215 @@ static void select_asset_response(const HTTPRequest *req, StaticAsset *asset,
         size_t end = ranges[0].end;
         size_t count = end - start + 1;
         format_asset(pr, 206, req->keep_alive, force_close, range_rep,
-                     range_rep->body + start, count, range_rep->body_len,
-                     start, end, 1, req->is_head, 0);
+                     content_type, range_rep->body + start, start, count, 1,
+                     req->is_head, 0);
         return;
     }
 
     if (have_ranges && nranges >= 2) {
-        format_multipart(pr, req->keep_alive, force_close, range_rep, ranges,
-                         nranges, req->is_head, 0);
+        format_multipart(pr, req->keep_alive, force_close, range_rep,
+                         content_type, ranges, nranges, req->is_head);
         return;
     }
 
-    format_asset(pr, 200, req->keep_alive, force_close, rep,
-                 rep->body, rep->body_len, rep->body_len,
-                 0, 0, 0, req->is_head, use_gzip);
+    format_asset(pr, 200, req->keep_alive, force_close, rep, content_type,
+                 rep->body, 0, rep->body_len, 0, req->is_head, use_gzip);
+}
+
+/* --- Phase 2: document-root serving -------------------------------------- */
+
+/* Read exactly `size` bytes from `fd` starting at offset 0. */
+static int read_fd_all(int fd, off_t size, unsigned char **body, size_t *body_len)
+{
+    size_t length = (size_t)size;
+    unsigned char *data = malloc(length ? length : 1);
+    if (!data) {
+        errno = ENOMEM;
+        return -1;
+    }
+    size_t off = 0;
+    while (off < length) {
+        ssize_t n = pread(fd, data + off, length - off, (off_t)off);
+        if (n < 0 && errno == EINTR)
+            continue;
+        if (n <= 0) {
+            free(data);
+            errno = EIO;
+            return -1;
+        }
+        off += (size_t)n;
+    }
+    *body = data;
+    *body_len = length;
+    return 0;
+}
+
+/* Serve a file-backed representation (identity only) with the Phase 1
+ * conditional and range semantics, streaming the body with sendfile(). On
+ * return `rep->fd` is -1: the descriptor is either owned by the response or
+ * was closed here. */
+static void select_stream_response(const HTTPRequest *req, Representation *rep,
+                                   const char *content_type, int force_close,
+                                   PendingResponse *pr)
+{
+    int gzip_ok = 0, identity_ok = 1;
+    parse_accept_encoding(req->has_accept_encoding ? req->accept_encoding : NULL,
+                          &gzip_ok, &identity_ok);
+    (void)gzip_ok;
+    if (!identity_ok) {
+        emit_status(pr, 406, req->keep_alive, 0, NULL,
+                    "No acceptable content encoding is available");
+        goto close_fd;
+    }
+
+    if (request_not_modified(req, rep)) {
+        char extra[160];
+        snprintf(extra, sizeof(extra),
+                 "ETag: %s\r\nLast-Modified: %s\r\nVary: Accept-Encoding\r\n",
+                 rep->etag, rep->last_modified);
+        format_simple(pr, 304, req->keep_alive, 0, extra, NULL, 0);
+        goto close_fd;
+    }
+
+    ByteRange ranges[MAX_MULTIPART_RANGES];
+    int nranges = 0, unsatisfiable = 0, have_ranges = 0;
+    if (req->has_range &&
+        (!req->has_if_range || if_range_matches(req, rep))) {
+        have_ranges = parse_byte_ranges(req->range, rep->body_len, ranges,
+                                        MAX_MULTIPART_RANGES, &nranges,
+                                        &unsatisfiable);
+    }
+
+    if (have_ranges && nranges == 0 && unsatisfiable) {
+        char extra[64];
+        snprintf(extra, sizeof(extra), "Content-Range: bytes */%zu\r\n",
+                 rep->body_len);
+        emit_status(pr, 416, req->keep_alive, 0, extra,
+                    "The requested range cannot be satisfied");
+        goto close_fd;
+    }
+
+    if (have_ranges && nranges == 1) {
+        size_t start = ranges[0].start;
+        size_t count = ranges[0].end - ranges[0].start + 1;
+        format_asset(pr, 206, req->keep_alive, force_close, rep, content_type,
+                     NULL, start, count, 1, req->is_head, 0);
+        rep->fd = -1; /* ownership moved into the response */
+        return;
+    }
+
+    if (have_ranges && nranges >= 2) {
+        format_multipart(pr, req->keep_alive, force_close, rep, content_type,
+                         ranges, nranges, req->is_head);
+        goto close_fd;
+    }
+
+    format_asset(pr, 200, req->keep_alive, force_close, rep, content_type,
+                 NULL, 0, rep->body_len, 0, req->is_head, 0);
+    rep->fd = -1;
+    return;
+
+close_fd:
+    if (rep->fd >= 0) {
+        close(rep->fd);
+        rep->fd = -1;
+    }
+}
+
+static void serve_resolved(const HTTPRequest *req, ResolvedFile *rf,
+                           int force_close, PendingResponse *pr)
+{
+    const char *ctype = mime_type_for_path(rf->path);
+
+    if (g_cache && rf->size >= 0 && (size_t)rf->size <= CACHE_MAX_FILE_BYTES) {
+        struct CacheEntry *entry = file_cache_acquire(g_cache, rf->path);
+        if (entry) {
+            StaticAsset asset;
+            asset.plain = *file_cache_plain(entry);
+            asset.gzip = *file_cache_gzip(entry);
+            path_resolver_close(rf);
+            select_asset_response(req, &asset, ctype, force_close, pr);
+            pr->cache_entry = entry;
+            return;
+        }
+
+        /* Miss: read, precompress, and admit. */
+        unsigned char *data = NULL;
+        size_t len = 0;
+        if (read_fd_all(rf->fd, rf->size, &data, &len) == 0) {
+            Representation plain, gz;
+            memset(&plain, 0, sizeof(plain));
+            memset(&gz, 0, sizeof(gz));
+            plain.body = data;
+            plain.body_len = len;
+            plain.fd = -1;
+            if (gzip_asset(data, len, &gz.body, &gz.body_len) == 0) {
+                gz.fd = -1;
+                repr_set_validators_inode(&plain, rf->mtime, rf->inode, 0);
+                repr_set_validators_inode(&gz, rf->mtime, rf->inode, 1);
+                entry = file_cache_insert(g_cache, rf->path, &plain, &gz);
+                if (entry) {
+                    StaticAsset asset;
+                    asset.plain = *file_cache_plain(entry);
+                    asset.gzip = *file_cache_gzip(entry);
+                    path_resolver_close(rf);
+                    select_asset_response(req, &asset, ctype, force_close, pr);
+                    pr->cache_entry = entry;
+                    return;
+                }
+                free(plain.body);
+                free(gz.body);
+            } else {
+                free(plain.body);
+            }
+        }
+        /* Read/precompress/admit failed: fall back to streaming. */
+    }
+
+    Representation rep;
+    memset(&rep, 0, sizeof(rep));
+    rep.body_len = (size_t)rf->size;
+    rep.fd = rf->fd;
+    rep.file_off = 0;
+    rep.mtime = rf->mtime;
+    rep.inode = rf->inode;
+    repr_set_validators_inode(&rep, rf->mtime, rf->inode, 0);
+    rf->fd = -1; /* ownership moved into rep */
+    select_stream_response(req, &rep, ctype, force_close, pr);
+}
+
+static void serve_document_root(const HTTPRequest *req, int force_close,
+                                PendingResponse *pr)
+{
+    ResolvedFile rf;
+    PathStatus st = path_resolver_open(req->path, &rf);
+    switch (st) {
+    case PATH_OK:
+        serve_resolved(req, &rf, force_close, pr);
+        return;
+    case PATH_ERR_MALFORMED:
+        emit_status(pr, 400, 0, 1, NULL, "Malformed request path");
+        return;
+    case PATH_ERR_TOO_LONG:
+        emit_status(pr, 414, 0, 1, NULL, "Request path too long");
+        return;
+    case PATH_ERR_FORBIDDEN:
+        emit_status(pr, 403, req->keep_alive, force_close, NULL,
+                    "Access to the requested resource is forbidden");
+        return;
+    case PATH_ERR_NOT_FOUND:
+    case PATH_ERR_UNAVAILABLE:
+    default:
+        /* Preserve the legacy root alias when the document root has no index. */
+        if (strcmp(req->path, "/") == 0) {
+            select_asset_response(req, &home_asset, DEFAULT_CONTENT_TYPE,
+                                  force_close, pr);
+            return;
+        }
+        emit_status(pr, 404, req->keep_alive, force_close, NULL,
+                    "The requested resource was not found");
+        return;
+    }
 }
 
 /*
@@ -1367,6 +1650,7 @@ int el_prepare_response(RingBuffer *rb, int force_close, int *keep_alive_out, Pe
 }
 
     memset(pr, 0, sizeof(*pr));
+    pr->body_fd = -1; /* 0 is a valid descriptor; the sentinel is -1 */
     clock_gettime(CLOCK_MONOTONIC, &pr->started);
 
     size_t snap_tail = rb->tail;
@@ -1525,19 +1809,19 @@ int el_prepare_response(RingBuffer *rb, int force_close, int *keep_alive_out, Pe
 
     req.is_head = (mclass == METHOD_HEAD);
 
-    StaticAsset *asset = NULL;
-    if (strcmp(req.path, "/") == 0 || strcmp(req.path, "/home") == 0) {
-        asset = &home_asset;
-    } else if (strcmp(req.path, "/hello") == 0) {
-        asset = &hello_asset;
-}
-
-    if (!asset) {
-        emit_status(pr, 404, req.keep_alive, force_close, NULL,
-                    "The requested resource was not found");
+    /* Legacy fixed-path aliases keep the Phase 1 cached behavior; everything
+     * else is resolved against the document root. */
+    if (strcmp(req.path, "/home") == 0) {
+        select_asset_response(&req, &home_asset, DEFAULT_CONTENT_TYPE,
+                              force_close, pr);
+        return 0;
+    }
+    if (strcmp(req.path, "/hello") == 0) {
+        select_asset_response(&req, &hello_asset, DEFAULT_CONTENT_TYPE,
+                              force_close, pr);
         return 0;
     }
 
-    select_asset_response(&req, asset, force_close, pr);
+    serve_document_root(&req, force_close, pr);
     return 0;
 }

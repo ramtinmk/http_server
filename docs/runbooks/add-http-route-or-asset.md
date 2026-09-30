@@ -1,44 +1,50 @@
-# Runbook: add or change an HTTP route / static asset
+# Runbook: add an HTTP asset / route
 
-Routes are hard-coded in `el_prepare_response()` and served from **startup-cached
-assets**. There is no directory listing and no dynamic content.
+Since Phase 2, most "routes" are just files under the document root. There is
+no directory listing and no dynamic content.
 
-## Add a new static asset
+## Add a static file (no code change)
 
-1. Drop the file at the repository root (assets are opened by relative path),
-   e.g. `about.html`.
-2. In `src/http_server.c`:
-   - Add a `static StaticAsset about_asset;` alongside `home_asset` /
-     `hello_asset`.
-   - In `initialize_static_responses()`, call
-     `load_static_asset("about.html", &about_asset)` and, on failure, free what
-     was already loaded and return `-1` (see the existing `hello.html` block).
-   - In the route selection in `el_prepare_response()` add
-     `strcmp(req.path, "/about") == 0` → `req.accepts_gzip ? &about_asset.gzip
-     : &about_asset.plain`.
-3. Regenerate and rebuild (`cmake -S . -B . && make`), then add an E2E case in
-   `tests/server_test.c` and wire it into `run_server_tests()` with
-   `RUN_TEST(...)`.
+1. Drop the file anywhere beneath `HTTP_SERVER_DOCUMENT_ROOT` (default `.`, the
+   repository root).
+2. Request it by its path, e.g. `GET /assets/app.css`. `Content-Type` comes
+   from the builtin MIME table plus the optional `HTTP_SERVER_MIME_TYPES` file;
+   add an extension there if it maps incorrectly.
+3. Hidden (leading-dot) paths are `403` unless `HTTP_SERVER_HIDDEN_FILES=1`;
+   directories serve an `index_files` entry, else `404`.
 
-`load_static_asset()` reads, gzip-precompresses, and builds both keep-alive and
-close header blocks automatically. Do not hand-roll a response.
+Files up to `CACHE_MAX_FILE_BYTES` are read into the bounded representation
+cache on first request (plain + gzip). Larger files stream from the descriptor
+with `sendfile` and are served identity-only.
 
-## Change behavior of an existing route
+## Add a fixed alias or change method/status semantics
 
-Edit the selection block at `src/http_server.c:493`. Keep the response pointed at
-cached memory — `PendingResponse` pointers must never be `free()`d by the event
-loop (see `docs/architecture.md` invariants).
+Edit `el_prepare_response()` in `src/http_server.c`. The `/home` and `/hello`
+aliases are examples: they select a `StaticAsset` and call
+`select_asset_response(req, asset, content_type, force_close, pr)`. Keep the
+response pointed at cached memory (or use `owned_body`/`body_fd` for owned
+resources); the event loop must never `free()` a borrowed pointer (see
+`docs/architecture.md` invariants).
 
-## Add a status code or header
+## Change a status code or header
 
-- Parser-level errors use the `ERROR_TEMPLATE` macro at
-  `src/http_server.c:24`; add a literal next to the existing 400/404/501/414/431
-  constants and return it via `fill_static_response()`.
-- `404` intentionally preserves keep-alive (`force_close = 0`); protocol errors
-  force close (`force_close = 1`). Match the existing convention.
+- Error statuses are produced by `emit_status()` / `format_simple()` and the
+  `reason_phrase()` table in `src/http_server.c`; add a phrase next to the
+  existing ones and return the status from the parser/selection path.
+- `404`/`403` preserve keep-alive (`force_close = 0`); protocol errors and
+  desynchronizing requests force close (`force_close = 1`). Match the
+  existing convention and set `body_fd = -1` on every hand-built response.
+
+## Security-sensitive paths
+
+Never `open()` a request-derived path directly. All document-root resolution
+goes through `path_resolver_open()` so decoding, normalization, and the
+hidden/symlink policy are applied in one place.
 
 ## Verify
 
 Extend `tests/server_test.c` with an E2E case that sends a real request and
-asserts the status line / headers / body framing. Per `AGENTS.md`, prefer E2E;
-do not add a unit test that just re-asserts the route table.
+asserts the status line / headers / body framing (see
+`test_docroot_static_serving`). For traversal or policy changes, add a case to
+`scripts/phase2_static_test.py` and run `make phase2-static`. Per `AGENTS.md`,
+prefer E2E; do not add a unit test that just re-asserts a table.

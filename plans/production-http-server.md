@@ -132,7 +132,10 @@ Legend: `[x]` done, `[~]` partial, `[ ]` pending, `[!]` blocked.
   multipart ranges, negotiation, the conformance corpus, and the black-box
   `scaling-plan` connection/resource gates are done; `EMFILE`/`ENOMEM` fault
   injection remains with the Phase 4 fuzzing/sanitizer work.
-- [ ] Phase 2 `production-http-server/phase-2`: secure static file serving.
+- [x] Phase 2 `production-http-server/phase-2`: secure static file serving.
+  Document-root resolution (`openat2`/`O_NOFOLLOW`), MIME map, bounded
+  ref-counted cache, `sendfile` streaming, and the traversal corpus are done.
+  Evidence in `benchmarks/production_phase2_static.json`.
 - [ ] Phase 3 `production-http-server/phase-3`: TLS termination.
 - [ ] Phase 4 `production-http-server/phase-4`: sandboxing and robustness.
 - [ ] Phase 5 `production-http-server/phase-5`: observability and operations.
@@ -248,30 +251,30 @@ Legend: `[x]` done, `[~]` partial, `[ ]` pending, `[!]` blocked.
 
 **Work**
 
-- [ ] Config: document root, index file list, MIME map, hidden-file policy,
+- [x] Config: document root, index file list, MIME map, hidden-file policy,
   symlink policy, cache budget.
-- [ ] Path safety: decode percent-encoding exactly once; normalize `.`/`..`;
+- [x] Path safety: decode percent-encoding exactly once; normalize `.`/`..`;
   reject encoded traversal, `%00`, and backslashes; resolve with
   `openat2(RESOLVE_BENEATH)` or a dirfd walk with `O_NOFOLLOW`; never follow a
   symlink out of the root.
-- [ ] Reuse Phase 1 validators (`ETag` from inode/size/mtime, ranges,
+- [x] Reuse Phase 1 validators (`ETag` from inode/size/mtime, ranges,
   `Content-Type` from the MIME map, `Last-Modified`).
-- [ ] Efficient output: nonblocking partial writes for file-backed responses;
-  optional `sendfile` with retained offset; optional bounded mmap cache for hot
-  assets with an eviction policy and a memory budget.
-- [ ] Error semantics: `403` vs `404` policy, `405`, `414`, `431`, oversized
+- [x] Efficient output: nonblocking partial writes for file-backed responses;
+  `sendfile` with retained offset; bounded LRU representation cache with a byte
+  budget and ref-counted eviction.
+- [x] Error semantics: `403` vs `404` policy, `405`, `414`, `431`, oversized
   header handling; no directory listing by default.
-- [ ] Tests: traversal/symlink/null-byte corpus, large files, partial writes,
+- [x] Tests: traversal/symlink/null-byte corpus, large files, partial writes,
   slow readers, and cache eviction.
 
 **Exit criteria**
 
-- [ ] The traversal corpus cannot read outside the document root (proof in the
-  test artifact).
-- [ ] Doc-root serving throughput is within 10% of the cached fixed-path
-  baseline on the same host.
-- [ ] Cache bytes and open file descriptors stay within their configured
-  budgets under sustained mixed-file load.
+- [x] The traversal corpus cannot read outside the document root (proof in the
+  test artifact): `benchmarks/production_phase2_static.json` `traversal_cases`.
+- [x] Doc-root serving throughput is within 10% of the cached fixed-path
+  baseline on the same host (recorded ratio 0.97).
+- [x] Cache bytes and open file descriptors stay within their configured
+  budgets under sustained mixed-file load (cache 59735 <= 65536; FDs flat).
 
 ### production-http-server/phase-3: TLS termination
 

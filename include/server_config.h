@@ -58,6 +58,52 @@
 #define MAX_MULTIPART_BYTES 8192
 #endif
 
+/* --- Phase 2: static file serving --------------------------------------- */
+
+/*
+ * Directory served for request paths that are not one of the legacy fixed-path
+ * aliases. Every resolved path must stay beneath this directory. Relative paths
+ * are resolved against the process working directory, so the server must be
+ * launched from the repository root (or given an absolute root).
+ */
+#ifndef DOCUMENT_ROOT
+#define DOCUMENT_ROOT "."
+#endif
+
+/*
+ * Comma-separated index file names tried, in order, when a request resolves to
+ * a directory. No directory listing is ever produced; when none of the index
+ * files exists the directory is a 404.
+ */
+#ifndef INDEX_FILES
+#define INDEX_FILES "index.html,index.htm"
+#endif
+
+/*
+ * Maximum size of a file that is read into the bounded representation cache.
+ * Larger files are streamed straight from the file descriptor (identity
+ * encoding only), so a cache entry can never exceed this many bytes. Bounds
+ * both per-entry memory and the time a single cache fill can block.
+ */
+#ifndef CACHE_MAX_FILE_BYTES
+#define CACHE_MAX_FILE_BYTES (1024u * 1024u)
+#endif
+
+/*
+ * Hard upper bound on the number of entries in the representation cache,
+ * independent of the operator byte budget. Bounds the eviction scan and the
+ * per-entry metadata when many tiny files are requested.
+ */
+#ifndef CACHE_MAX_ENTRIES
+#define CACHE_MAX_ENTRIES 256
+#endif
+
+/* Default total byte budget for the representation cache (16 MiB). A runtime
+ * budget of 0 disables caching and streams every file from its descriptor. */
+#ifndef CACHE_BUDGET_BYTES_DEFAULT
+#define CACHE_BUDGET_BYTES_DEFAULT (16u * 1024u * 1024u)
+#endif
+
 /* --- Timeouts (seconds) ------------------------------------------------- */
 
 /* Time allowed for a new connection to deliver complete request headers.
@@ -153,6 +199,14 @@
 #define ENV_LOG_LEVEL               "HTTP_SERVER_LOG_LEVEL"
 #define ENV_LOG_FILE                "HTTP_SERVER_LOG_FILE"
 #define ENV_ACCESS_LOG              "HTTP_SERVER_ACCESS_LOG"
+
+/* Phase 2: secure static file serving. */
+#define ENV_DOCUMENT_ROOT           "HTTP_SERVER_DOCUMENT_ROOT"
+#define ENV_INDEX_FILES             "HTTP_SERVER_INDEX_FILES"
+#define ENV_MIME_TYPES              "HTTP_SERVER_MIME_TYPES"
+#define ENV_HIDDEN_FILES            "HTTP_SERVER_HIDDEN_FILES"
+#define ENV_SYMLINKS                "HTTP_SERVER_SYMLINKS"
+#define ENV_CACHE_BUDGET_BYTES      "HTTP_SERVER_CACHE_BUDGET_BYTES"
 
 /* --- Event loop --------------------------------------------------------- */
 

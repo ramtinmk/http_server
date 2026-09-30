@@ -63,6 +63,18 @@ static const CfgKey CFG_KEYS[] = {
       ENV_ACCESS_LOG },
     { "log_file",                CFG_STRING,   CFG_OFF(log_file),
       CFG_SIZE(log_file), 0, 0, ENV_LOG_FILE },
+    { "document_root",           CFG_STRING,   CFG_OFF(document_root),
+      CFG_SIZE(document_root), 0, 0, ENV_DOCUMENT_ROOT },
+    { "index_files",             CFG_STRING,   CFG_OFF(index_files),
+      CFG_SIZE(index_files), 0, 0, ENV_INDEX_FILES },
+    { "mime_types",              CFG_STRING,   CFG_OFF(mime_types_file),
+      CFG_SIZE(mime_types_file), 0, 0, ENV_MIME_TYPES },
+    { "hidden_files",            CFG_BOOL,     CFG_OFF(hidden_files_allowed),
+      0, 0, 1, ENV_HIDDEN_FILES },
+    { "symlinks",                CFG_BOOL,     CFG_OFF(symlinks_allowed),
+      0, 0, 1, ENV_SYMLINKS },
+    { "cache_budget_bytes",      CFG_LONG,     CFG_OFF(cache_budget_bytes),
+      0, 0, LONG_MAX, ENV_CACHE_BUDGET_BYTES },
 };
 
 #define CFG_KEY_COUNT (sizeof(CFG_KEYS) / sizeof(CFG_KEYS[0]))
@@ -82,6 +94,12 @@ void config_defaults(ServerConfig *cfg)
     cfg->log_level                = LOG_LEVEL_INFO;
     cfg->access_log               = 0;
     cfg->log_file[0]              = '\0';
+    snprintf(cfg->document_root, sizeof(cfg->document_root), "%s", DOCUMENT_ROOT);
+    snprintf(cfg->index_files, sizeof(cfg->index_files), "%s", INDEX_FILES);
+    cfg->mime_types_file[0]       = '\0';
+    cfg->hidden_files_allowed     = 0;
+    cfg->symlinks_allowed         = 0;
+    cfg->cache_budget_bytes       = (long)CACHE_BUDGET_BYTES_DEFAULT;
     cfg->config_path[0]           = '\0';
     cfg->help_requested           = 0;
 }

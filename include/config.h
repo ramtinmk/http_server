@@ -38,6 +38,14 @@ typedef struct ServerConfig {
     int      access_log;                 /* 0/1; access lines emitted when 1 */
     char     log_file[4096];             /* empty: log to stderr */
 
+    /* Phase 2: static file serving */
+    char     document_root[4096];        /* root directory for resolved paths */
+    char     index_files[1024];          /* comma-separated directory indexes */
+    char     mime_types_file[4096];      /* optional mime.types file */
+    int      hidden_files_allowed;       /* 0/1; serve dotfiles when 1 */
+    int      symlinks_allowed;           /* 0/1; follow in-root symlinks when 1 */
+    long     cache_budget_bytes;         /* representation-cache byte budget */
+
     /* Resolved input provenance (for the startup record); not operator-set. */
     char     config_path[4096];
     int      help_requested;

@@ -42,6 +42,13 @@ void metrics_reporter_start(const char *path, int interval_ms);
 /* Ask the reporter thread to write one final snapshot and exit. */
 void metrics_reporter_stop(void);
 
+/* Optional representation-cache sampler. When registered, the reporter calls
+ * it while rendering each snapshot to emit the current cache byte count and
+ * entry count. Set once at startup; it must be safe to call from the reporter
+ * thread. */
+typedef void (*MetricsCacheSampler)(long *bytes, long *entries);
+void metrics_set_cache_sampler(MetricsCacheSampler fn);
+
 /* Render the current counters as a single-line JSON object into `buf`.
  * Returns the number of bytes that would have been written (snprintf
  * semantics); the output is truncated if it does not fit.
