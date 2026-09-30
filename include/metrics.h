@@ -176,6 +176,21 @@ void metrics_buffer_returned(size_t bytes);
  * Negative samples (unsupported) are ignored. */
 void metrics_backlog_depth(long depth);
 
+/* --- Phase 3: TLS termination ------------------------------------------- */
+
+/* One TLS connection accepted on the TLS listener (before handshake). */
+void metrics_tls_connection(void);
+
+/* One TLS handshake completed successfully. */
+void metrics_tls_handshake(void);
+
+/* One completed handshake resumed an existing session (no full key exchange). */
+void metrics_tls_resumption(void);
+
+/* One handshake failed (bad protocol, no shared cipher, malformed record, or
+ * timeout). */
+void metrics_tls_handshake_failure(void);
+
 /* --- Phase 5: listener drops and accept errors -------------------------- */
 
 /* Cumulative accepted-connection counter dropped by the kernel because the

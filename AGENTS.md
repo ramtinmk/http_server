@@ -40,10 +40,10 @@ iteration. Keep this file a router (short, links out); put depth in `docs/`.
 
 ## Build
 
-- Run commands from the repository root. The project uses C11, POSIX threads, and zlib.
+- Run commands from the repository root. The project uses C11, POSIX threads, zlib, and (Phase 3) OpenSSL (`libssl-dev`); CMake requires `OpenSSL`.
 - Build with `make`; CMake writes executables directly to `bin/`, not `build/` (`bin/http_server` and `bin/run_tests`). Ignore legacy root-level binaries.
 - `CMakeLists.txt` uses `file(GLOB ...)` for `src/*.c` and `tests/*.c`; after adding or removing a C file, regenerate with `cmake -S . -B .` before building.
-- Targets include `make benchmark`, `make stress`, `make benchmark-matrix`, `make saturation`, `make phase0-lifecycle`, `make phase0-2x`, `make phase0-accesslog`, `make memory-soak`, `make startup-failfast`, `make lint`, and `make lint-fix`. `lint`/`lint-fix` exist only when clang-tidy is installed; `lint-fix` edits source files.
+- Targets include `make benchmark`, `make stress`, `make benchmark-matrix`, `make saturation`, `make phase0-lifecycle`, `make phase0-2x`, `make phase0-accesslog`, `make phase2-static`, `make phase3-tls`, `make memory-soak`, `make startup-failfast`, `make lint`, and `make lint-fix`. `lint`/`lint-fix` exist only when clang-tidy is installed; `lint-fix` edits source files.
 
 ## Tests
 
@@ -70,7 +70,7 @@ iteration. Keep this file a router (short, links out); put depth in `docs/`.
 
 ## Runtime
 
-- `./bin/http_server` must be launched from the repository root because static files (`home.html` and `hello.html`) are opened via relative paths. The default port is `8081`. Runtime limits come from one validated surface — a config file (`HTTP_SERVER_CONFIG`/`--config`, defaulting to the checked-in `http_server.conf` via the compile-time `DEFAULT_CONFIG_FILE`), environment variables, and CLI flags (`--help` lists them) — resolved defaults < file < env < CLI. Invalid keys/values are fatal and name the key. `SIGTERM`/`SIGINT` drains in-flight responses within `HTTP_SERVER_SHUTDOWN_DRAIN_TIMEOUT`; `SIGHUP` reopens the log file.
+- `./bin/http_server` must be launched from the repository root because static files (`home.html` and `hello.html`) are opened via relative paths. The default port is `8081`. Runtime limits come from one validated surface — a config file (`HTTP_SERVER_CONFIG`/`--config`, defaulting to the checked-in `http_server.conf` via the compile-time `DEFAULT_CONFIG_FILE`), environment variables, and CLI flags (`--help` lists them) — resolved defaults < file < env < CLI. Invalid keys/values are fatal and name the key. `SIGTERM`/`SIGINT` drains in-flight responses within `HTTP_SERVER_SHUTDOWN_DRAIN_TIMEOUT`; `SIGHUP` reopens the log file and, when TLS is enabled, reloads the certificate.
 - The server runs nonblocking `epoll` event loops, one per online CPU core by default; each loop binds a `SO_REUSEPORT` listener. `EL_THREAD_COUNT` is a **compile-time macro**, not an environment variable — passing `EL_THREAD_COUNT=4` on the command line has no effect. See `docs/env-vars.md`.
 - Startup preflights the host and refuses to start when the effective soft `RLIMIT_NOFILE` is below `MAX_ACTIVE_CONNECTIONS + REQUIRED_NOFILE_HEADROOM + REQUIRED_NOFILE_PER_LOOP × event-loop-count`. `HTTP_SERVER_CPU_SET` (taskset list, e.g. `0-3`) pins the server; invalid ranges are fatal.
 - Benchmark runs can use `HTTP_SERVER_METRICS_FILE=<path>` for server metrics; benchmark output is appended under `benchmarks/`. `python3 scripts/http_benchmark.py --check-env` verifies ulimit, `net.core.somaxconn`, core count, and (with `--require-governor`) the CPU governor; it exits non-zero naming the unmet requirement. `scripts/run_benchmark_pinned.sh` pins server/generator to disjoint CPU sets before running the matrix. See `docs/gotchas.md` for pitfalls (including the nonblocking, drop-on-full `HTTP_SERVER_ACCESS_LOG` path).
@@ -84,5 +84,6 @@ iteration. Keep this file a router (short, links out); put depth in `docs/`.
 
 - `src/main.c` owns socket setup, signal handling, startup preflight, accept/admission control, and dispatch selection. Directory notes: `src/AGENTS.md`.
 - `src/event_loop.c` owns the default nonblocking `epoll` connection state machine; `src/http_server.c` owns HTTP parsing, static responses, keep-alive, and gzip handling.
+- `src/tls.c` (with `include/tls.h`) owns the OpenSSL context, TLS 1.2+/ALPN policy, cert/key loading, and `SIGHUP` reload; `src/event_loop.c` drives the per-connection TLS state machine.
 - `src/ring_buffer.c` provides buffering; `src/metrics.c` and `src/memory_profiler.c` provide runtime instrumentation.
 - `include/server_config.h` is the single source of truth for every limit and its default.

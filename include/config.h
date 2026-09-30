@@ -46,6 +46,12 @@ typedef struct ServerConfig {
     int      symlinks_allowed;           /* 0/1; follow in-root symlinks when 1 */
     long     cache_budget_bytes;         /* representation-cache byte budget */
 
+    /* Phase 3: TLS termination */
+    int      tls_enabled;                /* 0/1; bind a TLS listener when 1 */
+    int      tls_port;                   /* TLS listener port */
+    char     tls_cert_file[4096];        /* PEM certificate chain path */
+    char     tls_key_file[4096];         /* PEM private key path */
+
     /* Resolved input provenance (for the startup record); not operator-set. */
     char     config_path[4096];
     int      help_requested;

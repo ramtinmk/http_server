@@ -35,9 +35,11 @@ Sharp edges that cost time. Each entry says what bites and how to avoid it.
   `O_NONBLOCK` pipe to a writer thread; when the pipe is full the record is
   dropped and counted (`dropped_logs` in the shutdown record) instead of
   stalling the event loop.
-- **`SIGHUP` reopens the log file, it does not reload config.** Reopening is
-  polled by the writer thread at `LOG_POLL_INTERVAL_MS` (200 ms). Config and
-  runtime limits are read once at startup.
+- **`SIGHUP` reopens the log file and reloads the TLS certificate; it does not
+  reload config.** Log reopening is polled by the writer thread at
+  `LOG_POLL_INTERVAL_MS` (200 ms); a cert reload is consumed by event-loop 0 on
+  its `EL_DEADLINE_SCAN_MS` tick. Config and other runtime limits are read once
+  at startup.
 - **Unknown config *file/CLI* keys are fatal; unknown environment variables are
   ignored.** Only the named `HTTP_SERVER_*` variables are read, so unrelated
   variables in the environment are harmless.
@@ -135,6 +137,37 @@ Sharp edges that cost time. Each entry says what bites and how to avoid it.
 - **Path decoding happens exactly once.** A double-encoded `%252e%252e` is
   treated as the literal filename `%2e%2e`, not as `..`; NUL (`%00`),
   backslashes, and other control bytes are `400` rather than being normalized.
+
+## TLS termination (Phase 3)
+
+- **TLS is off by default and needs the OpenSSL dev package to build.**
+  `find_package(OpenSSL REQUIRED)` makes configure fail without `libssl-dev`.
+  Enable at runtime with `HTTP_SERVER_TLS=1` plus `tls_cert_file`/`tls_key_file`;
+  the plaintext listener is unaffected and remains the fallback.
+- **`tls_port` must differ from `port`.** The two listeners are independent; a
+  shared port would fail one bind (single loop) or split traffic (multi-loop).
+- **A world-accessible private key is fatal.** The startup check refuses a key
+  with group/other write or other-read bits (`chmod 600`); a group-readable key
+  only warns. OpenSSL parse errors and a cert/key mismatch are also fatal and
+  name the path.
+- **The TLS listener must be nonblocking.** Both listeners are set nonblocking
+  in `loop_init`; a blocking TLS listener makes `accept4` stall the event loop
+  and the handshake never runs. If TLS connections hang while plaintext works,
+  check this first.
+- **`sendfile` is not available over TLS**, so file-backed bodies use a bounded
+  `pread`+`SSL_write` buffer (`TLS_FILE_BUF_SIZE` per in-flight streaming TLS
+  response). Cached and multipart bodies are written directly.
+- **ALPN server lists are length-prefixed wire format.** The select callback
+  passes `"\x08http/1.1"` (a length byte, then the name); passing a bare
+  `"http/1.1"` makes `SSL_select_next_proto` read `'h'` as the length and never
+  negotiate.
+- **A `WANT_WRITE` from `SSL_read` is retried on the next readable event**, not
+  by arming `EPOLLOUT`, to avoid a level-triggered busy loop. TLS 1.2
+  renegotiation is disabled, so this path is essentially unreachable in
+  practice.
+- **`SIGHUP` reload keeps connections.** The certificate is reloaded into the
+  live context; established sessions keep their original certificate and a
+  failed reload keeps the previous one.
 
 ## Tests
 

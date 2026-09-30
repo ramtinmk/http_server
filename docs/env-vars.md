@@ -45,6 +45,10 @@ out-of-range value is fatal and names the exact key (for example
 | `hidden_files` / `HTTP_SERVER_HIDDEN_FILES` | `0` | When `1`, serve dotfiles; when `0` a leading-dot segment is `403`. |
 | `symlinks` / `HTTP_SERVER_SYMLINKS` | `0` | When `1`, follow symlinks that stay beneath the root (requires `openat2`); when `0`, any symlink is refused. |
 | `cache_budget_bytes` / `HTTP_SERVER_CACHE_BUDGET_BYTES` | `CACHE_BUDGET_BYTES_DEFAULT` (16 MiB) | Total bytes the representation cache may hold; `0` disables caching and streams every file. |
+| `tls` / `HTTP_SERVER_TLS` | `0` | When `1`, bind a second listener on `tls_port` and serve the same document root over TLS (minimum TLS 1.2, TLS 1.3 preferred, ALPN `http/1.1`). |
+| `tls_port` / `HTTP_SERVER_TLS_PORT` | `TLS_PORT_DEFAULT` (8443) | TLS listener port (1..65535); must differ from `port`. |
+| `tls_cert_file` / `HTTP_SERVER_TLS_CERT` | unset | PEM certificate chain. Required when `tls=1`; load/parse failures and a world-accessible key are fatal. |
+| `tls_key_file` / `HTTP_SERVER_TLS_KEY` | unset | PEM private key. Required when `tls=1`; `SIGHUP` reloads it without dropping connections. |
 
 ### Operational variables
 
@@ -59,6 +63,11 @@ out-of-range value is fatal and names the exact key (for example
 Command-line flags mirror the key names plus `--config` and `--help`; for
 example `--max-keepalive-requests 10 --idle-timeout 5`. `EL_THREAD_COUNT` is
 *not* runtime-tunable — it stays compile-time by convention.
+
+`SIGHUP` reopens the log file (for logrotate) and, when TLS is enabled, reloads
+the certificate and key from `tls_cert_file`/`tls_key_file` in place. A failed
+reload keeps the previous certificate and logs an error; in-flight connections
+are never dropped.
 
 ## Compile-time limits
 
@@ -82,6 +91,8 @@ the compiled default without a rebuild.
 | `CACHE_MAX_FILE_BYTES`       | 1048576 | Largest file read into the representation cache; larger files stream via `sendfile` (identity only). |
 | `CACHE_MAX_ENTRIES`          | 256     | Hard cap on cache entries independent of the byte budget. |
 | `CACHE_BUDGET_BYTES_DEFAULT` | 16777216 | Default `cache_budget_bytes` runtime value (16 MiB); runtime `0` disables caching. |
+| `TLS_PORT_DEFAULT`           | 8443    | Default `tls_port` runtime value (Phase 3). |
+| `TLS_FILE_BUF_SIZE`          | 16384   | Per-connection buffer streaming a file body over TLS (TLS cannot use `sendfile`). |
 | `HEADER_READ_TIMEOUT_SEC`    | 5       | Time to deliver complete request headers after accept. |
 | `IDLE_TIMEOUT_SEC`           | 30      | Keep-alive idle time between requests. |
 | `WRITE_TIMEOUT_SEC`          | 10      | Time to drain a full response to the socket. |

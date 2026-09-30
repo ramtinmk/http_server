@@ -4,6 +4,7 @@
 #include "http_server.h"  /* PendingResponse is defined there */
 #include "config.h"
 #include "ring_buffer.h"
+#include "tls.h"          /* SSL typedef for the TLS connection state */
 #include <time.h>
 #include <signal.h>
 
@@ -11,6 +12,7 @@
 /* Connection lifecycle states                                          */
 /* ------------------------------------------------------------------ */
 typedef enum {
+    CONN_TLS_HANDSHAKE,     /* Negotiating TLS before any request bytes.   */
     CONN_READING_HEADERS,   /* Waiting for first complete request headers. */
     CONN_KEEP_ALIVE,        /* Between requests; waiting for next request.  */
     CONN_WRITING,           /* Sending response data.                       */
@@ -57,6 +59,20 @@ typedef struct ELConnection {
 
     /* Monotonic deadline (CLOCK_MONOTONIC) */
     struct timespec deadline;
+
+    /* TLS session, or NULL for a plaintext connection. Owned exclusively. */
+    SSL            *ssl;
+
+    /*
+     * Bounded buffer for streaming a file-backed body over TLS. TLS cannot use
+     * sendfile(2), so the loop reads a chunk with pread() and writes it through
+     * the record layer. Allocated only for TLS connections and freed on close;
+     * `tls_file_read` is the next file offset to read into the buffer.
+     */
+    unsigned char  *tls_file_buf;
+    size_t          tls_file_len;   /* valid bytes in tls_file_buf.         */
+    size_t          tls_file_sent;  /* bytes of tls_file_buf already written. */
+    off_t           tls_file_read;  /* next file offset to read.            */
 
     /* Intrusive free list linkage */
     struct ELConnection *next;

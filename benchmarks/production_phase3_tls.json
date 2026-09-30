@@ -1,0 +1,36 @@
+{
+  "concurrency": 50,
+  "concurrent_handshakes": {
+    "elapsed_s": 0.088,
+    "failures": [],
+    "handshakes_per_s": 565.2,
+    "requested": 50,
+    "succeeded": 50
+  },
+  "failures": [],
+  "header_timeouts": 0,
+  "large_file_bytes": 2097152,
+  "large_sha256": "44559151cc68c01fd3c3e039d3c1aa99bd5d796c0767c04ff0c10e33005bfdd9",
+  "passed": true,
+  "plain_port": 33847,
+  "plaintext_status": 200,
+  "reload": {
+    "connections_dropped": 0,
+    "new_connection_served_reloaded_cert": true,
+    "persistent_connection_ok": true
+  },
+  "throughput": {
+    "note": "Python ssl client cost dominates; ratio is indicative",
+    "plaintext_rps": 2516.9,
+    "ratio": 1.398,
+    "tls_rps": 3517.6
+  },
+  "tls": {
+    "alpn": "http/1.1",
+    "cipher": "TLS_AES_256_GCM_SHA384",
+    "version": "TLSv1.3"
+  },
+  "tls_handshake_failures": 0,
+  "tls_handshakes": 51,
+  "tls_port": 37773
+}

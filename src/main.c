@@ -15,6 +15,7 @@
 #include "config.h"
 #include "log.h"
 #include "sd_notify.h"
+#include "tls.h"
 #include <sched.h>
 #include <signal.h>
 #include <errno.h>
@@ -131,6 +132,12 @@ static void print_server_config(const ServerConfig *cfg)
     printf("  SYMLINKS              : %s\n",
            cfg->symlinks_allowed ? "allowed" : "denied");
     printf("  CACHE_BUDGET_BYTES    : %ld\n", cfg->cache_budget_bytes);
+    printf("  TLS                   : %s\n", cfg->tls_enabled ? "on" : "off");
+    if (cfg->tls_enabled) {
+        printf("  TLS_PORT              : %d\n", cfg->tls_port);
+        printf("  TLS_CERT_FILE         : %s\n", cfg->tls_cert_file);
+        printf("  TLS_KEY_FILE          : %s\n", cfg->tls_key_file);
+    }
     printf("  CONFIG_FILE           : %s\n",
            cfg->config_path[0] ? cfg->config_path : "(none)");
     printf("  MALLOC_ARENA_MAX (cap) : %s\n",
@@ -142,13 +149,14 @@ static void print_server_config(const ServerConfig *cfg)
             "max_keepalive_requests=%d max_input_buffer_bytes=%d "
             "header_read_timeout=%d idle_timeout=%d write_timeout=%d "
             "shutdown_drain_timeout=%d log_level=%s access_log=%d "
-            "log_file=%s config_file=%s",
+            "log_file=%s tls=%d tls_port=%d config_file=%s",
             cfg->port, cfg->backlog, cfg->max_connections,
             cfg->max_keepalive_requests, cfg->max_input_buffer_bytes,
             cfg->header_read_timeout_sec, cfg->idle_timeout_sec,
             cfg->write_timeout_sec, cfg->shutdown_drain_timeout_sec,
             log_level_name(cfg->log_level), cfg->access_log,
             cfg->log_file[0] ? cfg->log_file : "(stderr)",
+            cfg->tls_enabled, cfg->tls_port,
             cfg->config_path[0] ? cfg->config_path : "(none)");
 }
 
@@ -505,6 +513,7 @@ static void reload_signal_handler(int sig)
 {
     (void)sig;
     log_request_reopen();
+    tls_request_reload();
 }
 
 int main(int argc, char **argv)
@@ -585,9 +594,17 @@ int main(int argc, char **argv)
         return EXIT_FAILURE;
     }
 
+    /* Load the certificate and build the shared TLS context (no-op when TLS is
+     * disabled) before any listener is bound. */
+    if (tls_init(&cfg) != 0) {
+        log_shutdown();
+        return EXIT_FAILURE;
+    }
+
     /* Cache static responses and configure the document root before accepting
      * any clients. */
     if (initialize_static_responses(&cfg) != 0) {
+        tls_shutdown();
         log_shutdown();
         return EXIT_FAILURE;
     }
@@ -596,6 +613,7 @@ int main(int argc, char **argv)
      * port, and deliberately omitted for the single-loop control. */
     int server_socket = create_server_socket(&cfg, el_threads > 1);
     if (server_socket < 0) {
+        tls_shutdown();
         log_shutdown();
         return EXIT_FAILURE;
     }
@@ -619,6 +637,7 @@ int main(int argc, char **argv)
     close(server_socket);
     metrics_reporter_stop();
     shutdown_static_responses();
+    tls_shutdown();
     log_shutdown();
 
     return run_status == 0 ? EXIT_SUCCESS : EXIT_FAILURE;

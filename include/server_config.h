@@ -104,6 +104,24 @@
 #define CACHE_BUDGET_BYTES_DEFAULT (16u * 1024u * 1024u)
 #endif
 
+/* --- Phase 3: TLS termination ------------------------------------------- */
+
+/* Default port for the optional TLS listener. Plaintext stays on PORT; the two
+ * listeners are independent and must not share a port. */
+#ifndef TLS_PORT_DEFAULT
+#define TLS_PORT_DEFAULT 8443
+#endif
+
+/*
+ * Per-connection buffer used to stream a file-backed response body over TLS.
+ * TLS cannot use sendfile(2), so the event loop reads a chunk from the file
+ * descriptor and writes it through the TLS record layer. A fixed-size buffer
+ * bounds the extra memory each in-flight streaming TLS response can hold.
+ */
+#ifndef TLS_FILE_BUF_SIZE
+#define TLS_FILE_BUF_SIZE 16384
+#endif
+
 /* --- Timeouts (seconds) ------------------------------------------------- */
 
 /* Time allowed for a new connection to deliver complete request headers.
@@ -217,6 +235,12 @@
 #define ENV_HIDDEN_FILES            "HTTP_SERVER_HIDDEN_FILES"
 #define ENV_SYMLINKS                "HTTP_SERVER_SYMLINKS"
 #define ENV_CACHE_BUDGET_BYTES      "HTTP_SERVER_CACHE_BUDGET_BYTES"
+
+/* Phase 3: TLS termination. */
+#define ENV_TLS                     "HTTP_SERVER_TLS"
+#define ENV_TLS_PORT                "HTTP_SERVER_TLS_PORT"
+#define ENV_TLS_CERT_FILE           "HTTP_SERVER_TLS_CERT"
+#define ENV_TLS_KEY_FILE            "HTTP_SERVER_TLS_KEY"
 
 /* --- Event loop --------------------------------------------------------- */
 

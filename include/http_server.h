@@ -78,6 +78,13 @@ int el_prepare_response(RingBuffer *rb, int force_close, int *keep_alive_out, Pe
 int create_server_socket(const ServerConfig *cfg, int reuseport);
 
 /*
+ * Create and bind the optional TLS listener on `cfg->tls_port`. Same socket
+ * options as create_server_socket(); `reuseport` is set when several event
+ * loops each bind their own TLS listener. Returns the fd, or -1 on error.
+ */
+int create_tls_server_socket(const ServerConfig *cfg, int reuseport);
+
+/*
  * Initialize static serving: load and precompress the legacy fixed-path assets
  * (`home.html`/`hello.html`) and configure the Phase 2 document root, MIME map,
  * path resolver, and bounded representation cache from `cfg`. Returns 0 on

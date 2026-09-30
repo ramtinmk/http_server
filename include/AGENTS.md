@@ -22,6 +22,9 @@ Public headers. Repo-wide rules: `../AGENTS.md`; data flow and invariants:
   `header` is NULL the in-struct `header_buf` is sent instead (never point
   `header` at a response's own `header_buf`; the queue copies the struct by
   value). The `method`/`path`/`started` fields are access-log metadata.
+- `tls.h` is the OpenSSL-backed TLS surface: one shared `SSL_CTX`, per-connection
+  `SSL` creation, the handshake step, and `SIGHUP` cert reload. It is opaque to
+  callers that do not need the OpenSSL types.
 - `path_resolver.h` is the document-root resolution boundary (decode, normalize,
   `openat2`/`O_NOFOLLOW`, directory index, MIME map). Every request-derived path
   must go through it.

@@ -19,6 +19,8 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/bin)
 # --- 1. Find Dependencies ---
 find_package(Threads REQUIRED)
 find_package(ZLIB REQUIRED)
+# Phase 3: TLS termination uses OpenSSL (libssl + libcrypto).
+find_package(OpenSSL REQUIRED)
 
 # --- 2. Compiler Warnings ---
 if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
@@ -50,6 +52,8 @@ add_executable(http_server
 target_link_libraries(http_server PRIVATE 
     Threads::Threads 
     ZLIB::ZLIB
+    OpenSSL::SSL
+    OpenSSL::Crypto
 )
 
 # Default config file used when neither --config nor HTTP_SERVER_CONFIG is set.
@@ -74,6 +78,8 @@ if(TEST_SOURCES)
     target_link_libraries(run_tests PRIVATE 
         Threads::Threads 
         ZLIB::ZLIB
+        OpenSSL::SSL
+        OpenSSL::Crypto
     )
     
     message(STATUS "Test runner configured with sources: ${TEST_SOURCES}")
@@ -103,6 +109,8 @@ if(DEFINED TEST_FILE)
     target_link_libraries(run_tests PRIVATE 
         Threads::Threads 
         ZLIB::ZLIB
+        OpenSSL::SSL
+        OpenSSL::Crypto
     )
 endif()
 
@@ -212,6 +220,18 @@ add_custom_target(phase2-static
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     USES_TERMINAL
     COMMENT "Running Phase 2 secure static-serving acceptance"
+)
+
+# Phase 3 TLS acceptance: generate a throwaway self-signed cert, serve the
+# document root over TLS with ALPN http/1.1, drive a TLS request/body corpus,
+# verify a SIGHUP certificate reload drops no connections, and record the
+# TLS/plaintext throughput ratio. Writes benchmarks/production_phase3_tls.json.
+add_custom_target(phase3-tls
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/phase3_tls_test.py
+    DEPENDS http_server
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    USES_TERMINAL
+    COMMENT "Running Phase 3 TLS termination acceptance"
 )
 
 # Phase 4: static assets are precompressed/cached at startup and startup must

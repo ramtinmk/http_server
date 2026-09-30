@@ -31,6 +31,11 @@ log_file = /var/log/http_server.jsonl
 access_log = 0
 document_root = /srv/www
 cache_budget_bytes = 33554432
+# Phase 3 TLS (optional); tls_port must differ from port.
+tls = 1
+tls_port = 8443
+tls_cert_file = /etc/http_server/tls/cert.pem
+tls_key_file = /etc/http_server/tls/key.pem
 ```
 
 Keys may be written with `-` or `_`; they map to the same field.
@@ -54,6 +59,12 @@ recorded as an `effective_config` JSON record in the log.
   level/target): restart or `systemctl restart`.
 - Log file rotation: `SIGHUP` reopens `log_file` in place without dropping
   connections (for example after `logrotate`).
+- TLS certificate rotation: replace `tls_cert_file`/`tls_key_file` in place and
+  send `SIGHUP`. The certificate is reloaded into the live context; existing
+  sessions keep their certificate and no connection is dropped. A failed load
+  keeps the previous certificate and logs an error, so rotate by writing the new
+  files and then signalling, never by removing them first. The private key must
+  stay non-world-readable (`chmod 600`).
 - Configuration is *not* reloaded by `SIGHUP`; a config change needs a restart.
 
 ## 4. Stop cleanly
@@ -67,6 +78,7 @@ launched by systemd (`Type=notify`, `NOTIFY_SOCKET` set) the server sends
 
 ```bash
 make phase0-lifecycle     # invalid-config rejection + SIGTERM drain
+make phase3-tls           # TLS handshake/cipher/ALPN, bodies, SIGHUP cert reload
 ```
 
 See also `docs/runbooks/change-a-limit.md` for adding a new limit to the

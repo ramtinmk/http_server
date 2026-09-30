@@ -4,6 +4,7 @@
 #include "file_cache.h"
 #include "metrics.h"
 #include "log.h"
+#include "tls.h"
 
 #include <sys/epoll.h>
 #include <sys/eventfd.h>
@@ -14,12 +15,15 @@
 #include <arpa/inet.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <limits.h>
 #include <time.h>
 #include <unistd.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <pthread.h>
+
+#include <openssl/ssl.h>
 
 /* ------------------------------------------------------------------ */
 /* Local constants                                                      */
@@ -73,8 +77,10 @@ struct EventLoop {
     int              id;                  /* 0-based loop index (diagnostics)  */
     int              epoll_fd;
     int              listen_fd;
+    int              tls_listen_fd;       /* TLS listener, or -1 when disabled */
     int              wake_fd;             /* eventfd used to break epoll_wait  */
     ELConnection     listen_sentinel;     /* epoll tag for the listener        */
+    ELConnection     tls_listen_sentinel; /* epoll tag for the TLS listener    */
     ELConnection     wake_sentinel;       /* epoll tag for the wake eventfd    */
 
     ELConnection    *pool;                /* Runtime-sized connection table    */
@@ -270,6 +276,10 @@ static void pq_pop(ELConnection *c)
     c->pq_count--;
     c->out_header_sent = 0;
     c->out_body_sent   = 0;
+    /* The next response restarts the TLS file-streaming cursor. */
+    c->tls_file_len    = 0;
+    c->tls_file_sent   = 0;
+    c->tls_file_read   = 0;
 }
 
 /* Release every queued response, freeing any owned bodies/descriptors. */
@@ -318,6 +328,12 @@ static void drain_overload_socket(int fd)
 static void conn_close(EventLoop *loop, ELConnection *c, ELCloseReason reason)
 {
     epoll_ctl(loop->epoll_fd, EPOLL_CTL_DEL, c->fd, NULL);
+    if (c->ssl) {
+        if (c->state != CONN_TLS_HANDSHAKE)
+            SSL_shutdown(c->ssl);   /* best-effort close_notify */
+        SSL_free(c->ssl);
+        c->ssl = NULL;
+    }
     if (reason != CLOSE_SHUTDOWN) {
         drain_socket(c->fd);
     }
@@ -338,6 +354,8 @@ static void conn_close(EventLoop *loop, ELConnection *c, ELCloseReason reason)
 
     pq_release_all(c);
     conn_buffer_release(c);
+    free(c->tls_file_buf);
+    c->tls_file_buf = NULL;
     conn_return(loop, c);
     metrics_el_connection_closed();
 }
@@ -346,14 +364,30 @@ static void conn_close(EventLoop *loop, ELConnection *c, ELCloseReason reason)
 /* conn_open                                                            */
 /* ------------------------------------------------------------------ */
 static int conn_open(EventLoop *loop, int fd, const struct sockaddr *addr,
-                     socklen_t addrlen)
+                     socklen_t addrlen, int is_tls)
 {
     ELConnection *c = conn_alloc(loop);
     if (!c)
         return -1;
 
-    c->fd    = fd;
-    c->state = CONN_READING_HEADERS;
+    c->fd = fd;
+    if (is_tls) {
+        c->ssl = tls_new_conn(fd);
+        if (!c->ssl) {
+            conn_return(loop, c);
+            return -1;
+        }
+        c->tls_file_buf = malloc(TLS_FILE_BUF_SIZE);
+        if (!c->tls_file_buf) {
+            SSL_free(c->ssl);
+            c->ssl = NULL;
+            conn_return(loop, c);
+            return -1;
+        }
+        c->state = CONN_TLS_HANDSHAKE;
+    } else {
+        c->state = CONN_READING_HEADERS;
+    }
     /* in_buf is left NULL by conn_alloc and allocated lazily on the first
      * readable event, so idle connections do not pin a request buffer. */
 
@@ -465,7 +499,7 @@ static void reject_overload(int fd)
 /* ------------------------------------------------------------------ */
 /* el_accept                                                            */
 /* ------------------------------------------------------------------ */
-static void el_accept(EventLoop *loop)
+static void el_accept(EventLoop *loop, int listen_fd, int is_tls)
 {
     unsigned int handled = 0;
     int sampled_backlog = 0;
@@ -473,12 +507,13 @@ static void el_accept(EventLoop *loop)
 
         int fd;
         struct sockaddr_storage peer_addr;
+        memset(&peer_addr, 0, sizeof(peer_addr));
         socklen_t peer_len = sizeof(peer_addr);
 #ifdef SOCK_NONBLOCK
-        fd = accept4(loop->listen_fd, (struct sockaddr *)&peer_addr, &peer_len,
+        fd = accept4(listen_fd, (struct sockaddr *)&peer_addr, &peer_len,
                      SOCK_CLOEXEC | SOCK_NONBLOCK);
 #else
-        fd = accept(loop->listen_fd, (struct sockaddr *)&peer_addr, &peer_len);
+        fd = accept(listen_fd, (struct sockaddr *)&peer_addr, &peer_len);
         if (fd >= 0) {
             int flags = fcntl(fd, F_GETFL, 0);
             if (flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0) {
@@ -510,17 +545,30 @@ static void el_accept(EventLoop *loop)
         if (!metrics_connection_admit(loop->capacity)) {
             metrics_admission_rejected_reason(ADMISSION_REJECT_CAPACITY);
             if (!sampled_backlog) {
-                metrics_backlog_depth(listener_backlog_depth(loop->listen_fd));
+                metrics_backlog_depth(listener_backlog_depth(listen_fd));
                 sampled_backlog = 1;
             }
-            reject_overload(fd);
+            if (is_tls) {
+                /* A plaintext 503 cannot be framed over TLS before a
+                 * handshake, so overload closes the socket promptly. */
+                metrics_connection_reset();
+                close(fd);
+            } else {
+                reject_overload(fd);
+            }
             continue;
         }
 
-        if (conn_open(loop, fd, (struct sockaddr *)&peer_addr, peer_len) < 0) {
+        if (conn_open(loop, fd, (struct sockaddr *)&peer_addr, peer_len,
+                      is_tls) < 0) {
             metrics_active_connection_dec();
             metrics_admission_rejected_reason(ADMISSION_REJECT_TABLE_FULL);
-            reject_overload(fd);
+            if (is_tls) {
+                metrics_connection_reset();
+                close(fd);
+            } else {
+                reject_overload(fd);
+            }
             continue;
         }
 
@@ -528,6 +576,8 @@ static void el_accept(EventLoop *loop)
         metrics_el_connection_opened();
         metrics_el_loop_accepted(loop->id);
         loop->accepted++;
+        if (is_tls)
+            metrics_tls_connection();
     }
 }
 
@@ -592,6 +642,271 @@ static int send_file_slice(int fd, int file_fd, off_t *off, size_t len)
         return -1;
     }
     return 0;
+}
+
+/*
+ * Write up to `len` bytes through the TLS record layer. Returns 0 when all
+ * bytes were written, 1 when the call would block after writing `*written`
+ * bytes (the caller retries on a later event), and -1 on a fatal TLS/Socket
+ * error. SSL_MODE_ENABLE_PARTIAL_WRITE lets a short write be reported instead
+ * of forcing a same-buffer retry.
+ */
+static int tls_write_some(ELConnection *c, const unsigned char *buf, size_t len,
+                          size_t *written)
+{
+    size_t off = 0;
+    while (off < len) {
+        int chunk = (len - off) > (size_t)INT_MAX ? INT_MAX : (int)(len - off);
+        int n = SSL_write(c->ssl, buf + off, chunk);
+        if (n > 0) {
+            off += (size_t)n;
+            continue;
+        }
+        int err = SSL_get_error(c->ssl, n);
+        if (err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE) {
+            metrics_el_eagain();
+            *written = off;
+            return 1;
+        }
+        *written = off;
+        return -1;
+    }
+    *written = off;
+    return 0;
+}
+
+/* Send an in-memory slice over TLS, advancing `*off`. Same return contract as
+ * send_slice(): 0 complete, 1 retry, -1 fatal. */
+static int tls_send_slice(ELConnection *c, const unsigned char *buf, size_t *off,
+                          size_t len)
+{
+    size_t w = 0;
+    int r = tls_write_some(c, buf + *off, len - *off, &w);
+    *off += w;
+    if (r < 0)
+        return -1;
+    return r;
+}
+
+/*
+ * Stream a file-backed body over TLS with a bounded buffer. TLS cannot use
+ * sendfile(), so a chunk is pread() from the file descriptor and written
+ * through SSL_write(), resuming from `tls_file_sent` after a partial write.
+ * `out_body_sent` counts body bytes handed to the TLS layer, so completion
+ * matches the plaintext path. Returns 0 complete, 1 retry, -1 fatal.
+ */
+static int tls_send_file_slice(ELConnection *c, const PendingResponse *pr)
+{
+    while (c->out_body_sent < pr->body_len) {
+        if (c->tls_file_sent == c->tls_file_len) {
+            if (c->tls_file_len == 0 && c->out_body_sent == 0)
+                c->tls_file_read = pr->body_file_off;
+            size_t remaining = pr->body_len - c->out_body_sent;
+            size_t want = remaining > TLS_FILE_BUF_SIZE
+                              ? (size_t)TLS_FILE_BUF_SIZE : remaining;
+            ssize_t n = pread(pr->body_fd, c->tls_file_buf, want,
+                              c->tls_file_read);
+            if (n <= 0)
+                return -1;
+            c->tls_file_read += (off_t)n;
+            c->tls_file_len = (size_t)n;
+            c->tls_file_sent = 0;
+        }
+        size_t w = 0;
+        int r = tls_write_some(c, c->tls_file_buf + c->tls_file_sent,
+                               c->tls_file_len - c->tls_file_sent, &w);
+        c->tls_file_sent += w;
+        c->out_body_sent += w;
+        if (r < 0)
+            return -1;
+        if (r == 1)
+            return 1;
+    }
+    return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* el_tls_handshake                                                     */
+/* ------------------------------------------------------------------ */
+static void el_tls_readable(EventLoop *loop, ELConnection *c);
+
+static void el_tls_handshake(EventLoop *loop, ELConnection *c)
+{
+    int want_write = 0;
+    int r = tls_handshake_step(c->ssl, &want_write);
+
+    if (r == 1) {
+        metrics_tls_handshake();
+        if (SSL_session_reused(c->ssl))
+            metrics_tls_resumption();
+        c->state = CONN_READING_HEADERS;
+        deadline_set(&c->deadline, loop->config->header_read_timeout_sec);
+        epoll_set_ro(loop, c);
+        /* The client may have pipelined its request after the handshake; drain
+         * whatever the record layer already buffered. */
+        el_tls_readable(loop, c);
+        return;
+    }
+
+    if (r == 0) {
+        epoll_mod(loop, c, want_write ? EPOLLOUT : EPOLLIN);
+        return;
+    }
+
+    metrics_tls_handshake_failure();
+    log_msg(LOG_LEVEL_DEBUG, "tls_handshake_failed peer=%s error=%s",
+            c->peer, tls_last_error());
+    conn_close(loop, c, CLOSE_PROTOCOL_ERROR);
+}
+
+/* ------------------------------------------------------------------ */
+/* el_tls_readable                                                      */
+/* ------------------------------------------------------------------ */
+static void el_tls_readable(EventLoop *loop, ELConnection *c)
+{
+    metrics_el_readable_event();
+
+    if (!c->in_buf) {
+        c->in_buf = ring_buffer_create(INITIAL_RING_BUFFER_CAPACITY);
+        if (!c->in_buf) {
+            conn_close(loop, c, CLOSE_BUFFER_FULL);
+            return;
+        }
+        metrics_buffer_leased(ring_buffer_get_capacity(c->in_buf));
+    }
+
+    if (ring_buffer_get_size(c->in_buf) >=
+        (size_t)loop->config->max_input_buffer_bytes) {
+        metrics_input_buffer_limit();
+        conn_close(loop, c, CLOSE_BUFFER_FULL);
+        return;
+    }
+
+    char buf[EL_RECV_BUFSIZE];
+    for (;;) {
+        int n = SSL_read(c->ssl, buf, (int)sizeof(buf));
+        if (n > 0) {
+            ring_buffer_write(c->in_buf, buf, (size_t)n);
+            if (ring_buffer_get_size(c->in_buf) >=
+                (size_t)loop->config->max_input_buffer_bytes) {
+                metrics_input_buffer_limit();
+                conn_close(loop, c, CLOSE_BUFFER_FULL);
+                return;
+            }
+            continue;
+        }
+        int err = SSL_get_error(c->ssl, n);
+        if (err == SSL_ERROR_WANT_READ) {
+            metrics_el_eagain();
+            break;
+        }
+        if (err == SSL_ERROR_WANT_WRITE) {
+            /* Post-handshake write (e.g. a KeyUpdate ack). Retried on the
+             * next readable event; TLS 1.2 renegotiation is disabled. */
+            break;
+        }
+        if (err == SSL_ERROR_ZERO_RETURN ||
+            (err == SSL_ERROR_SYSCALL && n == 0)) {
+            if (c->pq_count == 0)
+                conn_close(loop, c, CLOSE_CLIENT_EOF);
+            else
+                c->keep_alive = 0;
+            return;
+        }
+        conn_close(loop, c, CLOSE_CLIENT_EOF);
+        return;
+    }
+
+    if (process_input(loop, c) == -1)
+        return;
+
+    if (c->fd < 0)
+        return;
+
+    if (c->pq_count > 0 && c->state != CONN_WRITING) {
+        mark_writing(loop, c);
+        epoll_set_rw(loop, c);
+    }
+}
+
+/* ------------------------------------------------------------------ */
+/* el_tls_writable                                                      */
+/* ------------------------------------------------------------------ */
+static void el_tls_writable(EventLoop *loop, ELConnection *c)
+{
+    metrics_el_writable_event();
+
+    for (;;) {
+        if (c->pq_count == 0 && c->in_buf &&
+            !ring_buffer_is_empty(c->in_buf)) {
+            if (process_input(loop, c) == -1)
+                return;
+            if (c->fd < 0)
+                return;
+            if (c->pq_count > 0)
+                mark_writing(loop, c);
+        }
+
+        if (c->pq_count == 0)
+            break;
+
+        PendingResponse *pr = pq_head_ptr(c);
+
+        const unsigned char *hdr =
+            (const unsigned char *)(pr->header ? pr->header : pr->header_buf);
+        int s = tls_send_slice(c, hdr, &c->out_header_sent, pr->header_len);
+        if (s < 0) {
+            conn_close(loop, c, CLOSE_WRITE_ERROR);
+            return;
+        }
+        if (s > 0)
+            return;
+
+        if (!pr->is_head && pr->body_len > 0) {
+            if (pr->body_fd >= 0) {
+                s = tls_send_file_slice(c, pr);
+            } else {
+                s = tls_send_slice(c, pr->body, &c->out_body_sent,
+                                   pr->body_len);
+            }
+            if (s < 0) {
+                conn_close(loop, c, CLOSE_WRITE_ERROR);
+                return;
+            }
+            if (s > 0)
+                return;
+        }
+
+        metrics_response(pr->status);
+        log_access(c->peer, pr->method, pr->path, pr->status,
+                   pr->header_len + pr->body_len, elapsed_us(&pr->started));
+        int fc = pr->force_close;
+        pq_pop(c);
+
+        if (fc) {
+            conn_close(loop, c, CLOSE_KEEPALIVE_LIMIT);
+            return;
+        }
+    }
+
+    if (loop->draining) {
+        conn_close(loop, c, CLOSE_SHUTDOWN);
+        return;
+    }
+
+    if (!c->keep_alive) {
+        conn_close(loop, c, CLOSE_CLIENT_EOF);
+        return;
+    }
+
+    if (c->in_buf && ring_buffer_is_empty(c->in_buf)) {
+        conn_buffer_release(c);
+    }
+
+    c->state = CONN_KEEP_ALIVE;
+    deadline_set(&c->deadline, loop->config->idle_timeout_sec);
+    epoll_set_ro(loop, c);
+    metrics_el_output_drained();
 }
 
 /* ------------------------------------------------------------------ */
@@ -901,6 +1216,11 @@ static void el_scan_deadlines(EventLoop *loop)
     }
 
     sample_listen_drops(&loop->listen_drops, loop->listen_fd);
+
+    /* Certificate hot reload is requested by SIGHUP and applied here (never in
+     * the signal handler); one loop owns the global context. */
+    if (loop->id == 0)
+        tls_reload_if_requested();
 }
 
 /* ------------------------------------------------------------------ */
@@ -916,6 +1236,9 @@ static void event_loop_main(EventLoop *loop)
                 /* Stop accepting; let in-flight responses finish. */
                 loop->draining = 1;
                 epoll_ctl(loop->epoll_fd, EPOLL_CTL_DEL, loop->listen_fd, NULL);
+                if (loop->tls_listen_fd >= 0)
+                    epoll_ctl(loop->epoll_fd, EPOLL_CTL_DEL,
+                              loop->tls_listen_fd, NULL);
                 deadline_set(&loop->drain_deadline,
                              loop->config->shutdown_drain_timeout_sec);
             }
@@ -943,7 +1266,13 @@ static void event_loop_main(EventLoop *loop)
 
             if (ev->data.ptr == &loop->listen_sentinel) {
                 if (!loop->draining && (ev->events & EPOLLIN))
-                    el_accept(loop);
+                    el_accept(loop, loop->listen_fd, 0);
+                continue;
+            }
+
+            if (ev->data.ptr == &loop->tls_listen_sentinel) {
+                if (!loop->draining && (ev->events & EPOLLIN))
+                    el_accept(loop, loop->tls_listen_fd, 1);
                 continue;
             }
 
@@ -960,6 +1289,18 @@ static void event_loop_main(EventLoop *loop)
 
             if (ev->events & (EPOLLERR | EPOLLHUP | EPOLLRDHUP)) {
                 conn_close(loop, c, CLOSE_CLIENT_EOF);
+                continue;
+            }
+
+            if (c->ssl) {
+                if (c->state == CONN_TLS_HANDSHAKE) {
+                    el_tls_handshake(loop, c);
+                    continue;
+                }
+                if (ev->events & EPOLLOUT)
+                    el_tls_writable(loop, c);
+                if (c->fd >= 0 && (ev->events & EPOLLIN))
+                    el_tls_readable(loop, c);
                 continue;
             }
 
@@ -993,10 +1334,12 @@ static int el_set_nonblocking(int fd)
     return 0;
 }
 
-static int loop_init(EventLoop *loop, int listen_fd, const ServerConfig *config,
-                     long capacity, volatile sig_atomic_t *running)
+static int loop_init(EventLoop *loop, int listen_fd, int tls_listen_fd,
+                     const ServerConfig *config, long capacity,
+                     volatile sig_atomic_t *running)
 {
     loop->listen_fd              = listen_fd;
+    loop->tls_listen_fd          = tls_listen_fd;
     loop->config                 = config;
     loop->capacity               = capacity;
     loop->running                = running;
@@ -1011,6 +1354,10 @@ static int loop_init(EventLoop *loop, int listen_fd, const ServerConfig *config,
 
     if (el_set_nonblocking(listen_fd) < 0) {
         perror("fcntl listener nonblocking");
+        return -1;
+    }
+    if (tls_listen_fd >= 0 && el_set_nonblocking(tls_listen_fd) < 0) {
+        perror("fcntl tls listener nonblocking");
         return -1;
     }
 
@@ -1033,6 +1380,8 @@ static int loop_init(EventLoop *loop, int listen_fd, const ServerConfig *config,
 
     memset(&loop->listen_sentinel, 0, sizeof(loop->listen_sentinel));
     loop->listen_sentinel.fd = listen_fd;
+    memset(&loop->tls_listen_sentinel, 0, sizeof(loop->tls_listen_sentinel));
+    loop->tls_listen_sentinel.fd = tls_listen_fd;
     memset(&loop->wake_sentinel, 0, sizeof(loop->wake_sentinel));
     loop->wake_sentinel.fd = loop->wake_fd;
 
@@ -1042,6 +1391,14 @@ static int loop_init(EventLoop *loop, int listen_fd, const ServerConfig *config,
     if (epoll_ctl(loop->epoll_fd, EPOLL_CTL_ADD, listen_fd, &ev) < 0) {
         perror("epoll_ctl listener");
         return -1;
+    }
+    if (tls_listen_fd >= 0) {
+        ev.events   = EPOLLIN;
+        ev.data.ptr = &loop->tls_listen_sentinel;
+        if (epoll_ctl(loop->epoll_fd, EPOLL_CTL_ADD, tls_listen_fd, &ev) < 0) {
+            perror("epoll_ctl tls listener");
+            return -1;
+        }
     }
     ev.events   = EPOLLIN;
     ev.data.ptr = &loop->wake_sentinel;
@@ -1060,6 +1417,8 @@ static void loop_destroy(EventLoop *loop, int close_listen)
         close(loop->epoll_fd);
     if (close_listen && loop->listen_fd >= 0)
         close(loop->listen_fd);
+    if (loop->tls_listen_fd >= 0)
+        close(loop->tls_listen_fd);
     free(loop->pool);
     loop->pool = NULL;
 }
@@ -1122,9 +1481,22 @@ int event_loop_run(int server_fd, volatile sig_atomic_t *running,
             nloops = i; /* only initialise loops created so far */
             break;
         }
-        if (loop_init(&loops[i], lfd, cfg, capacity, running) < 0) {
+        int tlfd = -1;
+        if (cfg->tls_enabled) {
+            tlfd = create_tls_server_socket(cfg, nloops > 1);
+            if (tlfd < 0) {
+                if (i != 0)
+                    close(lfd);
+                status = -1;
+                nloops = i;
+                break;
+            }
+        }
+        if (loop_init(&loops[i], lfd, tlfd, cfg, capacity, running) < 0) {
             if (i != 0)
                 close(lfd);
+            if (tlfd >= 0)
+                close(tlfd);
             status = -1;
             nloops = i;
             break;
