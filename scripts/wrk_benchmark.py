@@ -16,8 +16,8 @@ Requires `wrk` on PATH. Examples:
     # Just the pipelining grid against an already-running server:
     python3 scripts/wrk_benchmark.py --sweep pipeline --repeats 2
 
-The server must be able to read home.html/hello.html from the working
-directory, so --start-server launches it from the repository root.
+The server must be able to read root/home.html and root/hello.html from the
+working directory, so --start-server launches it from the repository root.
 """
 import argparse
 import csv

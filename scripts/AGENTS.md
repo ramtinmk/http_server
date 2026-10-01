@@ -19,7 +19,10 @@ each harness: `../docs/runbooks/reproduce-a-benchmark.md`.
 ## Files
 
 - `http_benchmark.py` — primary harness (scenarios, `--check-env` preflight,
-  calibration, hardware-agnostic RPS). Used by several CMake targets.
+  calibration, hardware-agnostic RPS). `--tls` wraps the client sockets in TLS;
+  with `--start-server` it generates a throwaway self-signed certificate and
+  puts the TLS listener on `--port`, so `make benchmark-tls` needs no operator
+  material. Used by several CMake targets.
 - `run_benchmark_matrix.sh` / `run_benchmark_pinned.sh` — full matrix; the
   pinned runner splits server/client CPU sets and verifies the environment.
 - `saturation_test.py` — below/equal/above-capacity acceptance.

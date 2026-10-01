@@ -20,6 +20,19 @@ make benchmark          # 1,000 req/s new-connection, 5 s
 make stress             # 5,000 req/s new-connection, appends benchmarks/stress_results.csv
 ```
 
+## 1b. TLS throughput
+
+```bash
+make benchmark-tls      # keep-alive over TLS -> benchmarks/tls_benchmark.csv
+```
+
+`--start-server --tls` makes the harness generate a throwaway self-signed
+certificate and bind the TLS listener on `--port` (the target uses 8443), so no
+operator material is needed. Against an already-running TLS server, drop
+`--start-server` and pass `--tls --port <tls_port>`; certificate verification is
+disabled for a self-signed test cert unless `--tls-ca-file` is given. The
+recorded `mode` column reads `tls-keep-alive` / `tls-new-connection`.
+
 ## 2. Full matrix (reproducible, pinned)
 
 ```bash

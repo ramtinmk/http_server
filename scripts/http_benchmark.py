@@ -24,8 +24,10 @@ import os
 import platform
 import resource
 import shlex
+import shutil
 import signal
 import socket
+import ssl
 import subprocess
 import sys
 import tempfile
@@ -110,6 +112,11 @@ CSV_FIELDS = (
     "server_memory_vmsize_kb", "server_memory_heap_inuse_bytes",
     "server_memory_heap_inuse_bytes_max", "server_memory_heap_mmap_bytes",
     "server_memory_sample_ok", "server_memory_private_dirty_kb",
+    # Steady-state CPU window: server CPU accrued between warmup_end and
+    # steady_end. The hardware-agnostic gate is derived from this window so
+    # warmup and a long drain cannot dilute per-request efficiency (trailing
+    # additions preserve backward compatibility).
+    "server_cpu_seconds_steady", "server_cpu_cores_steady",
 )
 
 SCENARIOS = {
@@ -806,6 +813,22 @@ def read_response(sock):
     return status, bytes(body), should_close
 
 
+def open_connection(args):
+    """Open a client connection, wrapping it in TLS when --tls is set."""
+    sock = socket.create_connection((args.host, args.port), args.timeout)
+    sock.settimeout(args.timeout)
+    context = getattr(args, "tls_context", None)
+    if context is not None:
+        sock = context.wrap_socket(sock, server_hostname=args.host)
+    return sock
+
+
+def connection_mode(args):
+    """The transport + connection-reuse label recorded in the result `mode`."""
+    transport = "tls-" if getattr(args, "tls", False) else ""
+    return transport + ("keep-alive" if args.keep_alive else "new-connection")
+
+
 def send_request(args, spec, sock=None, counters=None):
     """Send one request, return (status, body, server_keep_alive).
 
@@ -815,10 +838,9 @@ def send_request(args, spec, sock=None, counters=None):
         if counters is not None:
             counters["connections"] += 1
         try:
-            sock = socket.create_connection((args.host, args.port), args.timeout)
+            sock = open_connection(args)
         except OSError as exc:
             raise ConnectError("connect failed: %s" % exc)
-        sock.settimeout(args.timeout)
     request = (
         "%s %s HTTP/1.1\r\nHost: %s\r\nConnection: %s\r\n\r\n"
         % (spec["method"], spec["path"], args.host,
@@ -850,9 +872,7 @@ def worker(args, state, results, worker_id):
 
     def connect():
         counters["connections"] += 1
-        new_sock = socket.create_connection((args.host, args.port), args.timeout)
-        new_sock.settimeout(args.timeout)
-        return new_sock
+        return open_connection(args)
 
     if args.keep_alive:
         try:
@@ -1008,6 +1028,41 @@ class ServerMonitor:
             }
         except (OSError, ValueError, IndexError):
             return None
+
+    def _ticks_at(self, when):
+        """Interpolate the cumulative CPU-tick counter at monotonic time `when`.
+
+        Samples are taken every `interval` seconds; linear interpolation between
+        the bracketing samples keeps a window boundary accurate to well under one
+        sampling interval even when the server is bursty.
+        """
+        samples = self.samples
+        if not samples:
+            return 0.0
+        if when <= samples[0]["t"]:
+            return float(samples[0]["cpu_ticks"])
+        if when >= samples[-1]["t"]:
+            return float(samples[-1]["cpu_ticks"])
+        low, high = 0, len(samples) - 1
+        while high - low > 1:
+            middle = (low + high) // 2
+            if samples[middle]["t"] <= when:
+                low = middle
+            else:
+                high = middle
+        before, after = samples[low], samples[high]
+        span = max(1e-9, after["t"] - before["t"])
+        fraction = (when - before["t"]) / span
+        return before["cpu_ticks"] + fraction * (
+            after["cpu_ticks"] - before["cpu_ticks"]
+        )
+
+    def cpu_seconds_between(self, start, end):
+        """Server CPU seconds accrued in the monotonic interval [start, end]."""
+        if end <= start or len(self.samples) < 2:
+            return 0.0
+        ticks = self._ticks_at(end) - self._ticks_at(start)
+        return max(0.0, ticks / CLK_TCK)
 
     def _loop(self):
         while not self._stop.wait(self.interval):
@@ -1278,6 +1333,8 @@ def run_load(args, specs, slow_clients=0):
 
     return {
         "elapsed": elapsed,
+        "warmup_end": state["warmup_end"],
+        "steady_end": state["steady_end"],
         "latencies": [event["latency_ms"] for event in steady_events],
         "statuses": statuses,
         "errors": errors,
@@ -1351,7 +1408,7 @@ def summarize(args, spec_names, outcome, server_summary, server_metrics,
     result["scenario"] = spec_names
     result["host"] = args.host
     result["port"] = args.port
-    result["mode"] = "keep-alive" if args.keep_alive else "new-connection"
+    result["mode"] = connection_mode(args)
     result["target_rate"] = args.rate
     result["warmup_seconds"] = round(args.warmup, 3)
     result["steady_state_seconds"] = round(args.duration, 3)
@@ -1418,18 +1475,29 @@ def summarize(args, spec_names, outcome, server_summary, server_metrics,
         "calibrated": False,
     }
     server_cpu_seconds = float(result.get("server_cpu_seconds", 0.0) or 0.0)
+    # The steady-state window discards warmup and drain so a burst-and-catch-up
+    # server cannot dilute per-request cost by draining outstanding work. Fall
+    # back to the whole-run figure when no steady window was sampled.
+    steady_cpu_seconds = float(result.get("server_cpu_seconds_steady", 0.0) or 0.0)
+    effective_cpu_seconds = (
+        steady_cpu_seconds if steady_cpu_seconds > 0 else server_cpu_seconds
+    )
     server_completed = int(result.get("server_completed_requests", 0) or 0)
     if server_completed <= 0:
         server_completed = responses_received
     server_cpu_cores = server_cpu_seconds / max(1e-6, elapsed)
     client_cpu_seconds = float(outcome.get("client_cpu_seconds", 0.0) or 0.0)
     result["server_cpu_seconds"] = round(server_cpu_seconds, 6)
+    result.setdefault(
+        "server_cpu_seconds_steady", round(steady_cpu_seconds, 6)
+    )
+    result.setdefault("server_cpu_cores_steady", 0.0)
     result["server_cpu_seconds_per_1000_requests"] = round(
         server_cpu_seconds / server_completed * 1000.0, 6
     ) if server_completed else 0.0
     result["rps_per_server_cpu_second"] = round(
-        successful / server_cpu_seconds, 3
-    ) if server_cpu_seconds > 0 else 0.0
+        successful / effective_cpu_seconds, 3
+    ) if effective_cpu_seconds > 0 else 0.0
     result["server_cpu_cores"] = round(server_cpu_cores, 6)
     result["client_cpu_seconds"] = round(client_cpu_seconds, 6)
     result["client_cpu_percent"] = round(
@@ -1549,6 +1617,55 @@ def port_in_use(host, port):
         return False
 
 
+def free_port(host):
+    """Reserve an ephemeral TCP port on `host` and return its number."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind((host, 0))
+        return sock.getsockname()[1]
+
+
+def generate_self_signed_cert(directory, common_name="localhost"):
+    """Write a throwaway self-signed cert/key pair into `directory`.
+
+    Used by --start-server --tls so a TLS benchmark needs no operator-provided
+    material. Returns (cert_path, key_path); raises RuntimeError when the
+    openssl CLI is unavailable or fails.
+    """
+    cert = os.path.join(directory, "cert.pem")
+    key = os.path.join(directory, "key.pem")
+    try:
+        subprocess.run(
+            ["openssl", "req", "-x509", "-newkey", "rsa:2048", "-keyout", key,
+             "-out", cert, "-days", "1", "-nodes", "-subj", "/CN=" + common_name],
+            check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+    except FileNotFoundError:
+        raise RuntimeError(
+            "--tls with --start-server needs the openssl CLI to generate a "
+            "throwaway certificate")
+    except subprocess.CalledProcessError as exc:
+        raise RuntimeError("openssl failed to generate a certificate: %s" % exc)
+    os.chmod(key, 0o600)
+    return cert, key
+
+
+def build_tls_context(args):
+    """Build the client TLS context, validating the target certificate.
+
+    With --tls-ca-file the server certificate is verified against it. Without a
+    CA file (the default, for a local self-signed test server) verification is
+    disabled; ALPN always advertises http/1.1.
+    """
+    if args.tls_ca_file:
+        context = ssl.create_default_context(cafile=args.tls_ca_file)
+    else:
+        context = ssl.create_default_context()
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+    context.set_alpn_protocols(["http/1.1"])
+    return context
+
+
 def build_specs(args):
     if args.expect_status:
         expected = [int(code) for code in args.expect_status.split(",") if code]
@@ -1590,7 +1707,8 @@ def parse_args(argv):
     parser.add_argument("--min-rps", type=float, default=0.0,
                         help="minimum raw successful throughput (legacy gate)")
     parser.add_argument("--min-hardware-agnostic-rps", type=float, default=0.0,
-                        help="minimum successful requests per server CPU-second")
+                        help="minimum successful requests per server CPU-second "
+                             "during the steady-state window")
     parser.add_argument("--min-normalized-rps", type=float, default=0.0,
                         help="minimum calibration-normalized successful throughput")
     parser.add_argument("--expect-status", default=None,
@@ -1601,6 +1719,16 @@ def parse_args(argv):
                         help="send Accept-Encoding: gzip")
     parser.add_argument("--slow-clients", type=int, default=None,
                         help="number of idle/partial connections held during the run")
+    parser.add_argument("--tls", action="store_true",
+                        help="drive the load over TLS (HTTPS) on --port")
+    parser.add_argument("--tls-cert-file", default=None,
+                        help="PEM certificate for --start-server --tls "
+                             "(default: generate a throwaway self-signed cert)")
+    parser.add_argument("--tls-key-file", default=None,
+                        help="PEM private key for --start-server --tls")
+    parser.add_argument("--tls-ca-file", default=None,
+                        help="verify the server certificate against this CA file "
+                             "(default: verification disabled for local test certs)")
     parser.add_argument("--start-server", action="store_true")
     parser.add_argument("--server-pid", type=int, default=None,
                         help="sample an already-running server process")
@@ -1686,6 +1814,8 @@ def parse_args(argv):
         parser.error("warmup, duration, rate, and concurrency values are invalid")
     if args.calibration_seconds <= 0:
         parser.error("--calibration-seconds must be greater than zero")
+    if args.tls and bool(args.tls_cert_file) != bool(args.tls_key_file):
+        parser.error("--tls-cert-file and --tls-key-file must be given together")
     if args.requests <= 0:
         if args.rate <= 0:
             parser.error("--requests is required when --rate=0")
@@ -1700,6 +1830,7 @@ def main(argv=None):
     server = None
     metrics_file = args.server_metrics_file
     created_metrics_file = None
+    created_tls_dir = None
     monitor = None
     try:
         if args.check_env:
@@ -1742,6 +1873,9 @@ def main(argv=None):
             }, sort_keys=True))
             return 0
 
+        if args.tls:
+            args.tls_context = build_tls_context(args)
+
         if args.client_cpus:
             pin_current_process(args.client_cpus)
 
@@ -1758,6 +1892,22 @@ def main(argv=None):
             env = dict(os.environ)
             env["HTTP_SERVER_ACCESS_LOG"] = "0"
             env["HTTP_SERVER_METRICS_FILE"] = metrics_file
+            if args.tls:
+                cert_file = args.tls_cert_file
+                key_file = args.tls_key_file
+                if not cert_file:
+                    created_tls_dir = tempfile.mkdtemp(prefix="http_bench_tls_")
+                    cert_file, key_file = generate_self_signed_cert(created_tls_dir)
+                # --port is the TLS target; the plaintext listener gets a
+                # distinct ephemeral port so the two never collide.
+                plain_port = free_port(args.host)
+                while plain_port == args.port:
+                    plain_port = free_port(args.host)
+                env["HTTP_SERVER_PORT"] = str(plain_port)
+                env["HTTP_SERVER_TLS"] = "1"
+                env["HTTP_SERVER_TLS_PORT"] = str(args.port)
+                env["HTTP_SERVER_TLS_CERT"] = cert_file
+                env["HTTP_SERVER_TLS_KEY"] = key_file
             command = [args.server]
             if args.server_cpus:
                 command = ["taskset", "-c", args.server_cpus] + command
@@ -1788,6 +1938,20 @@ def main(argv=None):
         monitor.stop()
 
         server_summary = monitor.summary()
+        steady_window = outcome.get("steady_end", 0.0) - outcome.get("warmup_end", 0.0)
+        if steady_window > 0:
+            steady_cpu_seconds = monitor.cpu_seconds_between(
+                outcome["warmup_end"], outcome["steady_end"]
+            )
+            server_summary["server_cpu_seconds_steady"] = round(
+                steady_cpu_seconds, 6
+            )
+            server_summary["server_cpu_cores_steady"] = round(
+                steady_cpu_seconds / steady_window, 6
+            )
+        else:
+            server_summary["server_cpu_seconds_steady"] = 0.0
+            server_summary["server_cpu_cores_steady"] = 0.0
         server_metrics = read_server_metrics(metrics_file)
         result = summarize(args, args.scenario or "custom", outcome,
                            server_summary, server_metrics, hardware, calibration)
@@ -1816,9 +1980,10 @@ def main(argv=None):
                   result["server_rss_kb"], result["server_open_fds"],
                   result["server_queue_depth_max"], result["server_rejected_tasks"]))
         print("hardware_agnostic_rps=%.3f cpu_seconds_per_1000_requests=%.6f "
-              "client_cpu=%.2f%% limited_by=%s" % (
+              "steady_cpu_seconds=%.3f client_cpu=%.2f%% limited_by=%s" % (
                   result["hardware_agnostic_rps"],
                   result["server_cpu_seconds_per_1000_requests"],
+                  result["server_cpu_seconds_steady"],
                   result["client_cpu_percent"], result["limited_by"]))
         print("calibration=%s machine_index=%.6f normalized_successful_rps=%.3f" % (
             "on" if result["calibrated"] else "off",
@@ -1870,6 +2035,8 @@ def main(argv=None):
                 server.wait()
         if created_metrics_file and os.path.exists(created_metrics_file):
             os.remove(created_metrics_file)
+        if created_tls_dir:
+            shutil.rmtree(created_tls_dir, ignore_errors=True)
 
 
 if __name__ == "__main__":

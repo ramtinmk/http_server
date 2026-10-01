@@ -43,12 +43,13 @@ iteration. Keep this file a router (short, links out); put depth in `docs/`.
 - Run commands from the repository root. The project uses C11, POSIX threads, zlib, and (Phase 3) OpenSSL (`libssl-dev`); CMake requires `OpenSSL`.
 - Build with `make`; CMake writes executables directly to `bin/`, not `build/` (`bin/http_server` and `bin/run_tests`). Ignore legacy root-level binaries.
 - `CMakeLists.txt` uses `file(GLOB ...)` for `src/*.c` and `tests/*.c`; after adding or removing a C file, regenerate with `cmake -S . -B .` before building.
-- Targets include `make benchmark`, `make stress`, `make benchmark-matrix`, `make saturation`, `make phase0-lifecycle`, `make phase0-2x`, `make phase0-accesslog`, `make phase2-static`, `make phase3-tls`, `make memory-soak`, `make startup-failfast`, `make lint`, and `make lint-fix`. `lint`/`lint-fix` exist only when clang-tidy is installed; `lint-fix` edits source files.
+- Targets include `make benchmark`, `make benchmark-tls`, `make stress`, `make benchmark-matrix`, `make saturation`, `make phase0-lifecycle`, `make phase0-2x`, `make phase0-accesslog`, `make phase2-static`, `make phase3-tls`, `make memory-soak`, `make startup-failfast`, `make lint`, and `make lint-fix`. `lint`/`lint-fix` exist only when clang-tidy is installed; `lint-fix` edits source files.
 
 ## Tests
 
 - Focused suites do not need a running server: `./bin/run_tests ring`.
-- The server suite is selected with `./bin/run_tests server` and requires `./bin/http_server` running on `127.0.0.1:8081`. Bare `./bin/run_tests` runs all suites and therefore has the same prerequisite.
+- The TLS suite is self-contained — it generates a throwaway self-signed certificate, forks its own server with plaintext + TLS listeners on ephemeral ports, and drives the TLS record path with an OpenSSL client: `./bin/run_tests tls`.
+- The server suite is selected with `./bin/run_tests server` and requires `./bin/http_server` running on `127.0.0.1:8081`. Bare `./bin/run_tests` runs all suites (the `server` suite keeps that prerequisite; `ring` and `tls` do not).
 - Run the server integration suite from the repository root:
   ```bash
   ./bin/http_server &
@@ -70,9 +71,10 @@ iteration. Keep this file a router (short, links out); put depth in `docs/`.
 
 ## Runtime
 
-- `./bin/http_server` must be launched from the repository root because static files (`home.html` and `hello.html`) are opened via relative paths. The default port is `8081`. Runtime limits come from one validated surface — a config file (`HTTP_SERVER_CONFIG`/`--config`, defaulting to the checked-in `http_server.conf` via the compile-time `DEFAULT_CONFIG_FILE`), environment variables, and CLI flags (`--help` lists them) — resolved defaults < file < env < CLI. Invalid keys/values are fatal and name the key. `SIGTERM`/`SIGINT` drains in-flight responses within `HTTP_SERVER_SHUTDOWN_DRAIN_TIMEOUT`; `SIGHUP` reopens the log file and, when TLS is enabled, reloads the certificate.
+- `./bin/http_server` must be launched from the repository root because the startup-cached static files (`root/home.html` and `root/hello.html`) are opened via relative paths. The default port is `8081`. Runtime limits come from one validated surface — a config file (`HTTP_SERVER_CONFIG`/`--config`, defaulting to the checked-in `http_server.conf` via the compile-time `DEFAULT_CONFIG_FILE`), environment variables, and CLI flags (`--help` lists them) — resolved defaults < file < env < CLI. Invalid keys/values are fatal and name the key. `SIGTERM`/`SIGINT` drains in-flight responses within `HTTP_SERVER_SHUTDOWN_DRAIN_TIMEOUT`; `SIGHUP` reopens the log file and, when TLS is enabled, reloads the certificate.
 - The server runs nonblocking `epoll` event loops, one per online CPU core by default; each loop binds a `SO_REUSEPORT` listener. `EL_THREAD_COUNT` is a **compile-time macro**, not an environment variable — passing `EL_THREAD_COUNT=4` on the command line has no effect. See `docs/env-vars.md`.
 - Startup preflights the host and refuses to start when the effective soft `RLIMIT_NOFILE` is below `MAX_ACTIVE_CONNECTIONS + REQUIRED_NOFILE_HEADROOM + REQUIRED_NOFILE_PER_LOOP × event-loop-count`. `HTTP_SERVER_CPU_SET` (taskset list, e.g. `0-3`) pins the server; invalid ranges are fatal.
+- TLS load is driven by `scripts/http_benchmark.py --tls` (client wraps its sockets in TLS; `--start-server` generates a throwaway certificate and puts the TLS listener on `--port`). `make benchmark-tls` runs the keep-alive scenario over TLS and records `hardware_agnostic_rps` in `benchmarks/tls_benchmark.csv`.
 - Benchmark runs can use `HTTP_SERVER_METRICS_FILE=<path>` for server metrics; benchmark output is appended under `benchmarks/`. `python3 scripts/http_benchmark.py --check-env` verifies ulimit, `net.core.somaxconn`, core count, and (with `--require-governor`) the CPU governor; it exits non-zero naming the unmet requirement. `scripts/run_benchmark_pinned.sh` pins server/generator to disjoint CPU sets before running the matrix. See `docs/gotchas.md` for pitfalls (including the nonblocking, drop-on-full `HTTP_SERVER_ACCESS_LOG` path).
 
 ## Plans

@@ -155,8 +155,8 @@ Close reasons are enumerated in `ELCloseReason` (`include/event_loop.h:21`).
 
 ## Static assets and response semantics (Phase 1)
 
-- At startup `initialize_static_responses()` reads `home.html` and `hello.html`
-  **by relative path** and precompresses both with zlib. This is why the server
+- At startup `initialize_static_responses()` reads `root/home.html` and
+  `root/hello.html` **by relative path** and precompresses both with zlib. This is why the server
   must run from the repository root, and why a missing asset makes startup fail.
   Each file's `st_mtime` and size build a strong `ETag` and `Last-Modified`; the
   gzip representation gets a distinct ETag.

@@ -305,6 +305,9 @@ Legend: `[x]` done, `[~]` partial, `[ ]` pending, `[!]` blocked.
   deferred (single certificate loads a chain; SNI multi-cert is out of scope).
 - [x] Dual listeners (plaintext + TLS) toggled by config; TLS-specific metrics
   (handshakes, resumptions, failures).
+- [x] TLS verification: a self-contained C E2E suite (`./bin/run_tests tls`,
+  `tests/tls_test.c`) and a TLS throughput benchmark (`make benchmark-tls`, via
+  `scripts/http_benchmark.py --tls`).
 
 **Exit criteria**
 

@@ -86,7 +86,7 @@ int create_tls_server_socket(const ServerConfig *cfg, int reuseport);
 
 /*
  * Initialize static serving: load and precompress the legacy fixed-path assets
- * (`home.html`/`hello.html`) and configure the Phase 2 document root, MIME map,
+ * (`root/home.html`/`root/hello.html`) and configure the Phase 2 document root, MIME map,
  * path resolver, and bounded representation cache from `cfg`. Returns 0 on
  * success, -1 when an asset or the document root cannot be loaded.
  */

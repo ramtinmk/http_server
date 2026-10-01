@@ -5,6 +5,8 @@ import csv
 import io
 import json
 import os
+import shutil
+import ssl
 import sys
 import tempfile
 import unittest
@@ -86,7 +88,9 @@ class HardwareBenchmarkTests(unittest.TestCase):
         server_summary = {
             "server_cpu_percent": 50.0,
             "server_cpu_seconds": 1.0,
+            "server_cpu_seconds_steady": 0.5,
             "server_cpu_cores": 0.5,
+            "server_cpu_cores_steady": 0.25,
             "server_rss_kb": 1,
             "server_open_fds": 2,
             "ctx_switches_voluntary": 0,
@@ -126,7 +130,10 @@ class HardwareBenchmarkTests(unittest.TestCase):
             hardware, calibration
         )
 
-        self.assertEqual(result["hardware_agnostic_rps"], 100.0)
+        # The hardware-agnostic metric uses the steady-state CPU window (0.5 s),
+        # not the whole-run figure (1.0 s): 100 successes / 0.5 s = 200 req/CPU-s.
+        self.assertEqual(result["hardware_agnostic_rps"], 200.0)
+        self.assertEqual(result["server_cpu_seconds_steady"], 0.5)
         self.assertEqual(result["server_cpu_seconds_per_1000_requests"], 10.0)
         self.assertEqual(result["throughput_rps_normalized"], 25.0)
         self.assertEqual(result["successful_rps_normalized"], 25.0)
@@ -156,6 +163,48 @@ class HardwareBenchmarkTests(unittest.TestCase):
             self.assertEqual(rows[2][http_benchmark.CSV_FIELDS.index("scenario")], "new")
         finally:
             os.remove(path)
+
+    def test_connection_mode_reflects_tls_and_keep_alive(self):
+        self.assertEqual(
+            http_benchmark.connection_mode(
+                SimpleNamespace(tls=True, keep_alive=False)),
+            "tls-new-connection",
+        )
+        self.assertEqual(
+            http_benchmark.connection_mode(
+                SimpleNamespace(tls=False, keep_alive=True)),
+            "keep-alive",
+        )
+        self.assertEqual(
+            http_benchmark.connection_mode(
+                SimpleNamespace(tls=True, keep_alive=True)),
+            "tls-keep-alive",
+        )
+
+    def test_parse_args_accepts_tls_flags(self):
+        args = http_benchmark.parse_args(["--tls", "--port", "8443"])
+        self.assertTrue(args.tls)
+        self.assertEqual(args.port, 8443)
+        self.assertIsNone(args.tls_ca_file)
+
+    def test_parse_args_rejects_half_a_tls_cert_pair(self):
+        with self.assertRaises(SystemExit):
+            http_benchmark.parse_args(
+                ["--tls", "--tls-cert-file", "/tmp/cert.pem"])
+
+    def test_tls_context_defaults_to_no_verification(self):
+        context = http_benchmark.build_tls_context(
+            SimpleNamespace(tls_ca_file=None))
+        self.assertEqual(context.verify_mode, ssl.CERT_NONE)
+        self.assertFalse(context.check_hostname)
+
+    @unittest.skipUnless(shutil.which("openssl"), "openssl CLI not available")
+    def test_generate_self_signed_cert_writes_a_secure_key(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cert, key = http_benchmark.generate_self_signed_cert(directory)
+            self.assertTrue(os.path.exists(cert))
+            self.assertTrue(os.path.exists(key))
+            self.assertEqual(os.stat(key).st_mode & 0o077, 0)
 
     def test_calibrate_only_does_not_need_a_server(self):
         with tempfile.TemporaryDirectory() as cache:

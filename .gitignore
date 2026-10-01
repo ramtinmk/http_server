@@ -53,6 +53,9 @@ dkms.conf
 
 /bin
 
+# Local self-signed TLS material (never commit private keys)
+/tls/
+
 CMakeFiles
 
 # Python bytecode

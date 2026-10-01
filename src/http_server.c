@@ -31,6 +31,12 @@
 #define SERVER_TOKEN "SimpleHTTPServer/1.0"
 #define DEFAULT_CONTENT_TYPE "text/html"
 
+/* The legacy /home and /hello aliases are backed by these startup-cached
+ * assets. They live under the shipped document root (see DOCUMENT_ROOT and
+ * http_server.conf) rather than the working directory. */
+#define HOME_ASSET_PATH  "root/home.html"
+#define HELLO_ASSET_PATH "root/hello.html"
+
 /* Bounded C-string copy that cannot trigger format-truncation warnings. */
 static void copy_cstr(char *dst, size_t cap, const char *src)
 {
@@ -438,12 +444,14 @@ int initialize_static_responses(const ServerConfig *cfg)
     if (static_responses_initialized) {
         return 0;
     }
-    if (load_static_asset("home.html", &home_asset) != 0) {
-        fprintf(stderr, "Failed to cache home.html: %s\n", strerror(errno));
+    if (load_static_asset(HOME_ASSET_PATH, &home_asset) != 0) {
+        fprintf(stderr, "Failed to cache %s: %s\n", HOME_ASSET_PATH,
+                strerror(errno));
         return -1;
     }
-    if (load_static_asset("hello.html", &hello_asset) != 0) {
-        fprintf(stderr, "Failed to cache hello.html: %s\n", strerror(errno));
+    if (load_static_asset(HELLO_ASSET_PATH, &hello_asset) != 0) {
+        fprintf(stderr, "Failed to cache %s: %s\n", HELLO_ASSET_PATH,
+                strerror(errno));
         repr_free(&home_asset.plain);
         repr_free(&home_asset.gzip);
         return -1;

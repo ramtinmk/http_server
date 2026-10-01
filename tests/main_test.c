@@ -11,6 +11,7 @@
 #include "test_utils.h"
 #include "test_ring_buffer.h"
 #include "server_test.h"
+#include "tls_test.h"
 
 // Define globals
 int tests_run = 0;
@@ -41,6 +42,13 @@ int main(int argc, char **argv) {
     // Runs if no suite specified, OR if argv[1] contains "server"
     if (!suite_arg || strstr(suite_arg, "server")) {
         run_server_tests();
+    }
+
+    // --- 3. TLS E2E Suite ---
+    // Self-contained: starts its own server. Runs if no suite is specified, OR
+    // if argv[1] contains "tls".
+    if (!suite_arg || strstr(suite_arg, "tls")) {
+        run_tls_tests();
     }
 
     // --- Summary ---

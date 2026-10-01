@@ -109,6 +109,15 @@ per-IP controls (phase 4).
       style notes that every existing source already produces (no
       correctness/analyzer findings in `src/tls.c`, `src/event_loop.c`, or
       `src/metrics.c`).
+- [x] `./bin/run_tests tls` — a self-contained C E2E suite (`tests/tls_test.c`,
+      OpenSSL client) that generates a throwaway certificate and forks its own
+      server, asserting the handshake, ALPN `http/1.1`, protocol/cipher floor,
+      cached and 2 MiB streamed bodies, one-session keep-alive, plaintext
+      coexistence, and garbage-handshake resilience.
+- [x] `make benchmark-tls` records the TLS keep-alive `hardware_agnostic_rps` in
+      `benchmarks/tls_benchmark.csv` (the harness generates the certificate and
+      binds the TLS listener), and `tests/test_http_benchmark.py` covers the new
+      `--tls` argument, client context, and `mode` labeling.
 
 ## Exit criteria
 

@@ -22,7 +22,7 @@ benchmark target.
 - **Methods:** `GET`/`HEAD` serve a resource, `OPTIONS` returns `204` with
   `Allow`, `POST` returns `405`, and unknown methods return `501`. Request
   bodies are never read; a body-bearing request is answered and closed.
-- **Static assets:** `home.html` and `hello.html` are read once at startup and
+- **Static assets:** `root/home.html` and `root/hello.html` are read once at startup and
   cached in memory, both plain and gzip-precompressed, with strong `ETag`s and
   `Last-Modified`. Conditional requests (`If-None-Match`, `If-Modified-Since`,
   `If-Range`) return `304`; a single `Range` returns `206`/`416` with
@@ -103,7 +103,7 @@ CMake writes executables to `bin/`:
 ## Run
 
 The server must be launched from the repository root because it opens
-`home.html` and `hello.html` via relative paths. It listens on port `8081`.
+`root/home.html` and `root/hello.html` via relative paths. It listens on port `8081`.
 
 ```
 ./bin/http_server
@@ -137,9 +137,9 @@ certificate in place (see `docs/runbooks/configure-and-reload.md`).
 
 | Path     | Response                     |
 |----------|------------------------------|
-| `/`      | document-root index, else `home.html` (200) |
-| `/home`  | `home.html` (200)            |
-| `/hello` | `hello.html` (200)           |
+| `/`      | document-root index, else `root/home.html` (200) |
+| `/home`  | `root/home.html` (200)       |
+| `/hello` | `root/hello.html` (200)      |
 | other    | resolved against the document root: `200`, `403` (hidden/symlink/traversal), or `404` |
 
 Paths that would escape the document root (`..`, encoded `..`, `%00`,
@@ -177,6 +177,15 @@ server itself, and writes `benchmarks/production_phase3_tls.json`:
 make phase3-tls
 ```
 
+The self-contained TLS E2E suite (OpenSSL client, handshake/ALPN/cipher floor,
+cached and 2 MiB streamed bodies, keep-alive, garbage-handshake resilience)
+generates its own certificate and starts its own server, so it needs no external
+process:
+
+```
+./bin/run_tests tls
+```
+
 The server suite requires `./bin/http_server` to be running from the project
 root:
 
@@ -194,12 +203,21 @@ Two complementary harnesses are available: a raw `wrk` snapshot for peak
 throughput/latency, and the in-repo Python harness that enforces the
 hardware-agnostic measurement contract in `plans/scaling-plan.md`.
 
+For TLS, pass `--tls` to the Python harness to drive any scenario over HTTPS.
+`make benchmark-tls` runs the keep-alive scenario against a server started with
+a throwaway self-signed certificate and records the TLS `hardware_agnostic_rps`
+in `benchmarks/tls_benchmark.csv`:
+
+```
+make benchmark-tls
+```
+
 ### `wrk` results
 
 All numbers below were collected locally against a running Phase 4 epoll server
 (default `EL_THREAD_COUNT=4`, connection capacity 1024), serving the tiny
-cached `home.html`/`hello.html` assets over loopback. Each configuration was
-run twice and the higher requests/sec run is reported.
+cached `root/home.html`/`root/hello.html` assets over loopback. Each
+configuration was run twice and the higher requests/sec run is reported.
 
 Host under test:
 

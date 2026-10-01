@@ -2,7 +2,7 @@
 """E2E: static assets are precompressed and cached at startup, and startup
 fails fast when an asset cannot be loaded.
 
-The server opens home.html/hello.html via relative paths, so running the binary
+The server opens root/home.html and root/hello.html via relative paths, so running the binary
 from a directory without those files must exit non-zero with a clear message
 instead of accepting connections and failing per request later.
 """

@@ -4,9 +4,9 @@ Sharp edges that cost time. Each entry says what bites and how to avoid it.
 
 ## Build
 
-- **Run from the repository root.** `home.html` and `hello.html` are opened by
-  relative path at startup; a server launched elsewhere exits during static-asset
-  preflight.
+- **Run from the repository root.** `root/home.html` and `root/hello.html` are
+  opened by relative path at startup; a server launched elsewhere exits during
+  static-asset preflight.
 - **Executables land in `bin/`, not `build/`.** `CMAKE_RUNTIME_OUTPUT_DIRECTORY`
   is set to `bin/` in `CMakeLists.txt:17`. Ignore stale root-level binaries
   (e.g. `./test`).
@@ -104,9 +104,9 @@ Sharp edges that cost time. Each entry says what bites and how to avoid it.
 
 ## Static file serving (Phase 2)
 
-- **The server still needs `home.html`/`hello.html` in the working directory.**
-  They back the `/home`, `/hello`, and (fallback) `/` aliases; a missing asset
-  fails startup before the document root matters.
+- **The server still needs `root/home.html`/`root/hello.html` under the working
+  directory.** They back the `/home`, `/hello`, and (fallback) `/` aliases; a
+  missing asset fails startup before the document root matters.
 - **Hidden means any leading-dot path segment**, not just `.git`. `/..../x`,
   `/.env`, and `/.well-known/...` are all `403` while `hidden_files=0`. Set
   `HTTP_SERVER_HIDDEN_FILES=1` to serve them.
@@ -131,9 +131,10 @@ Sharp edges that cost time. Each entry says what bites and how to avoid it.
   compiled `DOCUMENT_ROOT` fallback is still `.`. A relative `document_root` is
   resolved against the process working directory, so the "run from the repo
   root" rule still applies unless an absolute root is configured. The `/home`
-  and `/hello` aliases are loaded from `home.html`/`hello.html` in the working
-  directory, **not** from `document_root`, so those files must stay at the repo
-  root for the aliases to work.
+  and `/hello` aliases are loaded from `root/home.html`/`root/hello.html` (a
+  fixed path relative to the working directory), **not** from the configured
+  `document_root`, so those files must stay under the repo's `root/` directory
+  for the aliases to work.
 - **Path decoding happens exactly once.** A double-encoded `%252e%252e` is
   treated as the literal filename `%2e%2e`, not as `..`; NUL (`%00`),
   backslashes, and other control bytes are `400` rather than being normalized.
