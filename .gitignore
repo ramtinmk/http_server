@@ -62,6 +62,9 @@ dkms.conf
 
 CMakeFiles
 
+# Separate compile database used by `make lint` (hardening off)
+/.lint-db/
+
 # Python bytecode
 __pycache__/
 *.py[cod]

@@ -83,6 +83,10 @@ static const CfgKey CFG_KEYS[] = {
       CFG_SIZE(tls_cert_file), 0, 0, ENV_TLS_CERT_FILE },
     { "tls_key_file",            CFG_STRING,   CFG_OFF(tls_key_file),
       CFG_SIZE(tls_key_file), 0, 0, ENV_TLS_KEY_FILE },
+    { "run_user",                CFG_STRING,   CFG_OFF(run_user),
+      CFG_SIZE(run_user), 0, 0, ENV_RUN_USER },
+    { "run_group",               CFG_STRING,   CFG_OFF(run_group),
+      CFG_SIZE(run_group), 0, 0, ENV_RUN_GROUP },
 };
 
 #define CFG_KEY_COUNT (sizeof(CFG_KEYS) / sizeof(CFG_KEYS[0]))
@@ -112,6 +116,8 @@ void config_defaults(ServerConfig *cfg)
     cfg->tls_port                 = TLS_PORT_DEFAULT;
     cfg->tls_cert_file[0]         = '\0';
     cfg->tls_key_file[0]          = '\0';
+    cfg->run_user[0]              = '\0';
+    cfg->run_group[0]             = '\0';
     cfg->config_path[0]           = '\0';
     cfg->help_requested           = 0;
 }

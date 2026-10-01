@@ -242,6 +242,22 @@
 #define ENV_TLS_CERT_FILE           "HTTP_SERVER_TLS_CERT"
 #define ENV_TLS_KEY_FILE            "HTTP_SERVER_TLS_KEY"
 
+/* Phase 4: privilege drop and hardening. */
+#define ENV_RUN_USER                "HTTP_SERVER_RUN_USER"
+#define ENV_RUN_GROUP               "HTTP_SERVER_RUN_GROUP"
+
+/* --- Phase 4: privilege drop and hardening ------------------------------ */
+
+/*
+ * Maximum length (including the terminating NUL) of a run_user or run_group
+ * value: a POSIX name or a numeric id. The drop itself is a runtime key; when
+ * both are empty the server keeps the invoking identity and only applies the
+ * always-on hardening (no_new_privs, non-dumpable).
+ */
+#ifndef RUN_USER_MAX
+#define RUN_USER_MAX 256
+#endif
+
 /* --- Event loop --------------------------------------------------------- */
 
 /* Maximum accepted sockets processed by one listener event dispatch. Under

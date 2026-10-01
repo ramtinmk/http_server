@@ -98,6 +98,12 @@ The build defaults to `CMAKE_BUILD_TYPE=Release` (`-O2 -DNDEBUG`); pass
 `-DCMAKE_BUILD_TYPE=Debug` for an unoptimized build with symbols. Do not
 benchmark a Debug build.
 
+The binary is built hardened by default: position-independent executable, full
+RELRO, a non-executable stack, `-fstack-protector-strong`,
+`-fstack-clash-protection`, and `_FORTIFY_SOURCE=2`. Disable with
+`-DENABLE_HARDENING=OFF`; verify with `readelf -h/-l/-d bin/http_server` or
+`make phase4-hardening`.
+
 CMake writes executables to `bin/`:
 
 ```
@@ -134,7 +140,16 @@ HTTP_SERVER_IDLE_TIMEOUT=5 ./bin/http_server
   --tls-cert-file /etc/http_server/tls/cert.pem \
   --tls-key-file /etc/http_server/tls/key.pem
 curl -k https://127.0.0.1:8443/hello
+
+# bind on a privileged port, then drop to an unprivileged account (needs root;
+# the document root, log, and certificate must be readable by that account)
+sudo ./bin/http_server --port 80 --run-user www-data
 ```
+
+When `run_user`/`run_group` are set the server binds every listener first, then
+irreversibly drops to that identity (all three uids/gids, supplementary groups
+cleared) and sets `no_new_privs`/non-dumpable. With neither set it keeps the
+invoking identity and applies only the always-on hardening.
 
 `--help` lists every key and its environment variable. An invalid or unknown
 key exits non-zero naming the key. With TLS enabled, `SIGHUP` reloads the
@@ -507,8 +522,10 @@ The next program takes this to production: HTTP/1.1 + TLS static serving, secure
 document-root handling, sandboxing, observability, and a hardened systemd
 deployment. See `plans/production-http-server.md`; its Phase 0 (operational
 safety and overload), Phase 1 (HTTP/1.1 correctness and caching), Phase 2
-(secure document-root serving), and Phase 3 (TLS termination) are complete,
-with sandboxing and observability next. Phase 6 capacity validation has begun
+(secure document-root serving), and Phase 3 (TLS termination) are complete.
+Phase 4 (sandboxing and robustness) has begun: compiler/linker hardening and
+privilege drop are done, with the OS sandbox, per-IP resource controls, fuzzing,
+and sanitizer builds next. Phase 6 capacity validation has begun
 with the deterministic file-class corpus and the nginx comparison — see
 `docs/benchmarks.md` and `docs/runbooks/compare-against-nginx.md`.
 

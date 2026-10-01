@@ -170,6 +170,26 @@ Sharp edges that cost time. Each entry says what bites and how to avoid it.
   live context; established sessions keep their original certificate and a
   failed reload keeps the previous one.
 
+## Hardening (Phase 4)
+
+- **The privilege drop happens after binding, not before.** All listeners are
+  created first (so a low port / `CAP_NET_BIND_SERVICE` still works), then
+  `privilege_drop()` runs before any loop thread. A client can complete a TCP
+  connect while the process is still privileged; the connection is not serviced
+  until after the drop.
+- **`run_user` is irreversible.** All three uids/gids are overwritten. The
+  document root, log file, and TLS certificate are opened before the drop, but
+  per-request file opens and the `SIGHUP` cert reload run as `run_user`; a
+  root-only cert makes the reload fail (the previous cert stays active).
+- **A configured identity requires starting as root** unless it equals the
+  current uid/gid. Running unprivileged with `run_user` set to another account
+  is fatal, naming the key.
+- **`_FORTIFY_SOURCE=2` only applies to optimized builds.** It is a no-op (and
+  would warn) at `-O0`, so the flag is scoped to non-Debug configurations.
+- **Hardening flags are compile-probed.** `-DENABLE_HARDENING=OFF` reverts to
+  the previous unhardened build; `readelf` on `bin/http_server` should show
+  `Type: DYN`, `GNU_RELRO`, `BIND_NOW`, and a non-executable `GNU_STACK`.
+
 ## Tests
 
 - **The server suite needs a running server** on `127.0.0.1:8081`:

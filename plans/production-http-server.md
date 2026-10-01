@@ -5,7 +5,7 @@ category: program
 status: active
 owner: agent
 created: 2026-09-25
-updated: 2026-09-30
+updated: 2026-10-01
 related: [scaling-plan, scaling-phase-5-os-tuning, scaling-phase-4-scale-accept, hardware-agnostic-benchmark, formally-verify-c-http-server-with-lean]
 ---
 
@@ -138,7 +138,10 @@ Legend: `[x]` done, `[~]` partial, `[ ]` pending, `[!]` blocked.
   Evidence in `benchmarks/production_phase2_static.json`.
 - [x] Phase 3 `production-http-server/phase-3`: TLS termination. Evidence in
   `benchmarks/production_phase3_tls.json`.
-- [ ] Phase 4 `production-http-server/phase-4`: sandboxing and robustness.
+- [~] Phase 4 `production-http-server/phase-4`: sandboxing and robustness in
+  progress (compiler hardening and privilege drop done; OS sandbox, per-IP
+  controls, fuzzing, and sanitizers remain). See
+  `plans/production-http-server-phase4.md`.
 - [ ] Phase 5 `production-http-server/phase-5`: observability and operations.
 - [ ] Phase 6 `production-http-server/phase-6`: deployment, CI, and capacity
   validation.
@@ -335,9 +338,11 @@ Legend: `[x]` done, `[~]` partial, `[ ]` pending, `[!]` blocked.
 
 **Work**
 
-- [ ] Privilege drop: after binding, drop to an unprivileged uid/gid; use
-  `CAP_NET_BIND_SERVICE` via systemd instead of root where possible; never
-  regain privilege.
+- [x] Privilege drop: after binding, drop to an unprivileged uid/gid
+  (`run_user`/`run_group`); clears supplementary groups, sets all three
+  uids/gids so privilege cannot be regained, plus `no_new_privs`/non-dumpable.
+  Evidence: `benchmarks/production_phase4_hardening.json`. The systemd
+  `CAP_NET_BIND_SERVICE` path remains under the sandbox item below.
 - [ ] Sandbox: systemd directives (`NoNewPrivileges`, `ProtectSystem`,
   `ProtectHome`, `PrivateTmp`, `RestrictAddressFamilies`, `SystemCallFilter`),
   plus Landlock/seccomp allowlist; document each.
@@ -348,8 +353,9 @@ Legend: `[x]` done, `[~]` partial, `[ ]` pending, `[!]` blocked.
   machine; a seed corpus from the conformance cases.
 - [ ] Sanitizers and analysis: ASan/UBSan/TSan CI builds, valgrind on
   close/error paths, static analysis, and dependency vulnerability scanning.
-- [ ] Compiler hardening flags (PIE, RELRO, `-D_FORTIFY_SOURCE`, stack
-  protector, `-fstack-clash-protection`).
+- [x] Compiler hardening flags (PIE, full RELRO, `-D_FORTIFY_SOURCE=2`, stack
+  protector, `-fstack-clash-protection`) behind `ENABLE_HARDENING`, verified by
+  `readelf` in `benchmarks/production_phase4_hardening.json`.
 
 **Exit criteria**
 

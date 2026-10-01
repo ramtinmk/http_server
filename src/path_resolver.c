@@ -429,6 +429,34 @@ static void fill_from_stat(ResolvedFile *out, const struct stat *sb,
     snprintf(out->path, sizeof(out->path), "%s", rel_path);
 }
 
+/*
+ * Build "<rel>/<name>" (or just "<name>" when rel is empty) into `dst`,
+ * truncating to fit. `rel` is already bounded to nearly the whole buffer, so
+ * the recorded path is best-effort metadata; the opened file is identified by
+ * its inode/device, not this string. Built with bounded copies rather than
+ * snprintf so _FORTIFY_SOURCE's format-truncation analysis is satisfied.
+ */
+static void join_index_path(char *dst, size_t cap, const char *rel,
+                            const char *name)
+{
+    size_t n = 0;
+    if (rel && *rel) {
+        size_t rl = strlen(rel);
+        if (rl > cap - 1)
+            rl = cap - 1;
+        memcpy(dst, rel, rl);
+        n = rl;
+        if (n < cap - 1)
+            dst[n++] = '/';
+    }
+    size_t nl = strlen(name);
+    if (nl > cap - 1 - n)
+        nl = cap - 1 - n;
+    memcpy(dst + n, name, nl);
+    n += nl;
+    dst[n] = '\0';
+}
+
 /* Resolve a directory to an index file, filling `out` on success. */
 static PathStatus open_index(int dirfd, const char *rel, ResolvedFile *out)
 {
@@ -439,10 +467,7 @@ static PathStatus open_index(int dirfd, const char *rel, ResolvedFile *out)
         struct stat sb;
         if (fstat(fd, &sb) == 0 && S_ISREG(sb.st_mode)) {
             char combined[PATH_MAX_BYTES];
-            if (*rel)
-                snprintf(combined, sizeof(combined), "%s/%s", rel, g_index[i]);
-            else
-                snprintf(combined, sizeof(combined), "%s", g_index[i]);
+            join_index_path(combined, sizeof(combined), rel, g_index[i]);
             fill_from_stat(out, &sb, combined);
             out->fd = fd;
             return PATH_OK;

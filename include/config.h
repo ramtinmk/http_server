@@ -14,6 +14,7 @@
  */
 
 #include <stddef.h>
+#include "server_config.h"   /* RUN_USER_MAX */
 
 typedef enum {
     LOG_LEVEL_ERROR = 0,
@@ -51,6 +52,10 @@ typedef struct ServerConfig {
     int      tls_port;                   /* TLS listener port */
     char     tls_cert_file[4096];        /* PEM certificate chain path */
     char     tls_key_file[4096];         /* PEM private key path */
+
+    /* Phase 4: privilege drop */
+    char     run_user[RUN_USER_MAX];     /* empty: keep invoking uid */
+    char     run_group[RUN_USER_MAX];    /* empty: user's primary gid */
 
     /* Resolved input provenance (for the startup record); not operator-set. */
     char     config_path[4096];
