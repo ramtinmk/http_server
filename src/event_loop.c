@@ -4,6 +4,7 @@
 #include "file_cache.h"
 #include "metrics.h"
 #include "log.h"
+#include "privilege.h"
 #include "tls.h"
 
 #include <sys/epoll.h>
@@ -1503,6 +1504,14 @@ int event_loop_run(int server_fd, volatile sig_atomic_t *running,
         }
         loops[i].id = i;
     }
+
+    /*
+     * Every listener (plaintext + TLS across all loops) is now bound. Drop the
+     * configured identity before any loop thread starts; a failure aborts
+     * startup so no request is ever served with the elevated identity.
+     */
+    if (status == 0 && privilege_drop(cfg) != 0)
+        status = -1;
 
     if (status == 0) {
         for (int i = 1; i < nloops; i++) {

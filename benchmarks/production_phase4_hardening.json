@@ -1,0 +1,86 @@
+{
+  "drop_same_identity_named": {
+    "args": [
+      "--run-user",
+      "ramtinmk",
+      "--port",
+      "56053"
+    ],
+    "http_status": 200,
+    "proc": {
+      "Gid": [
+        "1000",
+        "1000",
+        "1000",
+        "1000"
+      ],
+      "NoNewPrivs": [
+        "1"
+      ],
+      "Uid": [
+        "1000",
+        "1000",
+        "1000",
+        "1000"
+      ]
+    }
+  },
+  "drop_same_identity_numeric": {
+    "args": [
+      "--run-user",
+      "1000",
+      "--run-group",
+      "1000",
+      "--port",
+      "37765"
+    ],
+    "http_status": 200,
+    "proc": {
+      "Gid": [
+        "1000",
+        "1000",
+        "1000",
+        "1000"
+      ],
+      "NoNewPrivs": [
+        "1"
+      ],
+      "Uid": [
+        "1000",
+        "1000",
+        "1000",
+        "1000"
+      ]
+    }
+  },
+  "failures": [],
+  "hardening": {
+    "bind_now": true,
+    "fortified_symbols": [
+      "__fprintf_chk",
+      "__memcpy_chk",
+      "__printf_chk",
+      "__snprintf_chk",
+      "__stack_chk",
+      "__vsnprintf_chk"
+    ],
+    "gnu_stack_flags": "GNU_STACK      0x000000 0x0000000000000000 0x0000000000000000 0x000000 0x000000 RW  0x10",
+    "nx_stack": true,
+    "pie": true,
+    "relro": true,
+    "stack_protector": true
+  },
+  "help_lists_keys": {
+    "run_group": true,
+    "run_user": true
+  },
+  "invalid_group": {
+    "named_key": true,
+    "rc": 1
+  },
+  "invalid_user": {
+    "named_key": true,
+    "rc": 1
+  },
+  "passed": true
+}

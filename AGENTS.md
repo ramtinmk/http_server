@@ -44,8 +44,9 @@ iteration. Keep this file a router (short, links out); put depth in `docs/`.
 - Run commands from the repository root. The project uses C11, POSIX threads, zlib, and (Phase 3) OpenSSL (`libssl-dev`); CMake requires `OpenSSL`.
 - The build defaults to `CMAKE_BUILD_TYPE=Release` (`-O2 -DNDEBUG`); pass `-DCMAKE_BUILD_TYPE=Debug` for an unoptimized build with symbols. Do not benchmark a Debug build.
 - Build with `make`; CMake writes executables directly to `bin/`, not `build/` (`bin/http_server` and `bin/run_tests`). Ignore legacy root-level binaries.
+- The binary is built hardened by default (PIE, full RELRO, NX stack, stack protector, `_FORTIFY_SOURCE=2`) behind `ENABLE_HARDENING`; disable with `-DENABLE_HARDENING=OFF`.
 - `CMakeLists.txt` uses `file(GLOB ...)` for `src/*.c` and `tests/*.c`; after adding or removing a C file, regenerate with `cmake -S . -B .` before building.
-- Targets include `make benchmark`, `make benchmark-tls`, `make corpus`, `make stress`, `make benchmark-matrix`, `make saturation`, `make phase0-lifecycle`, `make phase0-2x`, `make phase0-accesslog`, `make phase2-static`, `make phase3-tls`, `make memory-soak`, `make startup-failfast`, `make lint`, and `make lint-fix`. `lint`/`lint-fix` exist only when clang-tidy is installed; `lint-fix` edits source files.
+- Targets include `make benchmark`, `make benchmark-tls`, `make corpus`, `make stress`, `make benchmark-matrix`, `make saturation`, `make phase0-lifecycle`, `make phase0-2x`, `make phase0-accesslog`, `make phase2-static`, `make phase3-tls`, `make phase4-hardening`, `make memory-soak`, `make startup-failfast`, `make lint`, and `make lint-fix`. `lint`/`lint-fix` exist only when clang-tidy is installed; `lint-fix` edits source files.
 
 ## Tests
 
@@ -86,7 +87,7 @@ iteration. Keep this file a router (short, links out); put depth in `docs/`.
 
 ## Code Map
 
-- `src/main.c` owns socket setup, signal handling, startup preflight, accept/admission control, and dispatch selection. Directory notes: `src/AGENTS.md`.
+- `src/main.c` owns socket setup, signal handling, startup preflight, accept/admission control, and dispatch selection. `src/privilege.c` owns the `run_user`/`run_group` drop (after binding) and the always-on `no_new_privs`/non-dumpable hardening. Directory notes: `src/AGENTS.md`.
 - `src/event_loop.c` owns the default nonblocking `epoll` connection state machine; `src/http_server.c` owns HTTP parsing, static responses, keep-alive, and gzip handling.
 - `src/tls.c` (with `include/tls.h`) owns the OpenSSL context, TLS 1.2+/ALPN policy, cert/key loading, and `SIGHUP` reload; `src/event_loop.c` drives the per-connection TLS state machine.
 - `src/ring_buffer.c` provides buffering; `src/metrics.c` and `src/memory_profiler.c` provide runtime instrumentation.

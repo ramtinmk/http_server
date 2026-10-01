@@ -25,6 +25,9 @@ Public headers. Repo-wide rules: `../AGENTS.md`; data flow and invariants:
 - `tls.h` is the OpenSSL-backed TLS surface: one shared `SSL_CTX`, per-connection
   `SSL` creation, the handshake step, and `SIGHUP` cert reload. It is opaque to
   callers that do not need the OpenSSL types.
+- `privilege.h` is the Phase 4 privilege-drop surface: `privilege_validate()`
+  (resolve `run_user`/`run_group` before binding) and `privilege_drop()` (drop
+  after all listeners exist). The drop is irreversible.
 - `path_resolver.h` is the document-root resolution boundary (decode, normalize,
   `openat2`/`O_NOFOLLOW`, directory index, MIME map). Every request-derived path
   must go through it.

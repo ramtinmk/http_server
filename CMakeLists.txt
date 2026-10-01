@@ -45,6 +45,54 @@ if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
     set(CMAKE_C_FLAGS_RELEASE "-O2 -DNDEBUG")
 endif()
 
+# --- Phase 4: compiler and linker hardening ---
+# Build a hard-to-exploit binary: PIE, full RELRO, NX stack, stack-protector,
+# stack-clash protection, and _FORTIFY_SOURCE=2. Each flag is probed so an
+# older/other toolchain degrades gracefully instead of failing the build, and
+# the whole set is controlled by ENABLE_HARDENING for an isolated rollback.
+option(ENABLE_HARDENING "Build with compiler/linker hardening flags" ON)
+
+if(ENABLE_HARDENING AND CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    include(CheckCCompilerFlag)
+
+    foreach(flag
+            -fstack-protector-strong
+            -fstack-clash-protection
+            -fPIE)
+        string(MAKE_C_IDENTIFIER "HAVE${flag}" _have)
+        check_c_compiler_flag("${flag}" ${_have})
+        if(${_have})
+            add_compile_options(${flag})
+        endif()
+    endforeach()
+
+    # Linker hardening: full RELRO (GOT read-only before main), non-executable
+    # stack, and a PIE executable matching -fPIE.
+    foreach(flag
+            "-pie"
+            "-Wl,-z,relro"
+            "-Wl,-z,now"
+            "-Wl,-z,noexecstack")
+        string(MAKE_C_IDENTIFIER "HAVE_LINK${flag}" _have)
+        check_c_compiler_flag("${flag}" ${_have})
+        if(${_have})
+            add_link_options(${flag})
+        endif()
+    endforeach()
+
+    # _FORTIFY_SOURCE requires optimization; applying it to an unoptimized build
+    # produces a warning and no benefit, so scope it to non-Debug configs.
+    # -U first so a toolchain default cannot collide with our -D.
+    add_compile_options(
+        $<$<NOT:$<CONFIG:Debug>>:-U_FORTIFY_SOURCE>
+        $<$<NOT:$<CONFIG:Debug>>:-D_FORTIFY_SOURCE=2>
+    )
+
+    message(STATUS "Hardening enabled (ENABLE_HARDENING=ON)")
+else()
+    message(STATUS "Hardening disabled (ENABLE_HARDENING=OFF)")
+endif()
+
 # --- 3. Source Management ---
 include_directories(include)
 
@@ -284,6 +332,17 @@ add_custom_target(phase3-tls
     COMMENT "Running Phase 3 TLS termination acceptance"
 )
 
+# Phase 4 hardening acceptance: the binary is PIE/full-RELRO/NX/stack-protected/
+# fortified, run_user/run_group are validated, and a configured identity is
+# dropped after binding. Writes benchmarks/production_phase4_hardening.json.
+add_custom_target(phase4-hardening
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/phase4_hardening_test.py
+    DEPENDS http_server
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    USES_TERMINAL
+    COMMENT "Running Phase 4 compiler-hardening and privilege-drop acceptance"
+)
+
 # Phase 4: static assets are precompressed/cached at startup and startup must
 # fail fast when one cannot be loaded.
 add_custom_target(startup-failfast
@@ -300,10 +359,20 @@ find_program(CLANG_TIDY_EXE NAMES clang-tidy clang-tidy-18 clang-tidy-17 clang-t
 if(CLANG_TIDY_EXE)
     set(LINT_SOURCES ${SOURCES} ${SERVER_MAIN})
 
+    # Static analysis does not need the hardening flags, and an older clang-tidy
+    # (e.g. 10.0) rejects a flag its bundled clang does not know
+    # (-fstack-clash-protection), turning every file into a compiler error. Run
+    # clang-tidy against a separate compile database configured with hardening
+    # off so the analyzer is independent of the optimization/hardening surface.
+    set(LINT_DB_DIR ${CMAKE_BINARY_DIR}/.lint-db)
+
     # Report only — no changes to source files
     add_custom_target(lint
+        COMMAND ${CMAKE_COMMAND}
+            -S ${CMAKE_SOURCE_DIR} -B ${LINT_DB_DIR}
+            -DENABLE_HARDENING=OFF
         COMMAND ${CLANG_TIDY_EXE}
-            -p ${CMAKE_SOURCE_DIR}
+            -p ${LINT_DB_DIR}
             ${LINT_SOURCES}
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
         COMMENT "Running clang-tidy (report only)..."
@@ -312,8 +381,11 @@ if(CLANG_TIDY_EXE)
 
     # Apply all auto-fixable suggestions in-place
     add_custom_target(lint-fix
+        COMMAND ${CMAKE_COMMAND}
+            -S ${CMAKE_SOURCE_DIR} -B ${LINT_DB_DIR}
+            -DENABLE_HARDENING=OFF
         COMMAND ${CLANG_TIDY_EXE}
-            -p ${CMAKE_SOURCE_DIR}
+            -p ${LINT_DB_DIR}
             --fix
             --fix-errors
             ${LINT_SOURCES}

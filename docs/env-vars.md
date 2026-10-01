@@ -49,6 +49,8 @@ out-of-range value is fatal and names the exact key (for example
 | `tls_port` / `HTTP_SERVER_TLS_PORT` | `TLS_PORT_DEFAULT` (8443) | TLS listener port (1..65535); must differ from `port`. |
 | `tls_cert_file` / `HTTP_SERVER_TLS_CERT` | unset | PEM certificate chain. Required when `tls=1`; load/parse failures and a world-accessible key are fatal. |
 | `tls_key_file` / `HTTP_SERVER_TLS_KEY` | unset | PEM private key. Required when `tls=1`; `SIGHUP` reloads it without dropping connections. |
+| `run_user` / `HTTP_SERVER_RUN_USER` | unset | User (name or numeric uid) to drop to after all listeners are bound. Invalid value is fatal, naming the key. |
+| `run_group` / `HTTP_SERVER_RUN_GROUP` | unset (user's primary gid) | Group (name or numeric gid) to drop to. Requires starting as root unless it equals the current gid. |
 
 ### Operational variables
 
@@ -68,6 +70,21 @@ example `--max-keepalive-requests 10 --idle-timeout 5`. `EL_THREAD_COUNT` is
 the certificate and key from `tls_cert_file`/`tls_key_file` in place. A failed
 reload keeps the previous certificate and logs an error; in-flight connections
 are never dropped.
+
+## Privilege drop and process hardening (Phase 4)
+
+When `run_user`/`run_group` are set, the server drops to that identity
+real/effective/saved ids, clears supplementary groups, and sets
+`PR_SET_NO_NEW_PRIVS` and `PR_SET_DUMPABLE=0` **after** every listener is bound
+(so a low port or `CAP_NET_BIND_SERVICE` is only needed to bind). With both
+unset, only the always-on `no_new_privs`/non-dumpable hardening is applied and
+the invoking identity is kept. A configured identity that differs from the
+current user requires starting as root; the drop is irreversible.
+
+Because the drop happens after startup, the document root, log target, and TLS
+certificate are opened while still privileged; only per-request file opens and
+the `SIGHUP` certificate reload run as `run_user`, so those files must be
+readable by that user.
 
 ## Compile-time limits
 

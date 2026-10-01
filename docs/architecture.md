@@ -35,6 +35,7 @@ invariants must hold when you change the code.
 | `src/http_server.c`         | Socket creation, HTTP/1.1 parsing, static asset + gzip caching, document-root response selection |
 | `src/tls.c`                 | OpenSSL context/policy (TLS 1.2+, ALPN `http/1.1`), cert/key load, permission check, `SIGHUP` reload |
 | `src/path_resolver.c`       | Safe document-root path resolution (percent-decode, normalize, `openat2`/`O_NOFOLLOW`), directory index, MIME map |
+| `src/privilege.c`           | Resolves `run_user`/`run_group` and drops to them after binding; `no_new_privs` + non-dumpable hardening |
 | `src/file_cache.c`          | Bounded, ref-counted LRU cache of identity/gzip representations |
 | `src/log.c`                 | Leveled JSON access/error logging; nonblocking pipe + writer thread; `SIGHUP` reopen |
 | `src/sd_notify.c`           | Dependency-free `sd_notify` (`READY`/`STOPPING`) over `$NOTIFY_SOCKET` |
@@ -97,9 +98,11 @@ invariants must hold when you change the code.
    input, clamps with a warning, and fails on non-positive.
 9. Report host sysctls (`somaxconn`, `tcp_rmem`/`tcp_wmem`) read-only.
 10. `validate_configuration()`, `apply_cpu_affinity()` (`HTTP_SERVER_CPU_SET`),
+    `privilege_validate()` (resolve `run_user`/`run_group`, no-op when unset),
     `tls_init()` (cert/key load; no-op when disabled),
     `initialize_static_responses()`, then bind/listen, `sd_notify(READY)`, and
-    enter the loops.
+    enter the loops. `event_loop_run()` calls `privilege_drop()` after all
+    listeners exist and before any loop thread starts.
 
 ## Connection lifecycle
 
@@ -259,6 +262,29 @@ Close reasons are enumerated in `ELCloseReason` (`include/event_loop.h:21`).
   reload flag; the deadline tick of loop 0 calls `tls_reload_if_requested()` to
   reload the certificate in place. Existing `SSL` objects keep the certificate
   they started with, so no connection is dropped.
+
+## Privilege drop and process hardening (Phase 4)
+
+- The binary is built hardened by default (`ENABLE_HARDENING=ON`): PIE,
+  full RELRO (`-Wl,-z,relro,-z,now`), a non-executable stack,
+  `-fstack-protector-strong`, `-fstack-clash-protection`, and
+  `_FORTIFY_SOURCE=2` for optimized configurations. Flags are compile-probed and
+  can be disabled with `-DENABLE_HARDENING=OFF`.
+- `privilege_validate()` (`src/privilege.c`) resolves `run_user`/`run_group`
+  during startup, before any listener exists, so an unknown name fails fast and
+  names the key. `event_loop_run()` calls `privilege_drop()` after the
+  listener-creation loop (plaintext + TLS, all loops) and before any loop
+  thread is spawned.
+- `privilege_drop()` sets all three (real/effective/saved) gids then uids with
+  `initgroups`/`setgroups`, `setresgid`, `setresuid`; a configured identity
+  differing from the current one requires euid 0. It then applies the
+  always-on `PR_SET_NO_NEW_PRIVS` and `PR_SET_DUMPABLE=0`, and verifies the
+  resulting ids. Any failure aborts startup, so no request is served with the
+  elevated identity.
+- The drop is irreversible: saved ids are overwritten, so a post-compromise
+  process cannot regain the original identity. Files the request path or
+  `SIGHUP` reload must open (document root, log, certificate) therefore must be
+  readable by `run_user`.
 
 ## Instrumentation
 

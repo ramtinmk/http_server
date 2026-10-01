@@ -14,6 +14,7 @@
 #include "event_loop.h"
 #include "config.h"
 #include "log.h"
+#include "privilege.h"
 #include "sd_notify.h"
 #include "tls.h"
 #include <sched.h>
@@ -142,6 +143,10 @@ static void print_server_config(const ServerConfig *cfg)
            cfg->config_path[0] ? cfg->config_path : "(none)");
     printf("  MALLOC_ARENA_MAX (cap) : %s\n",
            arena_cap_display[0] ? arena_cap_display : "not applicable");
+    printf("  RUN_USER              : %s\n",
+           cfg->run_user[0] ? cfg->run_user : "(unchanged)");
+    printf("  RUN_GROUP             : %s\n",
+           cfg->run_group[0] ? cfg->run_group : "(user's primary)");
     printf("============================\n");
 
     log_msg(LOG_LEVEL_INFO,
@@ -149,7 +154,8 @@ static void print_server_config(const ServerConfig *cfg)
             "max_keepalive_requests=%d max_input_buffer_bytes=%d "
             "header_read_timeout=%d idle_timeout=%d write_timeout=%d "
             "shutdown_drain_timeout=%d log_level=%s access_log=%d "
-            "log_file=%s tls=%d tls_port=%d config_file=%s",
+            "log_file=%s tls=%d tls_port=%d config_file=%s "
+            "run_user=%s run_group=%s",
             cfg->port, cfg->backlog, cfg->max_connections,
             cfg->max_keepalive_requests, cfg->max_input_buffer_bytes,
             cfg->header_read_timeout_sec, cfg->idle_timeout_sec,
@@ -157,7 +163,9 @@ static void print_server_config(const ServerConfig *cfg)
             log_level_name(cfg->log_level), cfg->access_log,
             cfg->log_file[0] ? cfg->log_file : "(stderr)",
             cfg->tls_enabled, cfg->tls_port,
-            cfg->config_path[0] ? cfg->config_path : "(none)");
+            cfg->config_path[0] ? cfg->config_path : "(none)",
+            cfg->run_user[0] ? cfg->run_user : "(none)",
+            cfg->run_group[0] ? cfg->run_group : "(none)");
 }
 
 /*
@@ -556,6 +564,14 @@ int main(int argc, char **argv)
 
     /* Print the effective configuration and record it in the startup log. */
     print_server_config(&cfg);
+
+    /* Resolve the configured run identity now so a typo fails fast, naming the
+     * key, before any listener is bound. The irreversible drop itself happens
+     * after every listener exists (inside event_loop_run). */
+    if (privilege_validate(&cfg) != 0) {
+        log_shutdown();
+        return EXIT_FAILURE;
+    }
 
     /* Resolve how many event loops to run: explicit override or one per core.
      * Needed before the descriptor preflight so per-loop fds are reserved. */

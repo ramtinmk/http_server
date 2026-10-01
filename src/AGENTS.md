@@ -6,10 +6,17 @@ event loop. Directory-wide rules (build, tests, plans) are in `../AGENTS.md`.
 ## Files
 
 - `main.c` — startup only. Order matters: config load → allocator cap →
-  logging → metrics reporter → signal handlers → config print → loop-count
-  resolution → FD preflight → effective capacity → host report → affinity →
-  static assets → bind/listen → `sd_notify(READY)` → loops. Keep
+  logging → metrics reporter → signal handlers → config print →
+  privilege validation → loop-count resolution → FD preflight → effective
+  capacity → host report → affinity → static assets → bind/listen →
+  `sd_notify(READY)` → `event_loop_run` (create all listeners → privilege drop
+  → start loops). Keep
   `EL_THREAD_COUNT` compile-time; do not read it from the environment.
+- `privilege.c` — resolves `run_user`/`run_group` (`privilege_validate`, called
+  from `main.c` before binding) and drops to the identity
+  (`privilege_drop`, called from `event_loop_run` after every listener exists and
+  before any loop thread). Sets all three uids/gids, clears groups, and applies
+  `no_new_privs`/non-dumpable. The drop is irreversible; failures are fatal.
 - `config.c` — the single validated configuration surface (defaults < file <
   env < CLI). One `CFG_KEYS` table drives lookup, validation, and usage.
 - `log.c` — leveled JSON logging: format on the hot path, write to a
