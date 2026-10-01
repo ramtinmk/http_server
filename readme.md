@@ -4,7 +4,8 @@ A small HTTP/1.1 static-file server written in C11, using POSIX sockets,
 `epoll`, POSIX threads, and `zlib`. The project doubles as a study of
 concurrency models — it grew from a blocking `fork()` server, to a thread pool,
 to the nonblocking event loop that is the default today — and as a reproducible
-benchmark target.
+benchmark target: a deterministic file-class corpus and a `wrk` peer comparison
+against nginx back the per-class numbers in [Benchmarking](#benchmarking).
 
 ## Architecture
 
@@ -92,6 +93,10 @@ CMake fails at configure time when OpenSSL is missing.
 ```
 make
 ```
+
+The build defaults to `CMAKE_BUILD_TYPE=Release` (`-O2 -DNDEBUG`); pass
+`-DCMAKE_BUILD_TYPE=Debug` for an unoptimized build with symbols. Do not
+benchmark a Debug build.
 
 CMake writes executables to `bin/`:
 
@@ -186,6 +191,13 @@ process:
 ./bin/run_tests tls
 ```
 
+The deterministic corpus generator and the benchmark harness have Python E2E
+tests that need no running server:
+
+```
+ctest --output-on-failure -R "benchmark_corpus_tests|benchmark_python_tests"
+```
+
 The server suite requires `./bin/http_server` to be running from the project
 root:
 
@@ -199,57 +211,89 @@ kill "$SERVER_PID" && wait "$SERVER_PID" 2>/dev/null || true
 
 ## Benchmarking
 
-Two complementary harnesses are available: a raw `wrk` snapshot for peak
-throughput/latency, and the in-repo Python harness that enforces the
-hardware-agnostic measurement contract in `plans/scaling-plan.md`.
+A single request-rate number is not a fair comparison: file type selects a
+different server code path (in-memory cache, `sendfile` streaming, or TLS record
+I/O), so results are reported per class. The workflow is to generate the
+deterministic file-class corpus, drive one class at a time, and — for peer
+claims — run the same classes against nginx. The taxonomy and reporting rules
+live in `docs/benchmarks.md`.
 
-For TLS, pass `--tls` to the Python harness to drive any scenario over HTTPS.
-`make benchmark-tls` runs the keep-alive scenario against a server started with
-a throwaway self-signed certificate and records the TLS `hardware_agnostic_rps`
-in `benchmarks/tls_benchmark.csv`:
+### Deterministic corpus
 
-```
-make benchmark-tls
-```
-
-For fair comparisons, benchmark one file class at a time against the
-deterministic corpus (byte-identical assets plus a SHA-256 manifest), rather
-than averaging across file types. `make corpus` writes it to
-`benchmarks/corpus/`; the taxonomy and reporting rules are in
-`docs/benchmarks.md`:
+`make corpus` writes `benchmarks/corpus/` plus a SHA-256 manifest covering every
+class (`tiny`, `small`, `medium`, `binary`, `streamed`, `large`, opt-in `huge`)
+and `.gz` siblings for compressible classes. Generation is seeded, so a fixed
+seed produces byte-identical assets on any host — the basis for comparing
+servers and revisions:
 
 ```
 make corpus
+python3 scripts/benchmark_corpus.py --list      # plan, no writes
+python3 scripts/benchmark_corpus.py --verify    # files vs manifest
+python3 scripts/benchmark_corpus.py --include-huge
+```
+
+Drive a single class with the in-repo harness (repeat per class; the harness
+sets `HTTP_SERVER_DOCUMENT_ROOT`):
+
+```
 python3 scripts/http_benchmark.py --start-server \
     --document-root benchmarks/corpus \
     --path /streamed/movie.bin --keep-alive --rate 2000 --duration 10
 ```
 
-Peer comparison against nginx runs one class at a time with `wrk`, both servers
-on the same assets and CPUs pinned apart. `scripts/run_nginx_comparison.sh`
-builds nginx and this server with matched worker counts and `-O2`, starts both
-(plaintext, `gzip_static`, and TLS), and writes
-`benchmarks/nginx_comparison.csv`/`.json`:
+### Peer comparison against nginx
+
+`scripts/run_nginx_comparison.sh` is one command: it builds nginx and this
+server with matched worker counts and `-O2`, starts both (plaintext,
+`gzip_static`, TLS), pins servers to CPUs `0-3` and `wrk` to `4-7`, and runs the
+identity/gzip/TLS matrix into `benchmarks/nginx_comparison.csv` + `.json`:
 
 ```
 bash scripts/run_nginx_comparison.sh
 ```
 
-`docs/runbooks/compare-against-nginx.md` has the fairness rules, tunables, and
-recorded results (including TLS). To drive your own running pair instead:
+Recorded on an 8-core i5-1135G7, best of 2; ratio is nginx / ours (below 1.0
+means ours is faster), `—` means the class is not part of that mode:
+
+| mode                                | tiny | small | medium | binary | streamed | large |
+|-------------------------------------|-----:|------:|-------:|-------:|---------:|------:|
+| plaintext identity                  | 1.33 |  1.27 |   1.47 |   2.11 |     1.09 |  0.84 |
+| gzip (ours cached vs `gzip_static`) | 1.48 |  1.25 |   1.25 |    —   |      —   |   —   |
+| TLS                                 | 0.82 |  1.33 |   1.05 |   0.94 |     1.02 |  0.97 |
+
+nginx leads plaintext cached files (1.3–2.1×; `sendfile` from page cache versus
+our heap `write()`), is at parity for streamed/large, and is at parity under TLS
+— where neither server can `sendfile`, so nginx's file-serving edge disappears
+and ours wins the tiny and binary classes. Per-class RPS, latency, tunables, and
+caveats are in `docs/runbooks/compare-against-nginx.md`.
+
+To drive an already-running pair yourself:
 
 ```
 python3 scripts/compare_servers.py --corpus benchmarks/corpus \
     --target ours=http://127.0.0.1:8081 --target nginx=http://127.0.0.1:8082 \
-    --wrk-cpus 4-7 --output benchmarks/nginx_comparison.csv
+    --wrk-cpus 4-7 --mode identity --output benchmarks/nginx_comparison.csv
 ```
 
-### `wrk` results
+### TLS throughput
 
-All numbers below were collected locally against a running Phase 4 epoll server
-(default `EL_THREAD_COUNT=4`, connection capacity 1024), serving the tiny
-cached `root/home.html`/`root/hello.html` assets over loopback. Each
-configuration was run twice and the higher requests/sec run is reported.
+`make benchmark-tls` runs the keep-alive scenario over HTTPS against a server
+started with a throwaway self-signed certificate and records the TLS
+`hardware_agnostic_rps` in `benchmarks/tls_benchmark.csv`:
+
+```
+make benchmark-tls
+```
+
+Pass `--tls` to `scripts/http_benchmark.py` to drive any scenario over HTTPS.
+
+### Peak `wrk` throughput snapshot
+
+A historical single-host snapshot for peak throughput and latency on the tiny
+cached assets. It predates the file-class corpus and used a different host than
+the comparison above, so treat it as context rather than a cross-server result.
+Each configuration was run twice and the higher requests/sec run is reported.
 
 Host under test:
 
@@ -373,7 +417,7 @@ The original reference configuration, `wrk -t12 -c400 -d30s --latency`:
 These are a single-host snapshot for comparison, not a guarantee. Re-run on the
 target machine and server revision before drawing conclusions.
 
-### In-repo benchmark harness
+### In-repo harness (measurement contract)
 
 The Python harness implements the measurement contract in
 `plans/scaling-plan.md` and records offered rate, completed/successful/failed
@@ -464,7 +508,9 @@ document-root handling, sandboxing, observability, and a hardened systemd
 deployment. See `plans/production-http-server.md`; its Phase 0 (operational
 safety and overload), Phase 1 (HTTP/1.1 correctness and caching), Phase 2
 (secure document-root serving), and Phase 3 (TLS termination) are complete,
-with sandboxing and operations next.
+with sandboxing and observability next. Phase 6 capacity validation has begun
+with the deterministic file-class corpus and the nginx comparison — see
+`docs/benchmarks.md` and `docs/runbooks/compare-against-nginx.md`.
 
 Still out of scope: HTTP/2, CGI, reverse proxy, dynamic content, and directory
 listing. See `plans/` for the specifications behind each phase.
