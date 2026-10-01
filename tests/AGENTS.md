@@ -20,6 +20,9 @@ Repo-wide rules and the test policy live in `../AGENTS.md`. Read those first.
 - `test_ring_buffer.c` — server-free unit suite.
 - `test_http_benchmark.py` — Python unit tests for the harness CSV/metrics
   mapping; part of CTest as `benchmark_python_tests`.
+- `test_benchmark_corpus.py` — E2E tests for the deterministic corpus generator:
+  manifest vs on-disk bytes, reproducibility, tamper detection, and the
+  cached-vs-streamed class boundary; part of CTest as `benchmark_corpus_tests`.
 - `test_utils.h` — shared assertions/helpers.
 
 ## Running

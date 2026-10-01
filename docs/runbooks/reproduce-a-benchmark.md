@@ -33,7 +33,28 @@ operator material is needed. Against an already-running TLS server, drop
 disabled for a self-signed test cert unless `--tls-ca-file` is given. The
 recorded `mode` column reads `tls-keep-alive` / `tls-new-connection`.
 
-## 2. Full matrix (reproducible, pinned)
+## 2. File-class corpus
+
+Comparisons must run against byte-identical assets, one class at a time. See
+`docs/benchmarks.md` for the taxonomy and reporting rules.
+
+```bash
+make corpus                                        # -> benchmarks/corpus/
+python3 scripts/benchmark_corpus.py --list          # plan, no writes
+python3 scripts/benchmark_corpus.py --verify        # files vs manifest
+```
+
+Drive one class against the corpus with the harness (repeat per class; add
+`--tls` for the transport axis):
+
+```bash
+python3 scripts/http_benchmark.py --start-server \
+    --document-root benchmarks/corpus \
+    --path /streamed/movie.bin --keep-alive --rate 2000 --duration 10 \
+    --log-file benchmarks/corpus_matrix.csv
+```
+
+## 3. Full matrix (reproducible, pinned)
 
 ```bash
 ./scripts/run_benchmark_pinned.sh
@@ -49,7 +70,7 @@ HPIN_SERVER_CPUS=0-1 HPIN_CLIENT_CPUS=2-3 ./scripts/run_benchmark_pinned.sh
 HPIN_REQUIRE_GOVERNOR=1 ./scripts/run_benchmark_pinned.sh
 ```
 
-## 3. `wrk` snapshot
+## 4. `wrk` snapshot
 
 ```bash
 python3 scripts/wrk_benchmark.py --start-server --sweep all \
@@ -59,7 +80,7 @@ python3 scripts/wrk_benchmark.py --start-server --sweep all \
 Needs `wrk` on `PATH`. `--sweep` also accepts `threads`, `connections`, and
 `settings`; the pipelining sweep uses `scripts/wrk_pipeline.lua`.
 
-## 4. Memory soak
+## 5. Memory soak
 
 ```bash
 make memory-soak        # 5-minute stationary keep-alive run

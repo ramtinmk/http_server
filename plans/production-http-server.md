@@ -403,6 +403,14 @@ Legend: `[x]` done, `[~]` partial, `[ ]` pending, `[!]` blocked.
   smoke benchmark gate tied to a checked-in baseline.
 - [ ] Capacity report: fixed-rate runs at and above capacity, TLS runs, and a
   multi-hour soak with RSS/FD drift evidence.
+  - [x] Deterministic file-class corpus (`scripts/benchmark_corpus.py`,
+    `make corpus`) so capacity runs and comparisons use byte-identical assets and
+    report per class rather than one average. See `docs/benchmarks.md`.
+  - [x] Peer comparison against nginx over plaintext, `gzip_static`, and TLS
+    (`scripts/run_nginx_comparison.sh`, `scripts/compare_servers.py`, `wrk`) with
+    matched workers/optimization and disjoint CPU pinning; evidence in
+    `benchmarks/nginx_comparison.csv` + `.json` and the recipe in
+    `docs/runbooks/compare-against-nginx.md`.
 - [ ] Operator runbook in `readme.md`/`AGENTS.md`: install, configure, reload,
   cert rotation, troubleshooting, and benchmark reproduction.
 

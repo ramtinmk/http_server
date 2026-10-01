@@ -212,6 +212,38 @@ in `benchmarks/tls_benchmark.csv`:
 make benchmark-tls
 ```
 
+For fair comparisons, benchmark one file class at a time against the
+deterministic corpus (byte-identical assets plus a SHA-256 manifest), rather
+than averaging across file types. `make corpus` writes it to
+`benchmarks/corpus/`; the taxonomy and reporting rules are in
+`docs/benchmarks.md`:
+
+```
+make corpus
+python3 scripts/http_benchmark.py --start-server \
+    --document-root benchmarks/corpus \
+    --path /streamed/movie.bin --keep-alive --rate 2000 --duration 10
+```
+
+Peer comparison against nginx runs one class at a time with `wrk`, both servers
+on the same assets and CPUs pinned apart. `scripts/run_nginx_comparison.sh`
+builds nginx and this server with matched worker counts and `-O2`, starts both
+(plaintext, `gzip_static`, and TLS), and writes
+`benchmarks/nginx_comparison.csv`/`.json`:
+
+```
+bash scripts/run_nginx_comparison.sh
+```
+
+`docs/runbooks/compare-against-nginx.md` has the fairness rules, tunables, and
+recorded results (including TLS). To drive your own running pair instead:
+
+```
+python3 scripts/compare_servers.py --corpus benchmarks/corpus \
+    --target ours=http://127.0.0.1:8081 --target nginx=http://127.0.0.1:8082 \
+    --wrk-cpus 4-7 --output benchmarks/nginx_comparison.csv
+```
+
 ### `wrk` results
 
 All numbers below were collected locally against a running Phase 4 epoll server

@@ -22,7 +22,18 @@ each harness: `../docs/runbooks/reproduce-a-benchmark.md`.
   calibration, hardware-agnostic RPS). `--tls` wraps the client sockets in TLS;
   with `--start-server` it generates a throwaway self-signed certificate and
   puts the TLS listener on `--port`, so `make benchmark-tls` needs no operator
-  material. Used by several CMake targets.
+  material. Used by several CMake targets. `--document-root` points the server
+  it starts at an alternate document root (e.g. the generated corpus).
+- `benchmark_corpus.py` — deterministic file-class corpus generator plus
+  manifest (`make corpus`); taxonomy and reporting rules in
+  `../docs/benchmarks.md`.
+- `compare_servers.py` — `wrk` peer comparison across corpus classes; takes
+  already-running targets (`--target NAME=URL`, `--wrk-cpus`) and tags rows with
+  `--mode`. Recipe and fairness rules in
+  `../docs/runbooks/compare-against-nginx.md`.
+- `run_nginx_comparison.sh` + `nginx_reference.conf` — one-command nginx
+  comparison: builds both servers, starts them (plaintext/gzip_static/TLS), and
+  drives the identity/gzip/TLS matrix into `../benchmarks/nginx_comparison.*`.
 - `run_benchmark_matrix.sh` / `run_benchmark_pinned.sh` — full matrix; the
   pinned runner splits server/client CPU sets and verifies the environment.
 - `saturation_test.py` — below/equal/above-capacity acceptance.

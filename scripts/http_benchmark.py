@@ -1730,6 +1730,9 @@ def parse_args(argv):
                         help="verify the server certificate against this CA file "
                              "(default: verification disabled for local test certs)")
     parser.add_argument("--start-server", action="store_true")
+    parser.add_argument("--document-root", default=None,
+                        help="with --start-server, serve this directory "
+                             "(sets HTTP_SERVER_DOCUMENT_ROOT)")
     parser.add_argument("--server-pid", type=int, default=None,
                         help="sample an already-running server process")
     parser.add_argument("--server", default="./bin/http_server")
@@ -1892,6 +1895,8 @@ def main(argv=None):
             env = dict(os.environ)
             env["HTTP_SERVER_ACCESS_LOG"] = "0"
             env["HTTP_SERVER_METRICS_FILE"] = metrics_file
+            if args.document_root:
+                env["HTTP_SERVER_DOCUMENT_ROOT"] = args.document_root
             if args.tls:
                 cert_file = args.tls_cert_file
                 key_file = args.tls_key_file

@@ -56,6 +56,10 @@ dkms.conf
 # Local self-signed TLS material (never commit private keys)
 /tls/
 
+# Generated benchmark corpus (regenerate with `make corpus`; the manifest
+# describes it and is the only committed-able artifact)
+/benchmarks/corpus/
+
 CMakeFiles
 
 # Python bytecode

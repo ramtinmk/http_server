@@ -12,6 +12,7 @@ and in the nearest directory's `AGENTS.md`.
 | Every environment variable and compile-time limit| `docs/env-vars.md`            |
 | Sharp edges that waste time                      | `docs/gotchas.md`             |
 | Task recipes (add a route, reproduce a benchmark)| `docs/runbooks/`              |
+| File-class benchmark methodology and corpus      | `docs/benchmarks.md`          |
 | Phase specs and intent                           | `plans/` (read `plan-spec.md` first) |
 
 ## Git branch selection
@@ -41,9 +42,10 @@ iteration. Keep this file a router (short, links out); put depth in `docs/`.
 ## Build
 
 - Run commands from the repository root. The project uses C11, POSIX threads, zlib, and (Phase 3) OpenSSL (`libssl-dev`); CMake requires `OpenSSL`.
+- The build defaults to `CMAKE_BUILD_TYPE=Release` (`-O2 -DNDEBUG`); pass `-DCMAKE_BUILD_TYPE=Debug` for an unoptimized build with symbols. Do not benchmark a Debug build.
 - Build with `make`; CMake writes executables directly to `bin/`, not `build/` (`bin/http_server` and `bin/run_tests`). Ignore legacy root-level binaries.
 - `CMakeLists.txt` uses `file(GLOB ...)` for `src/*.c` and `tests/*.c`; after adding or removing a C file, regenerate with `cmake -S . -B .` before building.
-- Targets include `make benchmark`, `make benchmark-tls`, `make stress`, `make benchmark-matrix`, `make saturation`, `make phase0-lifecycle`, `make phase0-2x`, `make phase0-accesslog`, `make phase2-static`, `make phase3-tls`, `make memory-soak`, `make startup-failfast`, `make lint`, and `make lint-fix`. `lint`/`lint-fix` exist only when clang-tidy is installed; `lint-fix` edits source files.
+- Targets include `make benchmark`, `make benchmark-tls`, `make corpus`, `make stress`, `make benchmark-matrix`, `make saturation`, `make phase0-lifecycle`, `make phase0-2x`, `make phase0-accesslog`, `make phase2-static`, `make phase3-tls`, `make memory-soak`, `make startup-failfast`, `make lint`, and `make lint-fix`. `lint`/`lint-fix` exist only when clang-tidy is installed; `lint-fix` edits source files.
 
 ## Tests
 
@@ -75,7 +77,7 @@ iteration. Keep this file a router (short, links out); put depth in `docs/`.
 - The server runs nonblocking `epoll` event loops, one per online CPU core by default; each loop binds a `SO_REUSEPORT` listener. `EL_THREAD_COUNT` is a **compile-time macro**, not an environment variable — passing `EL_THREAD_COUNT=4` on the command line has no effect. See `docs/env-vars.md`.
 - Startup preflights the host and refuses to start when the effective soft `RLIMIT_NOFILE` is below `MAX_ACTIVE_CONNECTIONS + REQUIRED_NOFILE_HEADROOM + REQUIRED_NOFILE_PER_LOOP × event-loop-count`. `HTTP_SERVER_CPU_SET` (taskset list, e.g. `0-3`) pins the server; invalid ranges are fatal.
 - TLS load is driven by `scripts/http_benchmark.py --tls` (client wraps its sockets in TLS; `--start-server` generates a throwaway certificate and puts the TLS listener on `--port`). `make benchmark-tls` runs the keep-alive scenario over TLS and records `hardware_agnostic_rps` in `benchmarks/tls_benchmark.csv`.
-- Benchmark runs can use `HTTP_SERVER_METRICS_FILE=<path>` for server metrics; benchmark output is appended under `benchmarks/`. `python3 scripts/http_benchmark.py --check-env` verifies ulimit, `net.core.somaxconn`, core count, and (with `--require-governor`) the CPU governor; it exits non-zero naming the unmet requirement. `scripts/run_benchmark_pinned.sh` pins server/generator to disjoint CPU sets before running the matrix. See `docs/gotchas.md` for pitfalls (including the nonblocking, drop-on-full `HTTP_SERVER_ACCESS_LOG` path).
+- Benchmark runs can use `HTTP_SERVER_METRICS_FILE=<path>` for server metrics; benchmark output is appended under `benchmarks/`. `python3 scripts/http_benchmark.py --check-env` verifies ulimit, `net.core.somaxconn`, core count, and (with `--require-governor`) the CPU governor; it exits non-zero naming the unmet requirement. `scripts/run_benchmark_pinned.sh` pins server/generator to disjoint CPU sets before running the matrix. `scripts/run_nginx_comparison.sh` builds and runs an nginx peer comparison over the file-class corpus (identity, gzip_static, TLS); see `docs/runbooks/compare-against-nginx.md`. See `docs/gotchas.md` for pitfalls (including the nonblocking, drop-on-full `HTTP_SERVER_ACCESS_LOG` path).
 
 ## Plans
 
