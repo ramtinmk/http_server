@@ -3,6 +3,16 @@ cmake_minimum_required(VERSION 3.16)
 # Project Configuration
 project(HTTPServer VERSION 1.0 LANGUAGES C)
 
+# Default to an optimized build. Without this, CMAKE_BUILD_TYPE is empty and no
+# -O flag is applied, which makes the server unusable as a performance baseline
+# (and unfair in benchmark comparisons). Pass -DCMAKE_BUILD_TYPE=Debug for an
+# unoptimized build with symbols.
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+    set(CMAKE_BUILD_TYPE "Release" CACHE STRING "Build type" FORCE)
+    set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS
+        Debug Release RelWithDebInfo MinSizeRel)
+endif()
+
 include(CTest)
 
 # Use C11
@@ -29,6 +39,10 @@ if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
         -Wextra 
         -pedantic
     )
+    # Release uses -O2 rather than CMake's -O3 default: it is the level the
+    # benchmark comparisons use and avoids -O3's code-size/register-pressure
+    # surprises on this hot loop.
+    set(CMAKE_C_FLAGS_RELEASE "-O2 -DNDEBUG")
 endif()
 
 # --- 3. Source Management ---
@@ -100,6 +114,15 @@ set_tests_properties(
     PROPERTIES WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
 )
 
+add_test(
+    NAME benchmark_corpus_tests
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/test_benchmark_corpus.py
+)
+set_tests_properties(
+    benchmark_corpus_tests
+    PROPERTIES WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+)
+
 if(DEFINED TEST_FILE)
     add_executable(run_tests 
         ${TEST_FILE}
@@ -140,6 +163,17 @@ add_custom_target(benchmark-tls
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     USES_TERMINAL
     COMMENT "Running TLS keep-alive benchmark (records hardware_agnostic_rps)"
+)
+
+# Deterministic file-class corpus: materializes byte-identical assets plus a
+# manifest so comparisons run against the same bytes. The tree is generated
+# under benchmarks/corpus (git-ignored); see docs/benchmarks.md for the taxonomy.
+add_custom_target(corpus
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/benchmark_corpus.py
+            --output-dir ${CMAKE_SOURCE_DIR}/benchmarks/corpus --with-gzip
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    USES_TERMINAL
+    COMMENT "Generating the deterministic benchmark corpus"
 )
 
 # Canonical 5,000 req/s new-connection stress run described by

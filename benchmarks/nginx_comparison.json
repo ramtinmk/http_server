@@ -1,0 +1,28 @@
+{
+  "date_utc": "2026-10-01T08:53:24Z",
+  "our_commit": "6a125b4",
+  "our_binary_flags": "-O2 -DNDEBUG -DEL_THREAD_COUNT=4, HTTP_SERVER_CPU_SET=0-3",
+  "nginx_version": "nginx/1.30.5 (built from source, -O2, 4 workers, cpus 0-3)",
+  "wrk_version": "",
+  "wrk_affinity": "4-7",
+  "corpus_seed": 1592598564,
+  "corpus_total_bytes": 19407104,
+  "corpus_manifest_sha256": "f6685ee9ccbaa227caacac045687a28cb37f8a9ec032a22da85909219e1e2507",
+  "cpu": "11th Gen Intel(R) Core(TM) i5-1135G7 @ 2.40GHz",
+  "logical_cpus": 8,
+  "kernel": "5.15.167.4-microsoft-standard-WSL2",
+  "csv": "benchmarks/nginx_comparison.csv",
+  "notes": [
+    "Both servers serve byte-identical corpus assets; wrk pinned to CPUs 4-7, servers to 0-3.",
+    "gzip-precompressed compares our cached gzip representation to nginx gzip_static.",
+    "large is bandwidth-bound and its difference is within run-to-run noise.",
+    "wrk has no coordinated-omission correction; use wrk2 for tail-latency claims."
+  ],
+  "targets": {
+    "ours": "http://127.0.0.1:8081 (corpus document root)",
+    "nginx": "http://127.0.0.1:8082 (identity)",
+    "nginx-gzip-static": "http://127.0.0.1:8084 (gzip_static)",
+    "ours-tls": "https://127.0.0.1:8443",
+    "nginx-tls": "https://127.0.0.1:8445"
+  }
+}
