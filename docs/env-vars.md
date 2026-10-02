@@ -51,6 +51,11 @@ out-of-range value is fatal and names the exact key (for example
 | `tls_key_file` / `HTTP_SERVER_TLS_KEY` | unset | PEM private key. Required when `tls=1`; `SIGHUP` reloads it without dropping connections. |
 | `run_user` / `HTTP_SERVER_RUN_USER` | unset | User (name or numeric uid) to drop to after all listeners are bound. Invalid value is fatal, naming the key. |
 | `run_group` / `HTTP_SERVER_RUN_GROUP` | unset (user's primary gid) | Group (name or numeric gid) to drop to. Requires starting as root unless it equals the current gid. |
+| `observability` / `HTTP_SERVER_OBSERVABILITY` | `0` | When `1`, serve the Prometheus `/metrics` endpoint and the health/readiness probes on the data listeners. |
+| `metrics_path` / `HTTP_SERVER_METRICS_PATH` | `METRICS_PATH_DEFAULT` (`/metrics`) | Prometheus exposition path (max `OBS_PATH_MAX-1` bytes). |
+| `health_path` / `HTTP_SERVER_HEALTH_PATH` | `HEALTH_PATH_DEFAULT` (`/healthz`) | Liveness probe path; always `200` while the process serves. |
+| `readiness_path` / `HTTP_SERVER_READINESS_PATH` | `READINESS_PATH_DEFAULT` (`/readyz`) | Readiness probe path; `200` while accepting, `503` once shutdown begins. |
+| `syslog` / `HTTP_SERVER_SYSLOG` | `0` | When `1`, mirror every structured record to `syslog(3)` (ident `http_server`, facility `daemon`) in addition to `log_file`/stderr. |
 
 ### Operational variables
 
@@ -66,10 +71,15 @@ Command-line flags mirror the key names plus `--config` and `--help`; for
 example `--max-keepalive-requests 10 --idle-timeout 5`. `EL_THREAD_COUNT` is
 *not* runtime-tunable — it stays compile-time by convention.
 
-`SIGHUP` reopens the log file (for logrotate) and, when TLS is enabled, reloads
-the certificate and key from `tls_cert_file`/`tls_key_file` in place. A failed
-reload keeps the previous certificate and logs an error; in-flight connections
-are never dropped.
+`SIGHUP` reopens the log file (for logrotate), reloads the certificate and key
+from `tls_cert_file`/`tls_key_file` when TLS is enabled, and re-reads the
+runtime log level from the same configuration sources. A failed reload keeps the
+previous settings and logs an error; in-flight connections are never dropped.
+Per-connection limits and timeouts (`max_keepalive_requests`, `idle_timeout`,
+`write_timeout`, capacity) are **not** reloadable and need a restart, because
+existing connections already hold their deadlines. See
+`docs/runbooks/configure-and-reload.md` and
+`docs/runbooks/observability-and-reload.md`.
 
 ## Privilege drop and process hardening (Phase 4)
 
@@ -110,6 +120,11 @@ the compiled default without a rebuild.
 | `CACHE_BUDGET_BYTES_DEFAULT` | 16777216 | Default `cache_budget_bytes` runtime value (16 MiB); runtime `0` disables caching. |
 | `TLS_PORT_DEFAULT`           | 8443    | Default `tls_port` runtime value (Phase 3). |
 | `TLS_FILE_BUF_SIZE`          | 16384   | Per-connection buffer streaming a file body over TLS (TLS cannot use `sendfile`). |
+| `METRICS_PATH_DEFAULT`       | `/metrics` | Default `metrics_path` runtime value (Phase 5). |
+| `HEALTH_PATH_DEFAULT`        | `/healthz` | Default `health_path` runtime value. |
+| `READINESS_PATH_DEFAULT`     | `/readyz` | Default `readiness_path` runtime value. |
+| `OBS_PATH_MAX`               | 128     | Maximum length (with NUL) of a configurable observability path. |
+| `METRICS_PROM_MAX`           | 65536   | Hard cap on the rendered Prometheus body; a larger exposition is truncated. |
 | `HEADER_READ_TIMEOUT_SEC`    | 5       | Time to deliver complete request headers after accept. |
 | `IDLE_TIMEOUT_SEC`           | 30      | Keep-alive idle time between requests. |
 | `WRITE_TIMEOUT_SEC`          | 10      | Time to drain a full response to the socket. |

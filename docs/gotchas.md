@@ -35,11 +35,13 @@ Sharp edges that cost time. Each entry says what bites and how to avoid it.
   `O_NONBLOCK` pipe to a writer thread; when the pipe is full the record is
   dropped and counted (`dropped_logs` in the shutdown record) instead of
   stalling the event loop.
-- **`SIGHUP` reopens the log file and reloads the TLS certificate; it does not
-  reload config.** Log reopening is polled by the writer thread at
-  `LOG_POLL_INTERVAL_MS` (200 ms); a cert reload is consumed by event-loop 0 on
-  its `EL_DEADLINE_SCAN_MS` tick. Config and other runtime limits are read once
-  at startup.
+- **`SIGHUP` reopens the log file, reloads the TLS certificate, and re-reads the
+  log level; it does not reload connection limits or timeouts.** Log reopening
+  is polled by the writer thread at `LOG_POLL_INTERVAL_MS` (200 ms); the cert and
+  log-level reloads are consumed by event-loop 0 on its `EL_DEADLINE_SCAN_MS`
+  tick. Timeouts, capacity, and `max_keepalive_requests` are read once at startup
+  (existing connections already hold their deadlines), so changing them needs a
+  restart. See `docs/runbooks/observability-and-reload.md`.
 - **Unknown config *file/CLI* keys are fatal; unknown environment variables are
   ignored.** Only the named `HTTP_SERVER_*` variables are read, so unrelated
   variables in the environment are harmless.
@@ -189,6 +191,33 @@ Sharp edges that cost time. Each entry says what bites and how to avoid it.
 - **Hardening flags are compile-probed.** `-DENABLE_HARDENING=OFF` reverts to
   the previous unhardened build; `readelf` on `bin/http_server` should show
   `Type: DYN`, `GNU_RELRO`, `BIND_NOW`, and a non-executable `GNU_STACK`.
+
+## Observability (Phase 5)
+
+- **The observability endpoints are off by default and share the data
+  listeners.** `/metrics`, `/healthz`, and `/readyz` are only served when
+  `observability=1`, and they are matched before document-root resolution on the
+  plaintext and TLS ports. There is no authentication or separate admin port, so
+  firewall the endpoints if the port is public, and keep the configured paths
+  clear of real assets (they shadow the file at that path).
+- **`/readyz` returns `503` only in the small window between the signal and the
+  loops removing their listeners.** Once the drain starts the listeners are
+  removed, so a probe gets connection-refused instead of `503`. Both mean "not
+  ready"; treat refusal as a failed probe.
+- **The Prometheus body is capped at `METRICS_PROM_MAX`** and truncated rather
+  than grown. The JSON snapshot written for `HTTP_SERVER_METRICS_FILE` is a
+  separate format and is unchanged.
+- **Request IDs are per process, not global.** The seed is `wall-clock ^ pid`, so
+  two concurrent servers can in principle collide; the id is for correlating a
+  response with a log line, not for security.
+- **`simplehttp_resident_memory_bytes`/`simplehttp_virtual_memory_bytes` reflect
+  the last memory-profiler sample and are `0` unless `HTTP_SERVER_METRICS_FILE`
+  started the reporter thread.** The `/metrics` handler never samples procfs
+  itself: the reporter thread is the sole sampler (see
+  `src/memory_profiler.c`).
+- **`syslog=1` mirrors records from the writer thread**, not the event loops, so
+  a syslog target cannot stall a loop. A full pipe still drops records (counted
+  in `dropped_logs`).
 
 ## Tests
 

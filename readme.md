@@ -78,12 +78,25 @@ against nginx back the per-class numbers in [Benchmarking](#benchmarking).
   or unknown key is fatal and names the key. See `docs/env-vars.md` and
   `./bin/http_server --help`.
 - **Logging:** leveled JSON records to a file or stderr. Access logging is
-  opt-in (`HTTP_SERVER_ACCESS_LOG=1`) and writes through a nonblocking pipe to a
-  writer thread, so a slow disk drops records instead of stalling an event
-  loop. `SIGHUP` reopens the log file for rotation.
+  opt-in (`HTTP_SERVER_ACCESS_LOG=1`), carries a per-request `request_id`, and
+  writes through a nonblocking pipe to a writer thread, so a slow disk drops
+  records instead of stalling an event loop. `SIGHUP` reopens the log file for
+  rotation and applies a new `log_level`; `HTTP_SERVER_SYSLOG=1` mirrors records
+  to `syslog(3)`.
 - **Lifecycle:** `SIGTERM`/`SIGINT` stop accepting, finish in-flight responses
   within `HTTP_SERVER_SHUTDOWN_DRAIN_TIMEOUT`, and exit 0; `sd_notify`
   (`Type=notify`) is sent when `NOTIFY_SOCKET` is set.
+- **Observability (Phase 5):** with `HTTP_SERVER_OBSERVABILITY=1` the server
+  serves a Prometheus `GET /metrics` endpoint (request/response counters, a
+  request-duration histogram, connection/timeout/TLS/cache gauges, readiness,
+  uptime) plus unauthenticated `GET /healthz` liveness and `GET /readyz`
+  readiness probes on the data listeners; the paths are configurable and the
+  endpoints are off by default. Every response carries an `X-Request-Id` that
+  also appears in the JSON access record (`request_id`), so a client response can
+  be traced to its log line and latency. `SIGHUP` reopens the log, reloads the
+  TLS certificate, and applies a new `log_level` without dropping connections;
+  `HTTP_SERVER_SYSLOG=1` mirrors records to `syslog(3)`. See
+  `docs/runbooks/observability-and-reload.md`.
 
 ## Build
 
@@ -525,9 +538,12 @@ safety and overload), Phase 1 (HTTP/1.1 correctness and caching), Phase 2
 (secure document-root serving), and Phase 3 (TLS termination) are complete.
 Phase 4 (sandboxing and robustness) has begun: compiler/linker hardening and
 privilege drop are done, with the OS sandbox, per-IP resource controls, fuzzing,
-and sanitizer builds next. Phase 6 capacity validation has begun
-with the deterministic file-class corpus and the nginx comparison — see
-`docs/benchmarks.md` and `docs/runbooks/compare-against-nginx.md`.
+and sanitizer builds left for later. Phase 5 (observability and operations) adds
+the Prometheus endpoint, health/readiness probes, request IDs, and a widened
+`SIGHUP` reload — see `docs/runbooks/observability-and-reload.md`. Phase 6
+capacity validation has begun with the deterministic file-class corpus and the
+nginx comparison — see `docs/benchmarks.md` and
+`docs/runbooks/compare-against-nginx.md`.
 
 Still out of scope: HTTP/2, CGI, reverse proxy, dynamic content, and directory
 listing. See `plans/` for the specifications behind each phase.
