@@ -151,7 +151,10 @@ static pid_t spawn_test_server(int port, int capacity) {
         snprintf(capacity_buf, sizeof(capacity_buf), "%d", capacity);
         setenv("HTTP_SERVER_PORT", port_buf, 1);
         setenv("HTTP_SERVER_MAX_CONNECTIONS", capacity_buf, 1);
-        execl("./bin/http_server", "http_server", (char *)NULL);
+        const char *server_binary = getenv("HTTP_SERVER_TEST_BINARY");
+        if (!server_binary || !*server_binary)
+            server_binary = "./bin/http_server";
+        execl(server_binary, "http_server", (char *)NULL);
         _exit(127);
     }
     return pid;

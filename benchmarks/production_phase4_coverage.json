@@ -3,20 +3,20 @@
   "passed": true,
   "targets": {
     "connection_state": {
-      "function_percent": 78.0,
-      "functions_covered": 39,
+      "function_percent": 96.0,
+      "functions_covered": 48,
       "functions_total": 50,
-      "line_percent": 51.634723788049605,
-      "lines_covered": 458,
+      "line_percent": 72.37880496054115,
+      "lines_covered": 642,
       "lines_total": 887,
       "source": "src/event_loop.c"
     },
     "parser": {
-      "function_percent": 85.71428571428571,
-      "functions_covered": 48,
+      "function_percent": 89.28571428571429,
+      "functions_covered": 50,
       "functions_total": 56,
-      "line_percent": 70.6581352833638,
-      "lines_covered": 773,
+      "line_percent": 72.85191956124315,
+      "lines_covered": 797,
       "lines_total": 1094,
       "source": "src/http_server.c"
     },
@@ -24,8 +24,8 @@
       "function_percent": 82.3529411764706,
       "functions_covered": 14,
       "functions_total": 17,
-      "line_percent": 52.68456375838926,
-      "lines_covered": 157,
+      "line_percent": 53.02013422818792,
+      "lines_covered": 158,
       "lines_total": 298,
       "source": "src/path_resolver.c"
     }

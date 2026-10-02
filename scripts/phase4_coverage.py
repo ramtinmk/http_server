@@ -186,6 +186,8 @@ def main():
     try:
         reset_coverage(build_dir)
         binary_dir = os.path.join(build_dir, "bin")
+        os.environ["HTTP_SERVER_TEST_BINARY"] = os.path.join(binary_dir,
+                                                               "http_server")
         run([os.path.join(binary_dir, "run_tests"), "ring"], root)
         run([os.path.join(binary_dir, "run_tests"), "tls"], root)
         run_server_suite(root, binary_dir)
