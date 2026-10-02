@@ -1,0 +1,88 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  sanitizer:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: ASan + UBSan
+            build: build-asan
+            flags: -DENABLE_ASAN=ON -DENABLE_UBSAN=ON
+          - name: TSan
+            build: build-tsan
+            flags: -DENABLE_TSAN=ON
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -S . -B ${{ matrix.build }} -DCMAKE_BUILD_TYPE=Debug -DENABLE_HARDENING=OFF ${{ matrix.flags }}
+      - name: Build
+        run: cmake --build ${{ matrix.build }} --parallel 2
+      - name: Focused suites
+        run: ./bin/run_tests ring && ./bin/run_tests tls
+      - name: Sandbox/resource E2E
+        run: python3 scripts/phase4_sandbox_resources_test.py
+      - name: Server E2E
+        run: |
+          ./bin/http_server --document-root . >server-ci.log 2>&1 &
+          pid=$!
+          trap 'kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true' EXIT
+          sleep 1
+          ./bin/run_tests server
+      - name: Load smoke
+        run: python3 scripts/http_benchmark.py --start-server --scenario keep-alive-5000 --warmup 1 --duration 2 --concurrency 4
+
+  analysis:
+    name: Static analysis and Valgrind
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install analysis tools
+        run: sudo apt-get update && sudo apt-get install -y clang-tidy valgrind
+      - name: Build
+        run: cmake -S . -B build -DENABLE_HARDENING=OFF && cmake --build build --parallel 2
+      - name: clang-tidy
+        run: cmake --build build --target lint
+      - name: Valgrind ring and close/error paths
+        run: |
+          valgrind --leak-check=full --errors-for-leak-kinds=definite,possible --error-exitcode=99 ./bin/run_tests ring
+          valgrind --leak-check=full --errors-for-leak-kinds=definite,possible --error-exitcode=99 ./bin/http_server --port 8081 --document-root . >valgrind-server.log 2>&1 &
+          pid=$!
+          trap 'kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true' EXIT
+          ready=0
+          for attempt in $(seq 1 120); do
+            if ! kill -0 "$pid" 2>/dev/null; then
+              cat valgrind-server.log
+              exit 1
+            fi
+            if python3 -c 'import socket; s=socket.create_connection(("127.0.0.1", 8081), 0.25); s.close()' 2>/dev/null; then
+              ready=1
+              break
+            fi
+            sleep 0.25
+          done
+          if [ "$ready" -ne 1 ]; then
+            cat valgrind-server.log
+            exit 1
+          fi
+          ./bin/run_tests server
+
+  dependency-scan:
+    name: Dependency vulnerability scan
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google/osv-scanner-action/osv-scanner-action@v2.0.2
+        with:
+          scan-args: |-
+            --recursive
+            ./

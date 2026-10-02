@@ -536,9 +536,9 @@ document-root handling, sandboxing, observability, and a hardened systemd
 deployment. See `plans/production-http-server.md`; its Phase 0 (operational
 safety and overload), Phase 1 (HTTP/1.1 correctness and caching), Phase 2
 (secure document-root serving), and Phase 3 (TLS termination) are complete.
-Phase 4 (sandboxing and robustness) has begun: compiler/linker hardening and
-privilege drop are done, with the OS sandbox, per-IP resource controls, fuzzing,
-and sanitizer builds left for later. Phase 5 (observability and operations) adds
+Phase 4 (sandboxing and robustness) is in progress: compiler/linker hardening,
+privilege drop, OS sandboxing, per-IP resource controls, fuzzing, and sanitizer
+CI infrastructure are implemented. Phase 5 (observability and operations) adds
 the Prometheus endpoint, health/readiness probes, request IDs, and a widened
 `SIGHUP` reload — see `docs/runbooks/observability-and-reload.md`. Phase 6
 capacity validation has begun with the deterministic file-class corpus and the

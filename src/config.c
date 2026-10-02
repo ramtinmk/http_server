@@ -51,6 +51,9 @@ static const CfgKey CFG_KEYS[] = {
       0, 1024, INT_MAX, ENV_MAX_INPUT_BUFFER_BYTES },
     { "header_read_timeout",     CFG_INT,      CFG_OFF(header_read_timeout_sec),
       0, 1, 86400, ENV_HEADER_READ_TIMEOUT },
+    { "header_progress_timeout", CFG_INT,
+      CFG_OFF(header_progress_timeout_sec), 0, 1, 86400,
+      ENV_HEADER_PROGRESS_TIMEOUT },
     { "idle_timeout",            CFG_INT,      CFG_OFF(idle_timeout_sec),
       0, 1, 86400, ENV_IDLE_TIMEOUT },
     { "write_timeout",           CFG_INT,      CFG_OFF(write_timeout_sec),
@@ -88,6 +91,17 @@ static const CfgKey CFG_KEYS[] = {
       CFG_SIZE(run_user), 0, 0, ENV_RUN_USER },
     { "run_group",               CFG_STRING,   CFG_OFF(run_group),
       CFG_SIZE(run_group), 0, 0, ENV_RUN_GROUP },
+    { "landlock",                CFG_BOOL,     CFG_OFF(landlock_enabled),
+      0, 0, 1, ENV_LANDLOCK },
+    { "seccomp",                 CFG_BOOL,     CFG_OFF(seccomp_enabled),
+      0, 0, 1, ENV_SECCOMP },
+    { "per_ip_connections",      CFG_INT,      CFG_OFF(per_ip_connections),
+      0, 0, INT_MAX, ENV_PER_IP_CONNECTIONS },
+    { "per_ip_requests_per_minute", CFG_INT,
+      CFG_OFF(per_ip_requests_per_minute), 0, 0, INT_MAX,
+      ENV_PER_IP_REQUESTS_PER_MINUTE },
+    { "rlimit_nproc",            CFG_INT,      CFG_OFF(rlimit_nproc),
+      0, 0, INT_MAX, ENV_RLIMIT_NPROC },
     { "observability",           CFG_BOOL,     CFG_OFF(observability_enabled),
       0, 0, 1, ENV_OBSERVABILITY },
     { "syslog",                  CFG_BOOL,     CFG_OFF(syslog_enabled), 0, 0, 1,
@@ -111,6 +125,7 @@ void config_defaults(ServerConfig *cfg)
     cfg->max_keepalive_requests   = MAX_KEEPALIVE_REQUESTS;
     cfg->max_input_buffer_bytes   = MAX_INPUT_BUFFER_BYTES;
     cfg->header_read_timeout_sec  = HEADER_READ_TIMEOUT_SEC;
+    cfg->header_progress_timeout_sec = HEADER_PROGRESS_TIMEOUT_SEC;
     cfg->idle_timeout_sec         = IDLE_TIMEOUT_SEC;
     cfg->write_timeout_sec        = WRITE_TIMEOUT_SEC;
     cfg->shutdown_drain_timeout_sec = SHUTDOWN_DRAIN_TIMEOUT_SEC;
@@ -129,6 +144,11 @@ void config_defaults(ServerConfig *cfg)
     cfg->tls_key_file[0]          = '\0';
     cfg->run_user[0]              = '\0';
     cfg->run_group[0]             = '\0';
+    cfg->landlock_enabled         = 0;
+    cfg->seccomp_enabled          = 0;
+    cfg->per_ip_connections       = 0;
+    cfg->per_ip_requests_per_minute = 0;
+    cfg->rlimit_nproc             = 0;
     cfg->observability_enabled    = 0;
     cfg->syslog_enabled           = 0;
     snprintf(cfg->metrics_path, sizeof(cfg->metrics_path), "%s",

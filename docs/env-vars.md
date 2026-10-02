@@ -33,6 +33,7 @@ out-of-range value is fatal and names the exact key (for example
 | `max_keepalive_requests` / `HTTP_SERVER_MAX_KEEPALIVE_REQUESTS` | `MAX_KEEPALIVE_REQUESTS` (100) | Requests per connection before the server forces `Connection: close`. |
 | `max_input_buffer_bytes` / `HTTP_SERVER_MAX_INPUT_BUFFER_BYTES` | `MAX_INPUT_BUFFER_BYTES` (65536) | Per-connection buffered request cap; exceeded → `413`. |
 | `header_read_timeout` / `HTTP_SERVER_HEADER_READ_TIMEOUT` | `HEADER_READ_TIMEOUT_SEC` (5) | Seconds to deliver complete headers after accept. |
+| `header_progress_timeout` / `HTTP_SERVER_HEADER_PROGRESS_TIMEOUT` | `HEADER_PROGRESS_TIMEOUT_SEC` (2) | Maximum seconds between header bytes while reading a request. |
 | `idle_timeout` / `HTTP_SERVER_IDLE_TIMEOUT` | `IDLE_TIMEOUT_SEC` (30) | Keep-alive idle seconds between requests. |
 | `write_timeout` / `HTTP_SERVER_WRITE_TIMEOUT` | `WRITE_TIMEOUT_SEC` (10) | Seconds to drain a full response. |
 | `shutdown_drain_timeout` / `HTTP_SERVER_SHUTDOWN_DRAIN_TIMEOUT` | `SHUTDOWN_DRAIN_TIMEOUT_SEC` (10) | Seconds `SIGTERM`/`SIGINT` may spend draining in-flight responses. |
@@ -51,6 +52,11 @@ out-of-range value is fatal and names the exact key (for example
 | `tls_key_file` / `HTTP_SERVER_TLS_KEY` | unset | PEM private key. Required when `tls=1`; `SIGHUP` reloads it without dropping connections. |
 | `run_user` / `HTTP_SERVER_RUN_USER` | unset | User (name or numeric uid) to drop to after all listeners are bound. Invalid value is fatal, naming the key. |
 | `run_group` / `HTTP_SERVER_RUN_GROUP` | unset (user's primary gid) | Group (name or numeric gid) to drop to. Requires starting as root unless it equals the current gid. |
+| `landlock` / `HTTP_SERVER_LANDLOCK` | `0` | Enable the Linux filesystem allowlist; unsupported kernels fail closed. |
+| `seccomp` / `HTTP_SERVER_SECCOMP` | `0` | Enable the architecture-specific syscall allowlist; installation errors fail closed. |
+| `per_ip_connections` / `HTTP_SERVER_PER_IP_CONNECTIONS` | `0` | Per-IP active connection cap; zero disables it. |
+| `per_ip_requests_per_minute` / `HTTP_SERVER_PER_IP_REQUESTS_PER_MINUTE` | `0` | Per-IP fixed one-minute request cap; zero disables it. Limited connections close before a response is queued. |
+| `rlimit_nproc` / `HTTP_SERVER_RLIMIT_NPROC` | `0` | Optional `RLIMIT_NPROC` soft/hard cap; zero leaves it unchanged. Core dumps are always disabled. |
 | `observability` / `HTTP_SERVER_OBSERVABILITY` | `0` | When `1`, serve the Prometheus `/metrics` endpoint and the health/readiness probes on the data listeners. |
 | `metrics_path` / `HTTP_SERVER_METRICS_PATH` | `METRICS_PATH_DEFAULT` (`/metrics`) | Prometheus exposition path (max `OBS_PATH_MAX-1` bytes). |
 | `health_path` / `HTTP_SERVER_HEALTH_PATH` | `HEALTH_PATH_DEFAULT` (`/healthz`) | Liveness probe path; always `200` while the process serves. |
@@ -128,6 +134,7 @@ the compiled default without a rebuild.
 | `HEADER_READ_TIMEOUT_SEC`    | 5       | Time to deliver complete request headers after accept. |
 | `IDLE_TIMEOUT_SEC`           | 30      | Keep-alive idle time between requests. |
 | `WRITE_TIMEOUT_SEC`          | 10      | Time to drain a full response to the socket. |
+| `HEADER_PROGRESS_TIMEOUT_SEC` | 2      | Maximum gap between bytes while reading request headers. |
 | `SHUTDOWN_DRAIN_TIMEOUT_SEC` | 10      | Default drain deadline on `SIGTERM`/`SIGINT`. |
 | `LOG_POLL_INTERVAL_MS`       | 200     | Log-writer poll tick (ms); bounds `SIGHUP` reopen latency. |
 | `REQUIRED_NOFILE_HEADROOM`   | 64      | Non-connection descriptors reserved above capacity. |
@@ -138,6 +145,8 @@ the compiled default without a rebuild.
 | `EL_ACCEPT_BATCH_SIZE`       | 64      | Maximum accepted sockets handled per listener event dispatch; bounds overload rejection work before the loop services other events. |
 | `EL_DEADLINE_SCAN_MS`        | 100     | Deadline-scanner interval (ms). |
 | `EL_MAX_CONNECTION_TABLE`    | 65536   | Hard upper bound on the runtime connection table. |
+| `EL_OUTPUT_BACKPRESSURE_DEPTH` | 4     | Pause reads once this many responses are queued. |
+| `PER_IP_LIMIT_TABLE_SIZE`    | 4096    | Bounded per-IP accounting entries; active entries are not evicted. |
 | `MALLOC_ARENA_MAX_DEFAULT`   | 2       | Default glibc arena cap when no env override/preset. |
 
 ### Overriding compile-time limits

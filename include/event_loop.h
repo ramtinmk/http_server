@@ -59,6 +59,7 @@ typedef struct ELConnection {
 
     /* Monotonic deadline (CLOCK_MONOTONIC) */
     struct timespec deadline;
+    struct timespec header_progress_deadline;
 
     /* TLS session, or NULL for a plaintext connection. Owned exclusively. */
     SSL            *ssl;

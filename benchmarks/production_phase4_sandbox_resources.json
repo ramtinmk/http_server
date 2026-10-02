@@ -1,0 +1,69 @@
+{
+  "backpressure": {
+    "pipeline_depth": 8,
+    "responses": 8
+  },
+  "failures": [],
+  "landlock": {
+    "http_status": "200",
+    "options": [
+      "--landlock",
+      "1"
+    ],
+    "status": {
+      "NoNewPrivs": "1",
+      "Seccomp": "0"
+    }
+  },
+  "landlock_seccomp": {
+    "http_status": "200",
+    "options": [
+      "--landlock",
+      "1",
+      "--seccomp",
+      "1"
+    ],
+    "status": {
+      "NoNewPrivs": "1",
+      "Seccomp": "2"
+    }
+  },
+  "passed": true,
+  "per_ip_connections": {
+    "limit": 1,
+    "second_response": "HTTP/1.1 503 Service Unavailable\r\nServer: SimpleHTTPServer/1.0\r\n"
+  },
+  "platform": "linux",
+  "rlimits": {
+    "core_limit": [
+      "0",
+      "0"
+    ],
+    "http_status": "200",
+    "nproc_limit": [
+      "4096",
+      "4096"
+    ],
+    "rlimit_nproc": 4096
+  },
+  "seccomp": {
+    "http_status": "200",
+    "options": [
+      "--seccomp",
+      "1"
+    ],
+    "status": {
+      "NoNewPrivs": "1",
+      "Seccomp": "2"
+    }
+  },
+  "slowloris": {
+    "closed": true,
+    "progress_timeout": 1
+  },
+  "systemd_unit": {
+    "missing": [],
+    "path": "/home/ramtinmk/http_server_C/deploy/http-server.service",
+    "static_valid": true
+  }
+}

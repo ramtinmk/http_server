@@ -1,0 +1,6 @@
+POST /home HTTP/1.1
+Host: fuzz
+Content-Length: 1
+Connection: close
+
+x

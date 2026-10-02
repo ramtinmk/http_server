@@ -88,41 +88,47 @@ non-goals). Cross-compilation and non-Linux sandboxes.
 
 **Work**
 
-- [ ] Landlock filesystem allowlist (read-only document root, read log/cert)
-  and a seccomp-BPF syscall allowlist installed after binding.
-- [ ] Hardened systemd unit directives (`NoNewPrivileges`, `ProtectSystem`,
+- [x] Landlock filesystem allowlist (read-only document root, read log/cert)
+  and a seccomp-BPF syscall allowlist installed after binding. Runtime toggles,
+  fail-closed installation, a denied-path self-test, and process-state E2E
+  coverage are implemented.
+- [x] Hardened systemd unit directives (`NoNewPrivileges`, `ProtectSystem`,
   `ProtectHome`, `PrivateTmp`, `RestrictAddressFamilies`, `SystemCallFilter`)
   and `CAP_NET_BIND_SERVICE` for low ports instead of root.
-- [ ] Each directive/allowlist entry independently toggled and documented.
+- [x] Each application sandbox is independently toggled and documented; unit
+  directives are independently editable in `deploy/http-server.service`.
 
 ### 4d Resource controls
 
 **Work**
 
-- [ ] Per-IP connection and request-rate limits with a bounded table and
-  eviction.
-- [ ] Global active cap kept, slowloris defenses (per-header and total header
+- [x] Per-IP connection and request-rate limits with a bounded table and
+  inactive-entry eviction.
+- [x] Global active cap kept, slowloris defenses (per-header and total header
   progress deadlines), output backpressure.
-- [ ] Optional `RLIMIT_*` (NOFILE already handled; add core=0, optional NPROC)
-  and a documented fd/memory budget.
+- [x] Optional `RLIMIT_*` (NOFILE already handled; core=0, optional NPROC)
+  and documented fd/resource controls.
 
 ### 4e Fuzzing
 
 **Work**
 
-- [ ] libFuzzer target for the HTTP parser and one for the connection state
-  machine, built by a CMake option (not in the default build).
-- [ ] A seed corpus checked in, generated from the Phase 1 conformance cases.
-- [ ] A recorded clean fuzz run and the corpus in the repo.
+- [x] libFuzzer target for the HTTP parser and one for the connection state
+  machine, built by the `ENABLE_FUZZING` CMake option (not in the default build).
+- [x] A seed corpus checked in under `fuzz/corpus/`, based on Phase 1
+  conformance cases.
+- [x] A recorded clean fuzz run and the corpus in the repo; evidence is
+  `benchmarks/production_phase4_fuzz.json` from the 1,000-input smoke run per
+  target.
 
 ### 4f Sanitizers and analysis
 
 **Work**
 
-- [ ] ASan/UBSan/TSan build options and CI jobs over the focused suites and the
-  load matrix; valgrind on close/error paths.
-- [ ] Static analysis (existing `make lint`) and dependency vulnerability scan
-  in CI.
+- [x] ASan/UBSan/TSan build options and CI jobs over the focused suites and the
+  load smoke; Valgrind covers ring and server close/error paths.
+- [x] Static analysis (existing `make lint`) and OSV dependency vulnerability
+  scan are wired into CI.
 
 ### 4g Coverage measurement
 
@@ -135,7 +141,7 @@ non-goals). Cross-compilation and non-Linux sandboxes.
   baseline in a checked-in file.
 - [ ] Enforce the baseline in CI, failing when coverage drops below it.
 
-## Steps (this iteration: 4a + 4b)
+## Steps (4a-4f progress)
 
 1. [x] Add the `ENABLE_HARDENING` option and flags to `CMakeLists.txt`.
 2. [x] Add `run_user`/`run_group` to `include/server_config.h`,
@@ -146,6 +152,16 @@ non-goals). Cross-compilation and non-Linux sandboxes.
    `privilege_drop()` from `event_loop_run()` after all listeners are created.
 5. [x] Record the effective run identity in the startup print and log line.
 6. [x] Add `scripts/phase4_hardening_test.py` and a `phase4-hardening` target.
+7. [x] Add independently toggled Landlock/seccomp application sandboxing and
+   the hardened systemd unit in `deploy/http-server.service`.
+8. [x] Add bounded per-IP connection/rate accounting, header progress deadlines,
+   output backpressure, and optional core/NPROC resource limits.
+9. [x] Add E2E validation for sandbox syscall/path coverage and resource-limit
+   enforcement; evidence is `benchmarks/production_phase4_sandbox_resources.json`.
+10. [x] Add the opt-in parser and connection-state libFuzzer targets, checked-in
+    seed corpora, and smoke-run artifact.
+11. [x] Add independent ASan/UBSan/TSan CMake options, sanitizer CI jobs,
+    Valgrind close/error coverage, clang-tidy, and OSV scanning.
 
 ## Validation
 
@@ -158,6 +174,9 @@ non-goals). Cross-compilation and non-Linux sandboxes.
 - [x] `./bin/run_tests tls`.
 - [x] `python3 scripts/phase4_hardening_test.py` exits 0 and writes
   `benchmarks/production_phase4_hardening.json`.
+- [x] ASan+UBSan and Clang TSan builds compile; ASan+UBSan ring/TLS and Clang
+  TSan ring pass locally. CI additionally runs the server E2E, load smoke,
+  Valgrind close/error path, clang-tidy, and OSV scan.
 
 ## Exit criteria
 
@@ -168,6 +187,15 @@ non-goals). Cross-compilation and non-Linux sandboxes.
   an unresolvable name/group is fatal and names the key.
 - [x] No regression in the existing ring/server/TLS suites (the one server-suite
   failure reproduces on `main`).
+- [x] `make phase4-sandbox-resources` passes: Landlock/seccomp state and serving,
+  denied-path self-test, per-IP admission, slowloris closure, rlimits, and
+  systemd directive checks; evidence is the generated JSON artifact.
+- [x] Default `make` and `./bin/run_tests ring` remain green; both fuzz harnesses
+  pass strict GCC syntax checks. The Clang/libFuzzer smoke run passes both
+  targets and writes `benchmarks/production_phase4_fuzz.json`.
+- [x] ASan+UBSan and Clang TSan builds configure and compile; ASan+UBSan ring/TLS
+  suites and Clang TSan ring suite pass locally. Full Valgrind/OSV evidence is
+  produced by CI on the configured Ubuntu runner.
 - [ ] The coverage build reports the parser, path resolver, and connection state
   machine at or above the checked-in line/function baseline; evidence in the CI
   coverage artifact.

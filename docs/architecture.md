@@ -36,6 +36,8 @@ invariants must hold when you change the code.
 | `src/tls.c`                 | OpenSSL context/policy (TLS 1.2+, ALPN `http/1.1`), cert/key load, permission check, `SIGHUP` reload |
 | `src/path_resolver.c`       | Safe document-root path resolution (percent-decode, normalize, `openat2`/`O_NOFOLLOW`), directory index, MIME map |
 | `src/privilege.c`           | Resolves `run_user`/`run_group` and drops to them after binding; `no_new_privs` + non-dumpable hardening |
+| `src/sandbox.c`             | Optional Linux Landlock filesystem rules and seccomp-BPF syscall allowlist |
+| `src/client_limits.c`       | Bounded per-IP connection/request accounting with inactive LRU eviction |
 | `src/file_cache.c`          | Bounded, ref-counted LRU cache of identity/gzip representations |
 | `src/log.c`                 | Leveled JSON access/error logging; nonblocking pipe + writer thread; `SIGHUP` reopen + log-level reload; optional syslog mirror |
 | `src/sd_notify.c`           | Dependency-free `sd_notify` (`READY`/`STOPPING`) over `$NOTIFY_SOCKET` |
@@ -290,7 +292,24 @@ Close reasons are enumerated in `ELCloseReason` (`include/event_loop.h:21`).
 - The drop is irreversible: saved ids are overwritten, so a post-compromise
   process cannot regain the original identity. Files the request path or
   `SIGHUP` reload must open (document root, log, certificate) therefore must be
-  readable by `run_user`.
+ readable by `run_user`.
+
+### OS sandbox and resource controls
+
+- `landlock=1` installs a read-only filesystem allowlist for the document root,
+  configuration, certificate material, and procfs sampling; configured log and
+  metrics paths receive only the write rights they require. `seccomp=1`
+  installs an architecture-specific syscall allowlist. Both are off by default
+  and an enabled feature fails startup when unsupported.
+- `per_ip_connections` and `per_ip_requests_per_minute` use a bounded table.
+  Entries with active connections cannot be evicted; an unseen address is
+  rejected when every table entry is active.
+- Header reads have an absolute `header_read_timeout` and a
+  `header_progress_timeout` reset on each received byte. The loop pauses
+  `EPOLLIN` at `EL_OUTPUT_BACKPRESSURE_DEPTH` queued responses and resumes after
+  output drains. `RLIMIT_CORE` is always zero and `rlimit_nproc` is optional.
+- `deploy/http-server.service` provides the systemd baseline for filesystem,
+  address-family, capability, syscall, and resource restrictions.
 
 ## Observability and operations (Phase 5)
 

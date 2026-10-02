@@ -54,6 +54,12 @@ each harness: `../docs/runbooks/reproduce-a-benchmark.md`.
   (PIE, full RELRO, NX stack, stack protector, `_FORTIFY_SOURCE`), `run_user`/
   `run_group` validation, and a real drop to the configured identity;
   `../benchmarks/production_phase4_hardening.json`.
+- `phase4_sandbox_resources_test.py` — Phase 4 sandbox/resource E2E acceptance:
+  Landlock/seccomp process state and serving, per-IP admission, slowloris
+  closure, rlimits, and static systemd-unit checks;
+  `../benchmarks/production_phase4_sandbox_resources.json`.
+- `fuzz_smoke.py` — runs the opt-in libFuzzer targets over the checked-in seed
+  corpus and records `../benchmarks/production_phase4_fuzz.json`.
 - `startup_failfast_test.py` — missing static asset must fail startup.
 - `memory_soak.py` — stationary keep-alive RSS/PSS drift gate.
 - `wrk_benchmark.py` / `wrk_pipeline.lua` — raw `wrk` sweeps (needs `wrk`).

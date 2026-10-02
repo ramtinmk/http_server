@@ -18,7 +18,11 @@ event loop. Directory-wide rules (build, tests, plans) are in `../AGENTS.md`.
   from `main.c` before binding) and drops to the identity
   (`privilege_drop`, called from `event_loop_run` after every listener exists and
   before any loop thread). Sets all three uids/gids, clears groups, and applies
-  `no_new_privs`/non-dumpable. The drop is irreversible; failures are fatal.
+ `no_new_privs`/non-dumpable. The drop is irreversible; failures are fatal.
+- `sandbox.c` — optional Linux Landlock filesystem rules and seccomp-BPF syscall
+  allowlist. Both are applied after listener setup and fail closed when enabled.
+- `client_limits.c` — bounded, mutex-protected per-IP connection and request
+  accounting; inactive entries may be evicted but active entries are pinned.
 - `config.c` — the single validated configuration surface (defaults < file <
   env < CLI). One `CFG_KEYS` table drives lookup, validation, and usage.
   `config_request_reload()`/`config_reload_if_requested()` re-parse the recorded
