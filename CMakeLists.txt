@@ -55,6 +55,7 @@ option(ENABLE_FUZZING "Build libFuzzer parser and state-machine targets" OFF)
 option(ENABLE_ASAN "Build with AddressSanitizer" OFF)
 option(ENABLE_UBSAN "Build with UndefinedBehaviorSanitizer" OFF)
 option(ENABLE_TSAN "Build with ThreadSanitizer" OFF)
+option(ENABLE_COVERAGE "Build with gcov coverage instrumentation" OFF)
 
 if(ENABLE_ASAN AND ENABLE_TSAN)
     message(FATAL_ERROR "ENABLE_ASAN and ENABLE_TSAN cannot be enabled together")
@@ -77,6 +78,15 @@ if(ENABLE_ASAN OR ENABLE_UBSAN OR ENABLE_TSAN)
     add_compile_options(-g -fno-omit-frame-pointer -fsanitize=${SANITIZER_FLAGS})
     add_link_options(-fsanitize=${SANITIZER_FLAGS})
     message(STATUS "Sanitizers enabled: ${SANITIZER_FLAGS}")
+endif()
+
+if(ENABLE_COVERAGE)
+    if(NOT CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+        message(FATAL_ERROR "Coverage requires a GNU or Clang compiler")
+    endif()
+    add_compile_options(--coverage -O0 -g)
+    add_link_options(--coverage)
+    message(STATUS "Coverage instrumentation enabled")
 endif()
 
 if(ENABLE_HARDENING AND CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
@@ -170,6 +180,19 @@ add_executable(http_server
     ${SERVER_MAIN}
     ${SOURCES}
 )
+
+if(ENABLE_COVERAGE)
+    add_custom_target(coverage
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/phase4_coverage.py
+                --repo-root ${CMAKE_SOURCE_DIR}
+                --build-dir ${CMAKE_BINARY_DIR}
+                --baseline ${CMAKE_SOURCE_DIR}/coverage/phase4_baseline.json
+                --output ${CMAKE_SOURCE_DIR}/benchmarks/production_phase4_coverage.json
+        DEPENDS http_server run_tests
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        USES_TERMINAL
+        COMMENT "Measuring and enforcing Phase 4 coverage")
+endif()
 
 target_link_libraries(http_server PRIVATE 
     Threads::Threads 

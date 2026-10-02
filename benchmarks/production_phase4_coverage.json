@@ -1,0 +1,33 @@
+{
+  "failures": [],
+  "passed": true,
+  "targets": {
+    "connection_state": {
+      "function_percent": 96.0,
+      "functions_covered": 48,
+      "functions_total": 50,
+      "line_percent": 71.70236753100338,
+      "lines_covered": 636,
+      "lines_total": 887,
+      "source": "src/event_loop.c"
+    },
+    "parser": {
+      "function_percent": 89.28571428571429,
+      "functions_covered": 50,
+      "functions_total": 56,
+      "line_percent": 72.6691042047532,
+      "lines_covered": 795,
+      "lines_total": 1094,
+      "source": "src/http_server.c"
+    },
+    "path_resolver": {
+      "function_percent": 82.3529411764706,
+      "functions_covered": 14,
+      "functions_total": 17,
+      "line_percent": 53.02013422818792,
+      "lines_covered": 158,
+      "lines_total": 298,
+      "source": "src/path_resolver.c"
+    }
+  }
+}
