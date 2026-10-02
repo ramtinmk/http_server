@@ -10,6 +10,9 @@ cmake -S . -B /tmp/http-server-coverage \
 cmake --build /tmp/http-server-coverage --target coverage --parallel 2
 ```
 
+Coverage binaries are emitted under the coverage build directory, so a later
+default or sanitizer build cannot overwrite the instrumented executables.
+
 The `coverage` target runs the ring and TLS focused suites plus the server E2E
 suite, merges execution data from the test runner and server binaries, and
 reports line/function coverage for:

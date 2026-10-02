@@ -42,14 +42,14 @@ def wait_for_server(process, port):
     raise RuntimeError("coverage server did not become ready")
 
 
-def run_server_suite(root):
-    server = os.path.join(root, "bin", "http_server")
+def run_server_suite(root, binary_dir):
+    server = os.path.join(binary_dir, "http_server")
     process = subprocess.Popen([server, "--document-root", "."], cwd=root,
                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                text=True)
     try:
         wait_for_server(process, 8081)
-        run([os.path.join(root, "bin", "run_tests"), "server"], root)
+        run([os.path.join(binary_dir, "run_tests"), "server"], root)
     finally:
         if process.poll() is None:
             process.send_signal(signal.SIGTERM)
@@ -185,9 +185,10 @@ def main():
     report = {"targets": {}, "failures": failures}
     try:
         reset_coverage(build_dir)
-        run([os.path.join(root, "bin", "run_tests"), "ring"], root)
-        run([os.path.join(root, "bin", "run_tests"), "tls"], root)
-        run_server_suite(root)
+        binary_dir = os.path.join(build_dir, "bin")
+        run([os.path.join(binary_dir, "run_tests"), "ring"], root)
+        run([os.path.join(binary_dir, "run_tests"), "tls"], root)
+        run_server_suite(root, binary_dir)
         report["targets"] = collect_coverage(root, build_dir)
         with open(baseline_path) as stream:
             baseline = json.load(stream)

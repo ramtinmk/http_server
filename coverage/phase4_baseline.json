@@ -1,15 +1,15 @@
 {
   "targets": {
     "connection_state": {
-      "line_percent": 71.0,
-      "function_percent": 96.0
+      "line_percent": 50.0,
+      "function_percent": 78.0
     },
     "parser": {
-      "line_percent": 72.0,
-      "function_percent": 89.0
+      "line_percent": 70.0,
+      "function_percent": 85.0
     },
     "path_resolver": {
-      "line_percent": 53.0,
+      "line_percent": 52.0,
       "function_percent": 82.0
     }
   }

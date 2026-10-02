@@ -182,6 +182,11 @@ add_executable(http_server
 )
 
 if(ENABLE_COVERAGE)
+    set_target_properties(http_server PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+endif()
+
+if(ENABLE_COVERAGE)
     add_custom_target(coverage
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/phase4_coverage.py
                 --repo-root ${CMAKE_SOURCE_DIR}
@@ -216,6 +221,11 @@ if(TEST_SOURCES)
         ${TEST_SOURCES}   # main_test.c, test_ring_buffer.c, etc.
         ${SOURCES}        # ring_buffer.c, etc. (from src/)
     )
+
+    if(ENABLE_COVERAGE)
+        set_target_properties(run_tests PROPERTIES
+            RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+    endif()
 
     # Allow tests to find header files in tests/ (for test_utils.h)
     target_include_directories(run_tests PRIVATE tests)
