@@ -258,6 +258,42 @@
 #define RUN_USER_MAX 256
 #endif
 
+/* --- Phase 5: observability and operations ------------------------------ */
+
+/*
+ * Default paths for the observability endpoints. They are served only when the
+ * `observability` key is enabled; all three share the data listeners and are
+ * matched before document-root resolution, so an operator who exposes the
+ * server publicly should firewall them or front the port with an ACL.
+ */
+#ifndef METRICS_PATH_DEFAULT
+#define METRICS_PATH_DEFAULT "/metrics"
+#endif
+#ifndef HEALTH_PATH_DEFAULT
+#define HEALTH_PATH_DEFAULT "/healthz"
+#endif
+#ifndef READINESS_PATH_DEFAULT
+#define READINESS_PATH_DEFAULT "/readyz"
+#endif
+
+/* Maximum length (including NUL) of a configurable observability path. */
+#ifndef OBS_PATH_MAX
+#define OBS_PATH_MAX 128
+#endif
+
+/* Hard cap on the rendered Prometheus body. The exposition is fixed-shape, so
+ * this only bounds the buffer a single scrape can request; output past the cap
+ * is truncated rather than allocating more. */
+#ifndef METRICS_PROM_MAX
+#define METRICS_PROM_MAX 65536
+#endif
+
+#define ENV_OBSERVABILITY  "HTTP_SERVER_OBSERVABILITY"
+#define ENV_METRICS_PATH   "HTTP_SERVER_METRICS_PATH"
+#define ENV_HEALTH_PATH    "HTTP_SERVER_HEALTH_PATH"
+#define ENV_READINESS_PATH "HTTP_SERVER_READINESS_PATH"
+#define ENV_SYSLOG         "HTTP_SERVER_SYSLOG"
+
 /* --- Event loop --------------------------------------------------------- */
 
 /* Maximum accepted sockets processed by one listener event dispatch. Under

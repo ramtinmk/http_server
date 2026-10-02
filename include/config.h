@@ -57,6 +57,13 @@ typedef struct ServerConfig {
     char     run_user[RUN_USER_MAX];     /* empty: keep invoking uid */
     char     run_group[RUN_USER_MAX];    /* empty: user's primary gid */
 
+    /* Phase 5: observability and operations */
+    int      observability_enabled;      /* 0/1; serve metrics/health/ready */
+    int      syslog_enabled;             /* 0/1; mirror log records to syslog */
+    char     metrics_path[OBS_PATH_MAX]; /* Prometheus endpoint path */
+    char     health_path[OBS_PATH_MAX];  /* liveness endpoint path */
+    char     readiness_path[OBS_PATH_MAX]; /* readiness endpoint path */
+
     /* Resolved input provenance (for the startup record); not operator-set. */
     char     config_path[4096];
     int      help_requested;
@@ -78,6 +85,20 @@ int config_load(ServerConfig *cfg, int argc, char **argv);
 
 /* Print the accepted key list and CLI usage to stdout. */
 void config_print_usage(void);
+
+/*
+ * SIGHUP-driven reload of the safe runtime subset. `config_request_reload()`
+ * sets an async-signal-safe flag from the handler; the event loop calls
+ * `config_reload_if_requested()` outside signal context. The latter re-parses
+ * the sources recorded by `config_set_reload_args()` (file + env + CLI) into
+ * `out` and returns 1 when a configuration was loaded, 0 when none was
+ * requested, and -1 when the new configuration is invalid (the previous one
+ * stays in effect). Only additive, live-safe fields are applied by the caller
+ * (currently the log level).
+ */
+void config_request_reload(void);
+void config_set_reload_args(int argc, char **argv);
+int  config_reload_if_requested(ServerConfig *out);
 
 /* Human-readable name for a log level ("error"/"warn"/"info"/"debug"). */
 const char *log_level_name(LogLevel level);

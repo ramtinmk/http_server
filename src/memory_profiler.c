@@ -199,4 +199,12 @@ size_t memory_profiler_append_json(char *buf, size_t cap, size_t off)
     return off + (size_t)n;
 }
 
+void memory_profiler_get(long *rss_kb, long *vmsize_kb)
+{
+    if (rss_kb)
+        *rss_kb = LOAD(g_rss_kb);
+    if (vmsize_kb)
+        *vmsize_kb = LOAD(g_vmsize_kb);
+}
+
 #undef LOAD

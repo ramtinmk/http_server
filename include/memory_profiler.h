@@ -35,4 +35,12 @@ void memory_profiler_sample(void);
  */
 size_t memory_profiler_append_json(char *buf, size_t cap, size_t off);
 
+/*
+ * Read the last cached sample for a consumer that needs raw values rather than
+ * a JSON fragment (the Prometheus endpoint). Writes the resident and virtual
+ * sizes in kB; either pointer may be NULL. The values are whatever the reporter
+ * last published (zero when no reporter thread has sampled yet).
+ */
+void memory_profiler_get(long *rss_kb, long *vmsize_kb);
+
 #endif /* MEMORY_PROFILER_H */
