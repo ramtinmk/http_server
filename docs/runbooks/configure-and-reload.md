@@ -36,6 +36,12 @@ tls = 1
 tls_port = 8443
 tls_cert_file = /etc/http_server/tls/cert.pem
 tls_key_file = /etc/http_server/tls/key.pem
+# Phase 5 observability (optional); keep the paths clear of real assets.
+observability = 1
+metrics_path = /metrics
+health_path = /healthz
+readiness_path = /readyz
+syslog = 0
 ```
 
 Keys may be written with `-` or `_`; they map to the same field.
@@ -55,8 +61,10 @@ recorded as an `effective_config` JSON record in the log.
 
 ## 3. Apply changes
 
-- Startup-only settings (ports, capacity, timeouts, keep-alive limit, logging
-  level/target): restart or `systemctl restart`.
+- Startup-only settings: ports, capacity, timeouts, keep-alive limit, document
+  root, TLS listener toggle, and the observability paths/flags. Change these and
+  restart (`systemctl restart`). Per-connection timeouts are not reloadable
+  because existing connections already hold their deadlines.
 - Log file rotation: `SIGHUP` reopens `log_file` in place without dropping
   connections (for example after `logrotate`).
 - TLS certificate rotation: replace `tls_cert_file`/`tls_key_file` in place and
@@ -65,7 +73,12 @@ recorded as an `effective_config` JSON record in the log.
   keeps the previous certificate and logs an error, so rotate by writing the new
   files and then signalling, never by removing them first. The private key must
   stay non-world-readable (`chmod 600`).
-- Configuration is *not* reloaded by `SIGHUP`; a config change needs a restart.
+- Log level: `SIGHUP` re-reads the configuration surface and applies the new
+  `log_level` live; no restart and no dropped connections. Any other changed key
+  is re-parsed but ignored (startup-only). A malformed configuration makes the
+  reload fail and keeps the previous level.
+- `SIGHUP` never reloads capacity, timeouts, or the observability endpoints; use
+  a restart for those.
 
 ## 4. Stop cleanly
 
@@ -77,9 +90,13 @@ launched by systemd (`Type=notify`, `NOTIFY_SOCKET` set) the server sends
 ## 5. Verify
 
 ```bash
-make phase0-lifecycle     # invalid-config rejection + SIGTERM drain
-make phase3-tls           # TLS handshake/cipher/ALPN, bodies, SIGHUP cert reload
+make phase0-lifecycle       # invalid-config rejection + SIGTERM drain
+make phase3-tls             # TLS handshake/cipher/ALPN, bodies, SIGHUP cert reload
+make phase5-observability   # metrics scrape, request IDs, SIGHUP keeps connections
 ```
+
+For the observability surface specifically, see
+`docs/runbooks/observability-and-reload.md`.
 
 See also `docs/runbooks/change-a-limit.md` for adding a new limit to the
 surface.

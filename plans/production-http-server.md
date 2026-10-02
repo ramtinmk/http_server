@@ -5,7 +5,7 @@ category: program
 status: active
 owner: agent
 created: 2026-09-25
-updated: 2026-10-01
+updated: 2026-10-02
 related: [scaling-plan, scaling-phase-5-os-tuning, scaling-phase-4-scale-accept, hardware-agnostic-benchmark, formally-verify-c-http-server-with-lean]
 ---
 
@@ -140,11 +140,15 @@ Legend: `[x]` done, `[~]` partial, `[ ]` pending, `[!]` blocked.
   `benchmarks/production_phase3_tls.json`.
 - [~] Phase 4 `production-http-server/phase-4`: sandboxing and robustness in
   progress (compiler hardening and privilege drop done; OS sandbox, per-IP
-  controls, fuzzing, and sanitizers remain). See
+  controls, fuzzing, and sanitizers deferred). See
   `plans/production-http-server-phase4.md`.
-- [ ] Phase 5 `production-http-server/phase-5`: observability and operations.
-- [ ] Phase 6 `production-http-server/phase-6`: deployment, CI, and capacity
-  validation.
+- [~] Phase 5 `production-http-server/phase-5`: observability and operations
+  implemented (Prometheus endpoint, latency histogram, health/readiness,
+  request IDs, syslog, and `SIGHUP` log-level/cert/log reload). Evidence in
+  `benchmarks/production_phase5_observability.json`. See
+  `plans/production-http-server-phase5.md`.
+- [ ] Phase 6 `production-http-server/phase-6`: deployment, CI, reproducible
+  build, repository hygiene, and capacity validation.
 
 ## Phases
 
@@ -353,6 +357,10 @@ Legend: `[x]` done, `[~]` partial, `[ ]` pending, `[!]` blocked.
   machine; a seed corpus from the conformance cases.
 - [ ] Sanitizers and analysis: ASan/UBSan/TSan CI builds, valgrind on
   close/error paths, static analysis, and dependency vulnerability scanning.
+- [ ] Coverage measurement: an instrumented build (`--coverage`/`gcov` or
+  `llvm-cov`) over the unit and e2e suites, a reported line/function baseline for
+  the parser, path resolver, and connection state machine, and a checked-in
+  threshold that CI enforces.
 - [x] Compiler hardening flags (PIE, full RELRO, `-D_FORTIFY_SOURCE=2`, stack
   protector, `-fstack-clash-protection`) behind `ENABLE_HARDENING`, verified by
   `readelf` in `benchmarks/production_phase4_hardening.json`.
@@ -363,6 +371,9 @@ Legend: `[x]` done, `[~]` partial, `[ ]` pending, `[!]` blocked.
   corpus is checked in.
 - [ ] ASan/UBSan/TSan are clean under the load matrix; no leaks across
   connect/disconnect, timeout, and partial-write paths.
+- [ ] The coverage build reports the parser, path resolver, and connection state
+  machine at or above the checked-in line/function baseline; evidence in the CI
+  coverage artifact.
 - [ ] The hardened unit starts and serves with the sandbox active; per-IP limits
   are proven by a test that opens more than the allowed connections.
 
@@ -376,22 +387,30 @@ Legend: `[x]` done, `[~]` partial, `[ ]` pending, `[!]` blocked.
 
 **Work**
 
-- [ ] Prometheus `/metrics` with latency histograms, throughput, error classes,
+- [x] Prometheus `/metrics` with latency histograms, throughput, error classes,
   connection/TLS/cache counters, separate from the internal snapshot format.
-- [ ] Structured JSON access/error logs with a request ID; log reopen and
+  Gated by `observability`; paths configurable.
+- [x] Structured JSON access/error logs with a request ID; log reopen and
   optional syslog; document fields.
-- [ ] Health and readiness endpoints distinct from the data path; lifecycle
-  logging correlates with systemd notify.
-- [ ] Runtime reload via `SIGHUP` for certs, log files, and safe tunables
-  (timeouts, limits); document exactly what is reloadable.
-- [ ] Document alert thresholds and a minimal dashboard.
+- [x] Health and readiness endpoints on the data listeners; lifecycle logging
+  correlates with systemd notify.
+- [~] Runtime reload via `SIGHUP` for certs, log files, and safe tunables. Certs,
+  log reopen, and a new `log_level` are reloadable now; per-connection timeouts
+  and limits remain restart-only (documented) and are a follow-up.
+- [x] Document alert thresholds and a minimal dashboard
+  (`docs/runbooks/observability-and-reload.md`).
 
 **Exit criteria**
 
-- [ ] A scrape returns valid metrics with the documented names; request IDs
-  correlate a log line to its metrics/latency.
-- [ ] `SIGHUP` reload drops zero connections and applies the new settings.
-- [ ] Health/readiness change correctly during start and shutdown.
+- [x] A scrape returns valid metrics with the documented names; request IDs
+  correlate a response to its log line and latency. Evidence:
+  `benchmarks/production_phase5_observability.json`.
+- [x] `SIGHUP` reload drops zero connections and applies the new log level.
+  Evidence: the `reload` block of the same artifact.
+- [~] Health serves while accepting and stops during shutdown; `/readyz` is 200
+  while accepting and the probe fails once the drain begins (observed as
+  connection-refused because the listener is removed). Evidence: `health` /
+  `lifecycle` blocks.
 
 ### production-http-server/phase-6: Deployment, CI, and capacity validation
 
@@ -405,8 +424,18 @@ Legend: `[x]` done, `[~]` partial, `[ ]` pending, `[!]` blocked.
 - [ ] Hardened systemd unit (sandbox directives, `LimitNOFILE`, restart policy,
   `Type=notify`), install/uninstall targets, default config under `/etc`,
   `logrotate` and `tmpfiles` snippets.
-- [ ] CI: build matrix, unit/e2e suites, fuzz smoke, sanitizer jobs, and a
-  smoke benchmark gate tied to a checked-in baseline.
+- [ ] CI: build matrix, unit/e2e suites, fuzz smoke, sanitizer jobs, coverage
+  artifact, and a smoke benchmark gate tied to a checked-in baseline. Replace the
+  autotools `./configure`/`make distcheck` workflow stub with a CMake
+  `cmake -S . -B . && make` + `ctest` job that actually builds and tests.
+- [ ] Reproducible build: replace `file(GLOB ...)` source discovery with an
+  explicit source list (a new `src/*.c` then fails loudly instead of silently
+  not building), pin the toolchain and `zlib`/OpenSSL versions in CI, and record
+  the resolved dependency versions in the build artifact.
+- [ ] Release and repository hygiene: add a `LICENSE`, a `CHANGELOG`, and a
+  `CONTRIBUTING`; bump the `project(... VERSION)` off the hardcoded `1.0`; and
+  remove committed build outputs from the tree (the root `test` ELF and
+  `server.log`) with `.gitignore` coverage so they cannot recur.
 - [ ] Capacity report: fixed-rate runs at and above capacity, TLS runs, and a
   multi-hour soak with RSS/FD drift evidence.
   - [x] Deterministic file-class corpus (`scripts/benchmark_corpus.py`,
@@ -426,6 +455,8 @@ Legend: `[x]` done, `[~]` partial, `[ ]` pending, `[!]` blocked.
   survives a reboot.
 - [ ] CI gates are green and a regression in throughput or correctness fails
   the pipeline.
+- [ ] No build outputs are tracked (`git ls-files` reports no compiled binary or
+  log) and `LICENSE`/`CHANGELOG`/`CONTRIBUTING` exist.
 - [ ] The soak artifact shows RSS and FD drift within 5% over the final 80% of a
   multi-hour run.
 - [ ] The capacity report is published and the `scaling-plan` acceptance
@@ -435,11 +466,14 @@ Legend: `[x]` done, `[~]` partial, `[ ]` pending, `[!]` blocked.
 
 These must remain green for any phase to merge or proceed:
 
+- CI builds and tests the tree with the documented CMake commands and `ctest`;
+  the workflow must never invoke a build command that does not exist.
 - Build, lint, and the focused unit suites (`ring`, `thread_pool`) and server
   e2e suite per `AGENTS.md`.
 - The `scaling-plan` correctness and regression gates.
 - No new compile warnings under the project warning flags.
-- Fuzz smoke and ASan/UBSan clean (from Phase 4 onward).
+- Fuzz smoke and ASan/UBSan clean, and coverage at or above the checked-in
+  baseline (from Phase 4 onward).
 - Overload contract (zero timeouts, bounded `503`) and graceful-shutdown
   contract (no truncated responses).
 - Traversal corpus (from Phase 2 onward).
@@ -453,9 +487,12 @@ Program completion requires all of:
 - [ ] HTTPS serving of a document root with correct caching/range semantics and
   a clean TLS scan.
 - [ ] A hardened systemd deployment that survives restart and sandboxing.
-- [ ] Fuzzed, sanitizer-clean parser and state machine.
+- [ ] Fuzzed, sanitizer-clean, coverage-measured parser and state machine.
+- [ ] A CI pipeline that builds, tests, and gates the tree, and a repository
+  with no tracked build outputs and a published license/changelog.
 - [ ] Published capacity report: fixed-rate, above-capacity, TLS, and soak, with
   no regression of the `scaling-plan` 5,000 req/s acceptance.
+- [ ] Reproducible build: explicit source list, pinned toolchain/dependencies.
 - [ ] Operator runbook complete.
 
 ## Risks and rollback
@@ -490,7 +527,8 @@ Program completion requires all of:
 4. Phase 3 — TLS termination; ALPN-ready, HTTP/2 deferred.
 5. Phase 4 — sandboxing, fuzzing, sanitizers, resource controls.
 6. Phase 5 — Prometheus metrics, structured logs, health, reload.
-7. Phase 6 — hardened systemd packaging, CI gates, capacity and soak report.
+7. Phase 6 — hardened systemd packaging, CI gates, reproducible build, release
+   and repository hygiene, capacity and soak report.
 
 Phase 1 may proceed in parallel with Phase 0's logging/config work once the
 overload policy is fixed, because they touch different code paths. Phases 2 and

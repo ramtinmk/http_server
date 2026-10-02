@@ -24,6 +24,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 #include <sys/resource.h>
 
@@ -91,6 +92,9 @@ static void shutdown_signal_handler(int sig)
 {
     (void)sig;
     server_running = 0;
+    /* Fail readiness before the drain so load balancers stop sending work.
+     * Atomic store only; this runs in signal context. */
+    metrics_set_ready(0);
 }
 
 /* --------------------------------------------------------------------------
@@ -147,6 +151,14 @@ static void print_server_config(const ServerConfig *cfg)
            cfg->run_user[0] ? cfg->run_user : "(unchanged)");
     printf("  RUN_GROUP             : %s\n",
            cfg->run_group[0] ? cfg->run_group : "(user's primary)");
+    printf("  OBSERVABILITY         : %s\n",
+           cfg->observability_enabled ? "on" : "off");
+    if (cfg->observability_enabled) {
+        printf("  METRICS_PATH          : %s\n", cfg->metrics_path);
+        printf("  HEALTH_PATH           : %s\n", cfg->health_path);
+        printf("  READINESS_PATH        : %s\n", cfg->readiness_path);
+    }
+    printf("  SYSLOG                : %s\n", cfg->syslog_enabled ? "on" : "off");
     printf("============================\n");
 
     log_msg(LOG_LEVEL_INFO,
@@ -155,7 +167,8 @@ static void print_server_config(const ServerConfig *cfg)
             "header_read_timeout=%d idle_timeout=%d write_timeout=%d "
             "shutdown_drain_timeout=%d log_level=%s access_log=%d "
             "log_file=%s tls=%d tls_port=%d config_file=%s "
-            "run_user=%s run_group=%s",
+            "run_user=%s run_group=%s observability=%d syslog=%d "
+            "metrics_path=%s health_path=%s readiness_path=%s",
             cfg->port, cfg->backlog, cfg->max_connections,
             cfg->max_keepalive_requests, cfg->max_input_buffer_bytes,
             cfg->header_read_timeout_sec, cfg->idle_timeout_sec,
@@ -165,7 +178,9 @@ static void print_server_config(const ServerConfig *cfg)
             cfg->tls_enabled, cfg->tls_port,
             cfg->config_path[0] ? cfg->config_path : "(none)",
             cfg->run_user[0] ? cfg->run_user : "(none)",
-            cfg->run_group[0] ? cfg->run_group : "(none)");
+            cfg->run_group[0] ? cfg->run_group : "(none)",
+            cfg->observability_enabled, cfg->syslog_enabled,
+            cfg->metrics_path, cfg->health_path, cfg->readiness_path);
 }
 
 /*
@@ -522,6 +537,7 @@ static void reload_signal_handler(int sig)
     (void)sig;
     log_request_reopen();
     tls_request_reload();
+    config_request_reload();
 }
 
 int main(int argc, char **argv)
@@ -534,6 +550,9 @@ int main(int argc, char **argv)
         config_print_usage();
         return EXIT_SUCCESS;
     }
+    /* Remember the sources so SIGHUP can re-parse the reloadable subset. */
+    config_set_reload_args(argc, argv);
+    metrics_set_start_time((long long)time(NULL));
 
     /* Bound allocator address-space reservations before any thread exists. */
     if (configure_allocator() != 0)
@@ -638,6 +657,9 @@ int main(int argc, char **argv)
     printf("Dispatch model: epoll event loop (%d loop%s, capacity=%ld).\n",
            el_threads, el_threads == 1 ? "" : "s", capacity);
 
+    metrics_set_ready(1);
+    log_msg(LOG_LEVEL_INFO, "server ready port=%d tls=%d loops=%d capacity=%ld",
+            cfg.port, cfg.tls_enabled, el_threads, capacity);
     if (sd_notify_ready("serving") != 0)
         fprintf(stderr, "WARNING: sd_notify READY failed\n");
 

@@ -5,6 +5,7 @@
 #include <ctype.h>
 #include <errno.h>
 #include <limits.h>
+#include <signal.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -87,6 +88,16 @@ static const CfgKey CFG_KEYS[] = {
       CFG_SIZE(run_user), 0, 0, ENV_RUN_USER },
     { "run_group",               CFG_STRING,   CFG_OFF(run_group),
       CFG_SIZE(run_group), 0, 0, ENV_RUN_GROUP },
+    { "observability",           CFG_BOOL,     CFG_OFF(observability_enabled),
+      0, 0, 1, ENV_OBSERVABILITY },
+    { "syslog",                  CFG_BOOL,     CFG_OFF(syslog_enabled), 0, 0, 1,
+      ENV_SYSLOG },
+    { "metrics_path",            CFG_STRING,   CFG_OFF(metrics_path),
+      CFG_SIZE(metrics_path), 0, 0, ENV_METRICS_PATH },
+    { "health_path",             CFG_STRING,   CFG_OFF(health_path),
+      CFG_SIZE(health_path), 0, 0, ENV_HEALTH_PATH },
+    { "readiness_path",          CFG_STRING,   CFG_OFF(readiness_path),
+      CFG_SIZE(readiness_path), 0, 0, ENV_READINESS_PATH },
 };
 
 #define CFG_KEY_COUNT (sizeof(CFG_KEYS) / sizeof(CFG_KEYS[0]))
@@ -118,6 +129,14 @@ void config_defaults(ServerConfig *cfg)
     cfg->tls_key_file[0]          = '\0';
     cfg->run_user[0]              = '\0';
     cfg->run_group[0]             = '\0';
+    cfg->observability_enabled    = 0;
+    cfg->syslog_enabled           = 0;
+    snprintf(cfg->metrics_path, sizeof(cfg->metrics_path), "%s",
+             METRICS_PATH_DEFAULT);
+    snprintf(cfg->health_path, sizeof(cfg->health_path), "%s",
+             HEALTH_PATH_DEFAULT);
+    snprintf(cfg->readiness_path, sizeof(cfg->readiness_path), "%s",
+             READINESS_PATH_DEFAULT);
     cfg->config_path[0]           = '\0';
     cfg->help_requested           = 0;
 }
@@ -427,6 +446,37 @@ void config_print_usage(void)
            DEFAULT_CONFIG_FILE[0] ? DEFAULT_CONFIG_FILE : "(none)");
     printf("                            env: %s\n", ENV_CONFIG);
     printf("  --help                    this message\n");
+}
+
+/* --- SIGHUP reload ------------------------------------------------------- */
+
+static volatile sig_atomic_t g_reload_requested;
+static int   g_reload_argc;
+static char **g_reload_argv;
+
+void config_request_reload(void)
+{
+    g_reload_requested = 1;
+}
+
+void config_set_reload_args(int argc, char **argv)
+{
+    g_reload_argc = argc;
+    g_reload_argv = argv;
+}
+
+int config_reload_if_requested(ServerConfig *out)
+{
+    if (!g_reload_requested)
+        return 0;
+    g_reload_requested = 0;
+
+    ServerConfig fresh;
+    config_defaults(&fresh);
+    if (config_load(&fresh, g_reload_argc, g_reload_argv) != 0)
+        return -1; /* config_load names the offending key */
+    *out = fresh;
+    return 1;
 }
 
 int config_load(ServerConfig *cfg, int argc, char **argv)

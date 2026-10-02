@@ -11,7 +11,9 @@ Public headers. Repo-wide rules: `../AGENTS.md`; data flow and invariants:
 - `config.h` defines the runtime `ServerConfig` and `LogLevel`. Runtime keys
   also need a `CFG_KEYS` row in `src/config.c`.
 - `log.h` is the leveled JSON logging surface. Hot-path calls must not block;
-  the implementation drops records when its pipe is full.
+  the implementation drops records when its pipe is full. `log_access()` carries
+  a per-request correlation id; the level is reloadable at runtime and an
+  optional syslog mirror is configured through `ServerConfig`.
 - `sd_notify.h` is a dependency-free systemd readiness shim.
 - `http_server.h` defines `PendingResponse` and `PR_HEADER_BUF_SIZE`. Its
   `header`/`body` pointers alias cached or static memory; the event loop must
@@ -38,7 +40,9 @@ Public headers. Repo-wide rules: `../AGENTS.md`; data flow and invariants:
 - `event_loop.h` owns the connection state enum, close reasons, and the
   `EventLoop` contract. Document ownership in comments when you add state.
 - `metrics.h` and `memory_profiler.h` are instrumentation surfaces. Keep them
-  lock-free and off the hot path.
+  lock-free and off the hot path. `metrics.h` also owns the request-latency
+  histogram, the Prometheus text renderer, and the readiness gauge used by the
+  Phase 5 endpoints.
 
 Do not add a new header by hand and expect it to build: headers are included
 explicitly (`include_directories(include)`), but new `.c` files need a

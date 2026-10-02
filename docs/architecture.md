@@ -32,15 +32,15 @@ invariants must hold when you change the code.
 | `src/main.c`                | Socket setup, allocator cap, startup preflight, signal handling, effective capacity, loop-count resolution, dispatch selection |
 | `src/config.c`              | Single validated configuration surface (defaults < file < env < CLI), range/unknown-key rejection, usage text |
 | `src/event_loop.c`          | Nonblocking per-loop connection state machine, pipeline queue, deadlines, admission/overload handling, graceful drain, listen-drop sampling |
-| `src/http_server.c`         | Socket creation, HTTP/1.1 parsing, static asset + gzip caching, document-root response selection |
+| `src/http_server.c`         | Socket creation, HTTP/1.1 parsing, static asset + gzip caching, document-root response selection, Phase 5 observability endpoints + request IDs |
 | `src/tls.c`                 | OpenSSL context/policy (TLS 1.2+, ALPN `http/1.1`), cert/key load, permission check, `SIGHUP` reload |
 | `src/path_resolver.c`       | Safe document-root path resolution (percent-decode, normalize, `openat2`/`O_NOFOLLOW`), directory index, MIME map |
 | `src/privilege.c`           | Resolves `run_user`/`run_group` and drops to them after binding; `no_new_privs` + non-dumpable hardening |
 | `src/file_cache.c`          | Bounded, ref-counted LRU cache of identity/gzip representations |
-| `src/log.c`                 | Leveled JSON access/error logging; nonblocking pipe + writer thread; `SIGHUP` reopen |
+| `src/log.c`                 | Leveled JSON access/error logging; nonblocking pipe + writer thread; `SIGHUP` reopen + log-level reload; optional syslog mirror |
 | `src/sd_notify.c`           | Dependency-free `sd_notify` (`READY`/`STOPPING`) over `$NOTIFY_SOCKET` |
 | `src/ring_buffer.c`         | Bounded circular byte buffer and line reader with rollback           |
-| `src/metrics.c`             | Lock-free counters, JSON snapshot rendering, reporter thread         |
+| `src/metrics.c`             | Lock-free counters, latency histogram, JSON snapshot + Prometheus rendering, readiness gauge, reporter thread |
 | `src/memory_profiler.c`     | `/proc` + `mallinfo2()` sampling (reporter thread only)              |
 | `include/config.h`          | Runtime-tunable `ServerConfig` and its log-level enum                |
 | `include/server_config.h`   | Every compile-time limit and default, and the runtime `ENV_*` names   |
@@ -73,10 +73,15 @@ invariants must hold when you change the code.
   are still parsed and answered so nothing is truncated. `el_writable()` closes a
   connection instead of returning it to idle keep-alive once the drain has
   begun. Remaining connections are force-closed at the deadline.
-- `SIGHUP` does not reload configuration; it asks the log writer to reopen its
-  file and, when TLS is enabled, sets a flag that event-loop 0 consumes on its
-  deadline tick to reload the certificate in place. `sd_notify(STOPPING)` is
-  emitted during shutdown.
+- `SIGHUP` asks the log writer to reopen its file, and sets flags that
+  event-loop 0 consumes on its deadline tick to reload the TLS certificate and
+  the safe runtime configuration subset (currently the log level). It never
+  reloads per-connection deadlines or capacity. `sd_notify(STOPPING)` is emitted
+  during shutdown.
+- Readiness is an atomic gauge in `src/metrics.c`. It is set to `1` after all
+  listeners are bound and cleared from the `SIGINT`/`SIGTERM` handler before the
+  drain, so `/readyz` and the `simplehttp_ready` metric flip to "not ready"
+  before the loops stop accepting.
 
 
 ## Startup sequence (`src/main.c`)
@@ -88,7 +93,8 @@ invariants must hold when you change the code.
 3. `log_init()` opens the log target and starts the writer thread.
 4. Read `HTTP_SERVER_METRICS_FILE`; start the reporter thread if set.
 5. Install `SIGINT`/`SIGTERM` handlers (no `SA_RESTART`, so a blocked accept
-   unblocks) and ignore `SIGPIPE`; `SIGHUP` asks the log writer to reopen.
+   unblocks) and ignore `SIGPIPE`; `SIGHUP` requests a log reopen, a TLS cert
+   reload, and a safe-config reload (applied later on a loop tick).
 6. `print_server_config()` prints and logs every resolved limit.
 7. Resolve the loop count, then enforce `RLIMIT_NOFILE ≥ max_connections +
    REQUIRED_NOFILE_HEADROOM + REQUIRED_NOFILE_PER_LOOP × loops`; failure is
@@ -286,11 +292,37 @@ Close reasons are enumerated in `ELCloseReason` (`include/event_loop.h:21`).
   `SIGHUP` reload must open (document root, log, certificate) therefore must be
   readable by `run_user`.
 
+## Observability and operations (Phase 5)
+
+- When `observability=1`, `el_prepare_response()` matches three configurable
+  paths **before** document-root resolution: the Prometheus `metrics_path`, the
+  `health_path` liveness probe, and the `readiness_path` probe. They are served
+  on the normal plaintext/TLS listeners and are off by default; an operator who
+  exposes the port publicly must firewall them (a dedicated admin listener is a
+  Phase 6 deployment item).
+- `metrics_prometheus()` renders the same relaxed-atomic counters as the JSON
+  snapshot in the Prometheus text exposition format, including the cumulative
+  request-duration histogram (`metrics_observe_request_latency()`, 13 buckets
+  from 1 ms to 10 s plus `+Inf`), TLS/cache counters, and a `simplehttp_ready`
+  gauge. Output is bounded by `METRICS_PROM_MAX` and served from a heap body the
+  response owns (`owned_body`).
+- Every parsed request gets a hex `request_id` from a relaxed global counter
+  seeded from the wall clock and pid at startup. It is emitted as an
+  `X-Request-Id` response header and as the `request_id` field of the matching
+  access record, so a client can correlate a response with a log line.
+- `log_msg()` reads the maximum level from an atomic, so `SIGHUP` can change it
+  at runtime without a restart. When `syslog=1` the writer thread mirrors each
+  complete record to `syslog(3)` in addition to the configured file.
+- Startup logs `server ready` alongside `sd_notify(READY)`; shutdown logs the
+  completion record alongside `sd_notify(STOPPING)`.
+
 ## Instrumentation
 
 - `src/metrics.c` counters are relaxed atomics updated on the hot path.
 - `metrics_snapshot()` renders one single-line JSON object and appends the
   memory-profiler fields via `memory_profiler_append_json()`.
+- `metrics_prometheus()` renders the scrape format; `metrics_set_ready()`/
+  `metrics_is_ready()` expose the readiness gauge.
 - `src/memory_profiler.c` samples `/proc/self/statm`,
   `/proc/self/smaps_rollup`, and `mallinfo2()` (falling back to `mallinfo()`),
   updating high-water marks. Unavailable sources contribute zero and are

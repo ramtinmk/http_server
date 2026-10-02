@@ -60,6 +60,30 @@ void metrics_set_cache_sampler(MetricsCacheSampler fn);
  * reporter leaves those fields at their last sampled values. */
 size_t metrics_snapshot(char *buf, size_t cap);
 
+/* --- Phase 5: Prometheus exposition ------------------------------------- */
+
+/* Record one request's end-to-end latency for the duration histogram. Cheap
+ * enough for the hot path (one bucket increment plus two relaxed adds). */
+void metrics_observe_request_latency(long latency_us);
+
+/* Set the process start time (CLOCK_REALTIME, seconds). Called once from
+ * startup; used to derive uptime and the Prometheus start-time gauge. */
+void metrics_set_start_time(long long epoch_seconds);
+
+/* Readiness gauge: nonzero while the server is accepting and serving. Cleared
+ * from the async-signal-safe shutdown path before the drain so /readyz starts
+ * failing immediately. */
+void metrics_set_ready(int ready);
+
+/* Read the readiness gauge (for the /readyz handler). */
+int metrics_is_ready(void);
+
+/* Render the counters in the Prometheus text exposition format (version
+ * 0.0.4) into `buf`. Returns the number of bytes that would have been written
+ * (snprintf semantics); callers should treat an over-cap result as truncated
+ * rather than retrying. The output is bounded and self-contained. */
+size_t metrics_prometheus(char *buf, size_t cap);
+
 /* --- Active-connection gauge -------------------------------------------- */
 
 /* Decrement the live active-connection gauge (called when a connection is

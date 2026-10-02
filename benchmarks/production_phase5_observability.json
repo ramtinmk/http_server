@@ -1,0 +1,64 @@
+{
+  "failures": [],
+  "health": {
+    "body": "ok",
+    "request_id": "0006abfceaf02800",
+    "status": 200
+  },
+  "lifecycle": {
+    "exit_code": 0,
+    "probe_during_shutdown": "refused"
+  },
+  "metrics": {
+    "bytes": 5052,
+    "histogram_buckets": 14,
+    "missing": [],
+    "names_present": [
+      "simplehttp_accept_errors_total",
+      "simplehttp_active_connections",
+      "simplehttp_active_connections_max",
+      "simplehttp_admission_rejected_total",
+      "simplehttp_cache_bytes",
+      "simplehttp_cache_entries",
+      "simplehttp_connection_capacity",
+      "simplehttp_connections_accepted_total",
+      "simplehttp_connections_closed_total",
+      "simplehttp_header_timeouts_total",
+      "simplehttp_idle_timeouts_total",
+      "simplehttp_input_buffer_limit_total",
+      "simplehttp_listen_drops_total",
+      "simplehttp_overload_responses_total",
+      "simplehttp_ready",
+      "simplehttp_request_duration_seconds_bucket",
+      "simplehttp_request_duration_seconds_count",
+      "simplehttp_request_duration_seconds_sum",
+      "simplehttp_requests_total",
+      "simplehttp_resident_memory_bytes",
+      "simplehttp_responses_total",
+      "simplehttp_start_time_seconds",
+      "simplehttp_tls_connections_total",
+      "simplehttp_tls_handshake_failures_total",
+      "simplehttp_tls_handshakes_total",
+      "simplehttp_tls_resumptions_total",
+      "simplehttp_uptime_seconds",
+      "simplehttp_virtual_memory_bytes",
+      "simplehttp_write_timeouts_total"
+    ],
+    "status": 200
+  },
+  "passed": true,
+  "readiness_up": {
+    "body": "ready",
+    "status": 200
+  },
+  "reload": {
+    "config_reloaded": true,
+    "connection_before_status": 200,
+    "connection_reused": true,
+    "debug_line_after": true
+  },
+  "request_id": {
+    "header": "0006abfceaf02800",
+    "in_access_log": true
+  }
+}

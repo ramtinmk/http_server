@@ -9,8 +9,10 @@ event loop. Directory-wide rules (build, tests, plans) are in `../AGENTS.md`.
   logging → metrics reporter → signal handlers → config print →
   privilege validation → loop-count resolution → FD preflight → effective
   capacity → host report → affinity → static assets → bind/listen →
-  `sd_notify(READY)` → `event_loop_run` (create all listeners → privilege drop
-  → start loops). Keep
+  `metrics_set_ready(1)` + `sd_notify(READY)` → `event_loop_run` (create all
+  listeners → privilege drop → start loops). The `SIGINT`/`SIGTERM` handler
+  clears readiness before the drain; the `SIGHUP` handler requests log reopen,
+  TLS reload, and safe-config reload. Keep
   `EL_THREAD_COUNT` compile-time; do not read it from the environment.
 - `privilege.c` — resolves `run_user`/`run_group` (`privilege_validate`, called
   from `main.c` before binding) and drops to the identity
@@ -19,8 +21,12 @@ event loop. Directory-wide rules (build, tests, plans) are in `../AGENTS.md`.
   `no_new_privs`/non-dumpable. The drop is irreversible; failures are fatal.
 - `config.c` — the single validated configuration surface (defaults < file <
   env < CLI). One `CFG_KEYS` table drives lookup, validation, and usage.
+  `config_request_reload()`/`config_reload_if_requested()` re-parse the recorded
+  sources on `SIGHUP` so the caller can apply the live-safe subset (log level).
 - `log.c` — leveled JSON logging: format on the hot path, write to a
-  nonblocking pipe, drain on a writer thread; `SIGHUP` reopens the file. Never
+  nonblocking pipe, drain on a writer thread; `SIGHUP` reopens the file. The
+  maximum level is an atomic so `SIGHUP` can change it live; with `syslog`
+  enabled the writer thread also mirrors complete records to `syslog(3)`. Never
   block a producer; drop and count instead.
 - `sd_notify.c` — `READY`/`STOPPING` datagrams to `$NOTIFY_SOCKET`; no
   libsystemd dependency.
@@ -53,7 +59,10 @@ event loop. Directory-wide rules (build, tests, plans) are in `../AGENTS.md`.
   read. Phase 2 adds document-root routing: the `/home` and `/hello` aliases are
   served from the startup cache; every other path goes through
   `path_resolver_open()` and is served from the bounded cache (memory) or the
-  file descriptor (`body_fd`, streamed with `sendfile`).
+  file descriptor (`body_fd`, streamed with `sendfile`). Phase 5 adds the
+  configurable `/metrics`/health/readiness endpoints (matched before the
+  document root while `observability` is on) and a per-request `request_id`
+  emitted as `X-Request-Id` and in the access log.
 - `path_resolver.c` — the single audited path-resolution boundary: decode once,
   normalize, enforce hidden/symlink policy, `openat2(RESOLVE_BENEATH)` with an
   `O_NOFOLLOW` fallback, directory-index lookup, and the MIME map. Never open a
@@ -62,7 +71,9 @@ event loop. Directory-wide rules (build, tests, plans) are in `../AGENTS.md`.
   representations. `file_cache_insert()` takes ownership of freshly read bodies;
   eviction skips referenced entries so a borrowed in-flight body is never freed.
 - `ring_buffer.c` — bounded circular buffer and line reader.
-- `metrics.c` — lock-free counters and JSON snapshot rendering.
+- `metrics.c` — lock-free counters, the request-latency histogram, JSON snapshot
+  and Prometheus rendering, and the readiness gauge. `memory_profiler_get()`
+  exposes the last cached memory sample to the Prometheus renderer.
 - `memory_profiler.c` — procfs/`mallinfo2` sampling, reporter thread only.
 
 ## Editing rules

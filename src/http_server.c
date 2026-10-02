@@ -2,10 +2,13 @@
 
 #include "http_server.h"
 #include "file_cache.h"
+#include "log.h"
 #include "metrics.h"
 #include "path_resolver.h"
 
 #include <signal.h>
+#include <stdatomic.h>
+#include <stdint.h>
 #include <sys/stat.h>
 #include <time.h>
 
@@ -315,6 +318,50 @@ static int static_responses_initialized;
 /* Phase 2: bounded cache for document-root representations. */
 static FileCache *g_cache;
 
+/*
+ * Phase 5: per-request correlation ids. A relaxed atomic counter seeded once at
+ * startup from the wall clock and pid makes ids unique within a run and
+ * disjoint across near-simultaneous restarts without any locking on the hot
+ * path. The value is rendered as 16 hex digits.
+ */
+static _Atomic unsigned long long g_request_seq;
+
+static void seed_request_ids(void)
+{
+    unsigned long long seed =
+        ((unsigned long long)time(NULL) << 20) ^ (unsigned long long)getpid();
+    atomic_store_explicit(&g_request_seq, seed, memory_order_relaxed);
+}
+
+static void next_request_id(char *out, size_t cap)
+{
+    unsigned long long n = atomic_fetch_add_explicit(
+        &g_request_seq, 1, memory_order_relaxed);
+    snprintf(out, cap, "%016llx", n);
+}
+
+/* Build the X-Request-Id header line; empty when the request has no id. */
+static void request_id_header(const PendingResponse *pr, char *out, size_t cap)
+{
+    if (cap == 0)
+        return;
+    if (pr->request_id[0])
+        snprintf(out, cap, "X-Request-Id: %s\r\n", pr->request_id);
+    else
+        out[0] = '\0';
+}
+
+/* Phase 5: observability endpoints, frozen from the config at startup. */
+static int  g_obs_enabled;
+static char g_metrics_path[OBS_PATH_MAX];
+static char g_health_path[OBS_PATH_MAX];
+static char g_readiness_path[OBS_PATH_MAX];
+
+static int path_is(const char *path, const char *configured)
+{
+    return configured[0] != '\0' && strcmp(path, configured) == 0;
+}
+
 static void repr_free(Representation *rep)
 {
     free(rep->body);
@@ -466,6 +513,13 @@ int initialize_static_responses(const ServerConfig *cfg)
         repr_free(&hello_asset.gzip);
         return -1;
     }
+
+    seed_request_ids();
+    g_obs_enabled = cfg->observability_enabled;
+    snprintf(g_metrics_path, sizeof(g_metrics_path), "%s", cfg->metrics_path);
+    snprintf(g_health_path, sizeof(g_health_path), "%s", cfg->health_path);
+    snprintf(g_readiness_path, sizeof(g_readiness_path), "%s",
+             cfg->readiness_path);
 
     size_t budget = (size_t)cfg->cache_budget_bytes;
     g_cache = file_cache_create(budget, CACHE_MAX_ENTRIES);
@@ -621,6 +675,8 @@ static void format_simple(PendingResponse *pr, int status, int keep_alive,
 {
     int ka = keep_alive && !force_close;
     const char *conn = ka ? "keep-alive" : "close";
+    char rid[40];
+    request_id_header(pr, rid, sizeof(rid));
     int n;
 
     if (body && body_len) {
@@ -630,12 +686,13 @@ static void format_simple(PendingResponse *pr, int status, int keep_alive,
                      "Server: " SERVER_TOKEN "\r\n"
                      "Connection: %s\r\n"
                      "%s"
+                     "%s"
                      "Content-Type: " DEFAULT_CONTENT_TYPE "\r\n"
                      "Content-Length: %zu\r\n"
                      "\r\n"
                      "%s",
                      status, reason_phrase(status), http_date_now(), conn,
-                     extra ? extra : "", body_len, body);
+                     rid, extra ? extra : "", body_len, body);
     } else {
         n = snprintf(pr->header_buf, sizeof(pr->header_buf),
                      "HTTP/1.1 %d %s\r\n"
@@ -643,9 +700,10 @@ static void format_simple(PendingResponse *pr, int status, int keep_alive,
                      "Server: " SERVER_TOKEN "\r\n"
                      "Connection: %s\r\n"
                      "%s"
+                     "%s"
                      "\r\n",
                      status, reason_phrase(status), http_date_now(), conn,
-                     extra ? extra : "");
+                     rid, extra ? extra : "");
     }
 
     if (n < 0 || (size_t)n >= sizeof(pr->header_buf)) {
@@ -711,11 +769,14 @@ static void format_asset(PendingResponse *pr, int status, int keep_alive,
                  start, start + body_len - 1, rep->body_len);
     }
 
+    char rid[40];
+    request_id_header(pr, rid, sizeof(rid));
     int n = snprintf(pr->header_buf, sizeof(pr->header_buf),
                      "HTTP/1.1 %d %s\r\n"
                      "Date: %s\r\n"
                      "Server: " SERVER_TOKEN "\r\n"
                      "Connection: %s\r\n"
+                     "%s"
                      "Content-Type: %s\r\n"
                      "%s"
                      "Content-Length: %zu\r\n"
@@ -726,7 +787,7 @@ static void format_asset(PendingResponse *pr, int status, int keep_alive,
                      "Vary: Accept-Encoding\r\n"
                      "\r\n",
                      status, reason_phrase(status), http_date_now(), conn,
-                     content_type,
+                     rid, content_type,
                      gzip ? "Content-Encoding: gzip\r\n" : "",
                      body_len, range_hdr, rep->etag, rep->last_modified);
 
@@ -1323,11 +1384,14 @@ static void format_multipart(PendingResponse *pr, int keep_alive,
 
     int ka = keep_alive && !force_close;
     const char *conn = ka ? "keep-alive" : "close";
+    char rid[40];
+    request_id_header(pr, rid, sizeof(rid));
     int hn = snprintf(pr->header_buf, sizeof(pr->header_buf),
                       "HTTP/1.1 206 Partial Content\r\n"
                       "Date: %s\r\n"
                       "Server: " SERVER_TOKEN "\r\n"
                       "Connection: %s\r\n"
+                      "%s"
                       "Content-Type: multipart/byteranges; boundary=%s\r\n"
                       "Content-Length: %zu\r\n"
                       "Accept-Ranges: bytes\r\n"
@@ -1335,7 +1399,7 @@ static void format_multipart(PendingResponse *pr, int keep_alive,
                       "Last-Modified: %s\r\n"
                       "Vary: Accept-Encoding\r\n"
                       "\r\n",
-                      http_date_now(), conn, boundary, off,
+                      http_date_now(), conn, rid, boundary, off,
                       rep->etag, rep->last_modified);
     if (hn < 0 || (size_t)hn >= sizeof(pr->header_buf)) {
         free(body);
@@ -1384,6 +1448,94 @@ static int method_class(const char *method)
 }
 
 #define ALLOW_VALUE "Allow: GET, HEAD, OPTIONS\r\n"
+
+/* --- Phase 5: observability endpoints ------------------------------------ */
+
+/* Format a small text response. The body is borrowed (a literal or a heap
+ * buffer the caller owns and assigns to pr->owned_body afterwards). */
+static void format_observability(PendingResponse *pr, int status, int keep_alive,
+                                 int force_close, const char *content_type,
+                                 const char *body, size_t body_len, int is_head)
+{
+    int ka = keep_alive && !force_close;
+    const char *conn = ka ? "keep-alive" : "close";
+    char rid[40];
+    request_id_header(pr, rid, sizeof(rid));
+    int n = snprintf(pr->header_buf, sizeof(pr->header_buf),
+                     "HTTP/1.1 %d %s\r\n"
+                     "Date: %s\r\n"
+                     "Server: " SERVER_TOKEN "\r\n"
+                     "Connection: %s\r\n"
+                     "%s"
+                     "Content-Type: %s\r\n"
+                     "Content-Length: %zu\r\n"
+                     "Cache-Control: no-store\r\n"
+                     "\r\n",
+                     status, reason_phrase(status), http_date_now(), conn,
+                     rid, content_type, body_len);
+    if (n < 0 || (size_t)n >= sizeof(pr->header_buf)) {
+        emit_status(pr, 500, keep_alive, 1, NULL, "Response header overflow");
+        return;
+    }
+
+    pr->header = NULL;
+    pr->header_len = (size_t)n;
+    pr->body = (const unsigned char *)body;
+    pr->body_len = body_len;
+    pr->body_fd = -1;
+    pr->is_head = is_head;
+    pr->force_close = force_close;
+    pr->status = status;
+}
+
+static void serve_metrics(const HTTPRequest *req, int force_close,
+                          PendingResponse *pr)
+{
+    char *body = malloc(METRICS_PROM_MAX);
+    if (!body) {
+        emit_status(pr, 500, req->keep_alive, 1, NULL,
+                    "Metrics are unavailable");
+        return;
+    }
+    size_t len = metrics_prometheus(body, METRICS_PROM_MAX);
+    if (len >= METRICS_PROM_MAX)
+        len = METRICS_PROM_MAX - 1;
+    body[len] = '\0';
+    log_msg(LOG_LEVEL_DEBUG, "metrics scrape bytes=%zu", len);
+
+    format_observability(pr, 200, req->keep_alive, force_close,
+                         "text/plain; version=0.0.4; charset=utf-8",
+                         body, len, req->is_head);
+    if (pr->status == 200 && pr->body == (const unsigned char *)body)
+        pr->owned_body = (unsigned char *)body;
+    else
+        free(body);
+}
+
+static void serve_health(const HTTPRequest *req, int force_close,
+                         PendingResponse *pr)
+{
+    static const char body[] = "ok\n";
+    format_observability(pr, 200, req->keep_alive, force_close,
+                         "text/plain; charset=utf-8", body, sizeof(body) - 1,
+                         req->is_head);
+}
+
+static void serve_readiness(const HTTPRequest *req, int force_close,
+                            PendingResponse *pr)
+{
+    static const char ready[] = "ready\n";
+    static const char draining[] = "draining\n";
+    if (metrics_is_ready()) {
+        format_observability(pr, 200, req->keep_alive, force_close,
+                             "text/plain; charset=utf-8", ready,
+                             sizeof(ready) - 1, req->is_head);
+    } else {
+        format_observability(pr, 503, req->keep_alive, force_close,
+                             "text/plain; charset=utf-8", draining,
+                             sizeof(draining) - 1, req->is_head);
+    }
+}
 
 /* --- Response selection -------------------------------------------------- */
 
@@ -1673,6 +1825,7 @@ int el_prepare_response(RingBuffer *rb, int force_close, int *keep_alive_out, Pe
 
     memset(pr, 0, sizeof(*pr));
     pr->body_fd = -1; /* 0 is a valid descriptor; the sentinel is -1 */
+    next_request_id(pr->request_id, sizeof(pr->request_id));
     clock_gettime(CLOCK_MONOTONIC, &pr->started);
 
     size_t snap_tail = rb->tail;
@@ -1830,6 +1983,24 @@ int el_prepare_response(RingBuffer *rb, int force_close, int *keep_alive_out, Pe
     }
 
     req.is_head = (mclass == METHOD_HEAD);
+
+    /* Phase 5: observability endpoints take precedence over document-root
+     * resolution while enabled (an operator must keep the configured paths
+     * clear of real assets). */
+    if (g_obs_enabled) {
+        if (path_is(req.path, g_metrics_path)) {
+            serve_metrics(&req, force_close, pr);
+            return 0;
+        }
+        if (path_is(req.path, g_health_path)) {
+            serve_health(&req, force_close, pr);
+            return 0;
+        }
+        if (path_is(req.path, g_readiness_path)) {
+            serve_readiness(&req, force_close, pr);
+            return 0;
+        }
+    }
 
     /* Legacy fixed-path aliases keep the Phase 1 cached behavior; everything
      * else is resolved against the document root. */

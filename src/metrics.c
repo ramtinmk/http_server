@@ -51,6 +51,22 @@ static _Atomic long long  g_tls_handshakes;
 static _Atomic long long  g_tls_resumptions;
 static _Atomic long long  g_tls_handshake_failures;
 
+/* Phase 5: request-latency histogram and lifecycle gauges. */
+#define METRICS_LAT_BUCKETS 13
+static const long METRICS_LAT_US[METRICS_LAT_BUCKETS] = {
+    1000, 2500, 5000, 10000, 25000, 50000, 100000,
+    250000, 500000, 1000000, 2500000, 5000000, 10000000
+};
+static const char *const METRICS_LAT_LE[METRICS_LAT_BUCKETS] = {
+    "0.001", "0.0025", "0.005", "0.01", "0.025", "0.05", "0.1",
+    "0.25", "0.5", "1", "2.5", "5", "10"
+};
+static _Atomic long long  g_lat_buckets[METRICS_LAT_BUCKETS + 1]; /* +Inf */
+static _Atomic long long  g_lat_sum_us;
+static _Atomic long long  g_lat_count;
+static _Atomic long long  g_start_time_epoch;
+static _Atomic int        g_ready;
+
 /* Phase 5: listener drops and accept errors by errno (cumulative). */
 static _Atomic long long  g_listen_drops;
 static _Atomic long long  g_accept_errors;
@@ -300,6 +316,41 @@ void metrics_accept_error(int errno_value)
     }
 }
 
+/* --- Phase 5: latency histogram and lifecycle gauges -------------------- */
+
+void metrics_observe_request_latency(long latency_us)
+{
+    if (latency_us < 0)
+        latency_us = 0;
+
+    int slot = METRICS_LAT_BUCKETS; /* +Inf */
+    for (int i = 0; i < METRICS_LAT_BUCKETS; i++) {
+        if (latency_us <= METRICS_LAT_US[i]) {
+            slot = i;
+            break;
+        }
+    }
+    atomic_fetch_add_explicit(&g_lat_buckets[slot], 1, memory_order_relaxed);
+    atomic_fetch_add_explicit(&g_lat_sum_us, latency_us, memory_order_relaxed);
+    bump(&g_lat_count);
+}
+
+void metrics_set_start_time(long long epoch_seconds)
+{
+    atomic_store_explicit(&g_start_time_epoch, epoch_seconds,
+                          memory_order_relaxed);
+}
+
+void metrics_set_ready(int ready)
+{
+    atomic_store_explicit(&g_ready, ready ? 1 : 0, memory_order_relaxed);
+}
+
+int metrics_is_ready(void)
+{
+    return atomic_load_explicit(&g_ready, memory_order_relaxed);
+}
+
 /* --- Snapshot formatting ------------------------------------------------ */
 
 /*
@@ -468,6 +519,190 @@ size_t metrics_snapshot(char *buf, size_t cap)
 }
 
 #undef LOAD
+
+/* --- Phase 5: Prometheus exposition ------------------------------------- */
+
+/*
+ * Render the same lock-free counters in the Prometheus text exposition format
+ * (version 0.0.4). The output is intentionally independent of the JSON
+ * snapshot: scrapers get one metric per line with HELP/TYPE metadata while the
+ * benchmark harness keeps its flat JSON. Callers bound the buffer; output past
+ * `cap` is truncated rather than growing without limit.
+ */
+size_t metrics_prometheus(char *buf, size_t cap)
+{
+    if (!buf || cap == 0)
+        return 0;
+
+    long long status[STATUS_BUCKETS + 1];
+    for (int i = 0; i <= STATUS_BUCKETS; i++)
+        status[i] = atomic_load_explicit(&g_status[i], memory_order_relaxed);
+
+    long long lat[METRICS_LAT_BUCKETS + 1];
+    for (int i = 0; i <= METRICS_LAT_BUCKETS; i++)
+        lat[i] = atomic_load_explicit(&g_lat_buckets[i], memory_order_relaxed);
+
+    long long start_epoch =
+        atomic_load_explicit(&g_start_time_epoch, memory_order_relaxed);
+    long long uptime = 0;
+    struct timespec now;
+    if (clock_gettime(CLOCK_REALTIME, &now) == 0) {
+        uptime = (long long)now.tv_sec - start_epoch;
+        if (uptime < 0)
+            uptime = 0;
+    }
+
+    long cache_bytes = 0, cache_entries = 0;
+    MetricsCacheSampler sampler =
+        atomic_load_explicit(&g_cache_sampler, memory_order_relaxed);
+    if (sampler)
+        sampler(&cache_bytes, &cache_entries);
+
+    long rss_kb = 0, vm_kb = 0;
+    memory_profiler_get(&rss_kb, &vm_kb);
+
+#define PROM(...) used = appendf(buf, cap, used, __VA_ARGS__)
+    size_t used = 0;
+
+    PROM("# HELP simplehttp_ready 1 when the server is accepting connections.\n"
+         "# TYPE simplehttp_ready gauge\n"
+         "simplehttp_ready %d\n"
+         "# HELP simplehttp_start_time_seconds Process start time since unix "
+         "epoch.\n"
+         "# TYPE simplehttp_start_time_seconds gauge\n"
+         "simplehttp_start_time_seconds %lld\n"
+         "# HELP simplehttp_uptime_seconds Seconds since process start.\n"
+         "# TYPE simplehttp_uptime_seconds gauge\n"
+         "simplehttp_uptime_seconds %lld\n",
+         atomic_load_explicit(&g_ready, memory_order_relaxed), start_epoch,
+         uptime);
+
+    PROM("# HELP simplehttp_requests_total Completed responses.\n"
+         "# TYPE simplehttp_requests_total counter\n"
+         "simplehttp_requests_total %lld\n"
+         "# HELP simplehttp_connections_accepted_total Accepted TCP "
+         "connections.\n"
+         "# TYPE simplehttp_connections_accepted_total counter\n"
+         "simplehttp_connections_accepted_total %lld\n"
+         "# HELP simplehttp_connections_closed_total Closed connections.\n"
+         "# TYPE simplehttp_connections_closed_total counter\n"
+         "simplehttp_connections_closed_total %lld\n"
+         "# HELP simplehttp_active_connections Live connections.\n"
+         "# TYPE simplehttp_active_connections gauge\n"
+         "simplehttp_active_connections %ld\n"
+         "# HELP simplehttp_active_connections_max High-water live "
+         "connections.\n"
+         "# TYPE simplehttp_active_connections_max gauge\n"
+         "simplehttp_active_connections_max %ld\n"
+         "# HELP simplehttp_connection_capacity Effective connection cap.\n"
+         "# TYPE simplehttp_connection_capacity gauge\n"
+         "simplehttp_connection_capacity %ld\n",
+         atomic_load_explicit(&g_completed_requests, memory_order_relaxed),
+         atomic_load_explicit(&g_accepted_connections, memory_order_relaxed),
+         atomic_load_explicit(&g_el_connections_closed, memory_order_relaxed),
+         atomic_load_explicit(&g_active_connections, memory_order_relaxed),
+         atomic_load_explicit(&g_active_connections_max, memory_order_relaxed),
+         atomic_load_explicit(&g_connection_capacity, memory_order_relaxed));
+
+    PROM("# HELP simplehttp_responses_total Responses by status class.\n"
+         "# TYPE simplehttp_responses_total counter\n");
+    for (int i = 0; i < STATUS_BUCKETS; i++) {
+        PROM("simplehttp_responses_total{status=\"%d\"} %lld\n",
+             STATUS_CODES[i], status[i]);
+    }
+    PROM("simplehttp_responses_total{status=\"other\"} %lld\n", status[STATUS_BUCKETS]);
+
+    /* Prometheus histograms are cumulative: each `le` bucket counts every
+     * observation at or below its bound. */
+    PROM("# HELP simplehttp_request_duration_seconds End-to-end request "
+         "latency in seconds.\n"
+         "# TYPE simplehttp_request_duration_seconds histogram\n");
+    long long cumulative = 0;
+    for (int i = 0; i < METRICS_LAT_BUCKETS; i++) {
+        cumulative += lat[i];
+        PROM("simplehttp_request_duration_seconds_bucket{le=\"%s\"} %lld\n",
+             METRICS_LAT_LE[i], cumulative);
+    }
+    cumulative += lat[METRICS_LAT_BUCKETS];
+    PROM("simplehttp_request_duration_seconds_bucket{le=\"+Inf\"} %lld\n"
+         "simplehttp_request_duration_seconds_sum %lld\n"
+         "simplehttp_request_duration_seconds_count %lld\n",
+         cumulative,
+         atomic_load_explicit(&g_lat_sum_us, memory_order_relaxed),
+         atomic_load_explicit(&g_lat_count, memory_order_relaxed));
+
+    PROM("# HELP simplehttp_admission_rejected_total Rejected new connections.\n"
+         "# TYPE simplehttp_admission_rejected_total counter\n"
+         "simplehttp_admission_rejected_total %lld\n"
+         "# HELP simplehttp_overload_responses_total 503 overload responses "
+         "sent.\n"
+         "# TYPE simplehttp_overload_responses_total counter\n"
+         "simplehttp_overload_responses_total %lld\n"
+         "# HELP simplehttp_header_timeouts_total Header read timeouts.\n"
+         "# TYPE simplehttp_header_timeouts_total counter\n"
+         "simplehttp_header_timeouts_total %lld\n"
+         "# HELP simplehttp_idle_timeouts_total Keep-alive idle timeouts.\n"
+         "# TYPE simplehttp_idle_timeouts_total counter\n"
+         "simplehttp_idle_timeouts_total %lld\n"
+         "# HELP simplehttp_write_timeouts_total Write timeouts.\n"
+         "# TYPE simplehttp_write_timeouts_total counter\n"
+         "simplehttp_write_timeouts_total %lld\n"
+         "# HELP simplehttp_input_buffer_limit_total Input buffer limit "
+         "closes.\n"
+         "# TYPE simplehttp_input_buffer_limit_total counter\n"
+         "simplehttp_input_buffer_limit_total %lld\n"
+         "# HELP simplehttp_listen_drops_total Kernel accept-queue drops.\n"
+         "# TYPE simplehttp_listen_drops_total counter\n"
+         "simplehttp_listen_drops_total %lld\n"
+         "# HELP simplehttp_accept_errors_total accept() failures.\n"
+         "# TYPE simplehttp_accept_errors_total counter\n"
+         "simplehttp_accept_errors_total %lld\n",
+         atomic_load_explicit(&g_admission_rejected, memory_order_relaxed),
+         atomic_load_explicit(&g_overload_responses, memory_order_relaxed),
+         atomic_load_explicit(&g_header_timeout, memory_order_relaxed),
+         atomic_load_explicit(&g_idle_timeout, memory_order_relaxed),
+         atomic_load_explicit(&g_write_timeout, memory_order_relaxed),
+         atomic_load_explicit(&g_input_buffer_limit, memory_order_relaxed),
+         atomic_load_explicit(&g_listen_drops, memory_order_relaxed),
+         atomic_load_explicit(&g_accept_errors, memory_order_relaxed));
+
+    PROM("# HELP simplehttp_tls_connections_total TLS connections accepted.\n"
+         "# TYPE simplehttp_tls_connections_total counter\n"
+         "simplehttp_tls_connections_total %lld\n"
+         "# HELP simplehttp_tls_handshakes_total Completed TLS handshakes.\n"
+         "# TYPE simplehttp_tls_handshakes_total counter\n"
+         "simplehttp_tls_handshakes_total %lld\n"
+         "# HELP simplehttp_tls_resumptions_total Resumed TLS handshakes.\n"
+         "# TYPE simplehttp_tls_resumptions_total counter\n"
+         "simplehttp_tls_resumptions_total %lld\n"
+         "# HELP simplehttp_tls_handshake_failures_total Failed TLS "
+         "handshakes.\n"
+         "# TYPE simplehttp_tls_handshake_failures_total counter\n"
+         "simplehttp_tls_handshake_failures_total %lld\n",
+         atomic_load_explicit(&g_tls_connections, memory_order_relaxed),
+         atomic_load_explicit(&g_tls_handshakes, memory_order_relaxed),
+         atomic_load_explicit(&g_tls_resumptions, memory_order_relaxed),
+         atomic_load_explicit(&g_tls_handshake_failures, memory_order_relaxed));
+
+    PROM("# HELP simplehttp_cache_bytes Bytes held by the representation "
+         "cache.\n"
+         "# TYPE simplehttp_cache_bytes gauge\n"
+         "simplehttp_cache_bytes %ld\n"
+         "# HELP simplehttp_cache_entries Entries in the representation cache.\n"
+         "# TYPE simplehttp_cache_entries gauge\n"
+         "simplehttp_cache_entries %ld\n"
+         "# HELP simplehttp_resident_memory_bytes Resident set size.\n"
+         "# TYPE simplehttp_resident_memory_bytes gauge\n"
+         "simplehttp_resident_memory_bytes %lld\n"
+         "# HELP simplehttp_virtual_memory_bytes Virtual memory size.\n"
+         "# TYPE simplehttp_virtual_memory_bytes gauge\n"
+         "simplehttp_virtual_memory_bytes %lld\n",
+         cache_bytes, cache_entries, (long long)rss_kb * 1024,
+         (long long)vm_kb * 1024);
+
+#undef PROM
+    return used;
+}
 
 /* --- Reporter thread ---------------------------------------------------- */
 

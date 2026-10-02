@@ -58,6 +58,7 @@ typedef struct {
     /* Access-log metadata, filled at parse time. */
     char                 method[16];
     char                 path[256];
+    char                 request_id[24]; /* hex correlation id, or empty */
     struct timespec      started;      /* CLOCK_MONOTONIC, request parse time. */
 
     /* Generated header block used when `header` is NULL. */
