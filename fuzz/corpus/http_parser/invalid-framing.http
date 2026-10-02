@@ -1,0 +1,7 @@
+GET /home HTTP/1.1
+Host: fuzz
+Content-Length: 5
+Transfer-Encoding: chunked
+Connection: close
+
+abcde

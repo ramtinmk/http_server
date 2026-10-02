@@ -29,7 +29,11 @@ Public headers. Repo-wide rules: `../AGENTS.md`; data flow and invariants:
   callers that do not need the OpenSSL types.
 - `privilege.h` is the Phase 4 privilege-drop surface: `privilege_validate()`
   (resolve `run_user`/`run_group` before binding) and `privilege_drop()` (drop
-  after all listeners exist). The drop is irreversible.
+ after all listeners exist). The drop is irreversible.
+- `sandbox.h` exposes the independently toggled Linux Landlock/seccomp startup
+  sandbox; enabled features fail closed when unsupported.
+- `client_limits.h` exposes bounded per-IP connection and request-rate
+  admission/release accounting used by the event loop.
 - `path_resolver.h` is the document-root resolution boundary (decode, normalize,
   `openat2`/`O_NOFOLLOW`, directory index, MIME map). Every request-derived path
   must go through it.

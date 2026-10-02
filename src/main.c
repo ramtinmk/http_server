@@ -15,6 +15,7 @@
 #include "config.h"
 #include "log.h"
 #include "privilege.h"
+#include "client_limits.h"
 #include "sd_notify.h"
 #include "tls.h"
 #include <sched.h>
@@ -117,6 +118,7 @@ static void print_server_config(const ServerConfig *cfg)
     printf("  MAX_INPUT_BUFFER_BYTES: %d\n",  cfg->max_input_buffer_bytes);
     printf("  MAX_PIPELINE_DEPTH    : %d\n",  MAX_PIPELINE_DEPTH);
     printf("  HEADER_READ_TIMEOUT   : %d s\n",cfg->header_read_timeout_sec);
+    printf("  HEADER_PROGRESS_TIMEOUT: %d s\n", cfg->header_progress_timeout_sec);
     printf("  IDLE_TIMEOUT          : %d s\n",cfg->idle_timeout_sec);
     printf("  WRITE_TIMEOUT         : %d s\n",cfg->write_timeout_sec);
     printf("  SHUTDOWN_DRAIN_TIMEOUT: %d s\n",cfg->shutdown_drain_timeout_sec);
@@ -151,6 +153,11 @@ static void print_server_config(const ServerConfig *cfg)
            cfg->run_user[0] ? cfg->run_user : "(unchanged)");
     printf("  RUN_GROUP             : %s\n",
            cfg->run_group[0] ? cfg->run_group : "(user's primary)");
+    printf("  PER_IP_CONNECTIONS    : %d\n", cfg->per_ip_connections);
+    printf("  PER_IP_REQUESTS/MIN   : %d\n", cfg->per_ip_requests_per_minute);
+    printf("  LANDLOCK              : %s\n", cfg->landlock_enabled ? "on" : "off");
+    printf("  SECCOMP               : %s\n", cfg->seccomp_enabled ? "on" : "off");
+    printf("  RLIMIT_NPROC          : %d\n", cfg->rlimit_nproc);
     printf("  OBSERVABILITY         : %s\n",
            cfg->observability_enabled ? "on" : "off");
     if (cfg->observability_enabled) {
@@ -164,21 +171,26 @@ static void print_server_config(const ServerConfig *cfg)
     log_msg(LOG_LEVEL_INFO,
             "effective_config port=%d backlog=%d max_connections=%ld "
             "max_keepalive_requests=%d max_input_buffer_bytes=%d "
-            "header_read_timeout=%d idle_timeout=%d write_timeout=%d "
+            "header_read_timeout=%d header_progress_timeout=%d idle_timeout=%d write_timeout=%d "
             "shutdown_drain_timeout=%d log_level=%s access_log=%d "
             "log_file=%s tls=%d tls_port=%d config_file=%s "
-            "run_user=%s run_group=%s observability=%d syslog=%d "
+            "run_user=%s run_group=%s landlock=%d seccomp=%d per_ip_connections=%d "
+            "per_ip_requests_per_minute=%d rlimit_nproc=%d observability=%d syslog=%d "
             "metrics_path=%s health_path=%s readiness_path=%s",
             cfg->port, cfg->backlog, cfg->max_connections,
             cfg->max_keepalive_requests, cfg->max_input_buffer_bytes,
-            cfg->header_read_timeout_sec, cfg->idle_timeout_sec,
+             cfg->header_read_timeout_sec, cfg->header_progress_timeout_sec,
+             cfg->idle_timeout_sec,
             cfg->write_timeout_sec, cfg->shutdown_drain_timeout_sec,
             log_level_name(cfg->log_level), cfg->access_log,
             cfg->log_file[0] ? cfg->log_file : "(stderr)",
             cfg->tls_enabled, cfg->tls_port,
             cfg->config_path[0] ? cfg->config_path : "(none)",
-            cfg->run_user[0] ? cfg->run_user : "(none)",
-            cfg->run_group[0] ? cfg->run_group : "(none)",
+             cfg->run_user[0] ? cfg->run_user : "(none)",
+             cfg->run_group[0] ? cfg->run_group : "(none)",
+             cfg->landlock_enabled, cfg->seccomp_enabled,
+             cfg->per_ip_connections, cfg->per_ip_requests_per_minute,
+             cfg->rlimit_nproc,
             cfg->observability_enabled, cfg->syslog_enabled,
             cfg->metrics_path, cfg->health_path, cfg->readiness_path);
 }
@@ -286,6 +298,26 @@ static int enforce_nofile_limit(unsigned long required, int el_threads,
     return 0;
 }
 
+static int apply_optional_rlimits(const ServerConfig *cfg)
+{
+    struct rlimit core = {0, 0};
+    if (setrlimit(RLIMIT_CORE, &core) != 0) {
+        fprintf(stderr, "FATAL: cannot set RLIMIT_CORE=0: %s\n",
+                strerror(errno));
+        return -1;
+    }
+    if (cfg->rlimit_nproc > 0) {
+        struct rlimit nproc = {(rlim_t)cfg->rlimit_nproc,
+                               (rlim_t)cfg->rlimit_nproc};
+        if (setrlimit(RLIMIT_NPROC, &nproc) != 0) {
+            fprintf(stderr, "FATAL: cannot set rlimit_nproc=%d: %s\n",
+                    cfg->rlimit_nproc, strerror(errno));
+            return -1;
+        }
+    }
+    return 0;
+}
+
 /*
  * Phase 5: read the kernel accept-queue cap and TCP buffer limits, compute the
  * effective backlog, and report them. The server never mutates sysctls; it
@@ -350,12 +382,14 @@ static int validate_configuration(const ServerConfig *cfg, int el_threads,
                 cfg->max_input_buffer_bytes);
         return -1;
     }
-    if (cfg->header_read_timeout_sec <= 0 || cfg->idle_timeout_sec <= 0 ||
+    if (cfg->header_read_timeout_sec <= 0 ||
+        cfg->header_progress_timeout_sec <= 0 || cfg->idle_timeout_sec <= 0 ||
         cfg->write_timeout_sec <= 0 || cfg->shutdown_drain_timeout_sec <= 0) {
         fprintf(stderr,
-                "FATAL: timeouts must be positive (header=%d, idle=%d, "
-                "write=%d, drain=%d)\n",
-                cfg->header_read_timeout_sec, cfg->idle_timeout_sec,
+                "FATAL: timeouts must be positive (header=%d, progress=%d, "
+                "idle=%d, write=%d, drain=%d)\n",
+                cfg->header_read_timeout_sec, cfg->header_progress_timeout_sec,
+                cfg->idle_timeout_sec,
                 cfg->write_timeout_sec, cfg->shutdown_drain_timeout_sec);
         return -1;
     }
@@ -606,6 +640,16 @@ int main(int argc, char **argv)
     struct rlimit rl;
     if (enforce_nofile_limit(required_nofile, el_threads, cfg.max_connections,
                              &rl) != 0) {
+        log_shutdown();
+        return EXIT_FAILURE;
+    }
+
+    if (apply_optional_rlimits(&cfg) != 0) {
+        log_shutdown();
+        return EXIT_FAILURE;
+    }
+
+    if (client_limits_init(&cfg) != 0) {
         log_shutdown();
         return EXIT_FAILURE;
     }

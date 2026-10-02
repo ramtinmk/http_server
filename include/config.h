@@ -30,9 +30,15 @@ typedef struct ServerConfig {
     int      max_keepalive_requests;
     int      max_input_buffer_bytes;
     int      header_read_timeout_sec;
+    int      header_progress_timeout_sec;
     int      idle_timeout_sec;
     int      write_timeout_sec;
     int      shutdown_drain_timeout_sec;
+    int      per_ip_connections;          /* 0 disables per-IP connection cap */
+    int      per_ip_requests_per_minute;   /* 0 disables per-IP rate cap */
+    int      landlock_enabled;
+    int      seccomp_enabled;
+    int      rlimit_nproc;                /* 0 leaves RLIMIT_NPROC unchanged */
 
     /* Logging */
     LogLevel log_level;

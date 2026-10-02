@@ -51,6 +51,33 @@ endif()
 # older/other toolchain degrades gracefully instead of failing the build, and
 # the whole set is controlled by ENABLE_HARDENING for an isolated rollback.
 option(ENABLE_HARDENING "Build with compiler/linker hardening flags" ON)
+option(ENABLE_FUZZING "Build libFuzzer parser and state-machine targets" OFF)
+option(ENABLE_ASAN "Build with AddressSanitizer" OFF)
+option(ENABLE_UBSAN "Build with UndefinedBehaviorSanitizer" OFF)
+option(ENABLE_TSAN "Build with ThreadSanitizer" OFF)
+
+if(ENABLE_ASAN AND ENABLE_TSAN)
+    message(FATAL_ERROR "ENABLE_ASAN and ENABLE_TSAN cannot be enabled together")
+endif()
+if(ENABLE_ASAN OR ENABLE_UBSAN OR ENABLE_TSAN)
+    if(NOT CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+        message(FATAL_ERROR "Sanitizers require a GNU or Clang compiler")
+    endif()
+    set(SANITIZER_NAMES)
+    if(ENABLE_ASAN)
+        list(APPEND SANITIZER_NAMES address)
+    endif()
+    if(ENABLE_UBSAN)
+        list(APPEND SANITIZER_NAMES undefined)
+    endif()
+    if(ENABLE_TSAN)
+        list(APPEND SANITIZER_NAMES thread)
+    endif()
+    list(JOIN SANITIZER_NAMES "," SANITIZER_FLAGS)
+    add_compile_options(-g -fno-omit-frame-pointer -fsanitize=${SANITIZER_FLAGS})
+    add_link_options(-fsanitize=${SANITIZER_FLAGS})
+    message(STATUS "Sanitizers enabled: ${SANITIZER_FLAGS}")
+endif()
 
 if(ENABLE_HARDENING AND CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
     include(CheckCCompilerFlag)
@@ -104,6 +131,39 @@ file(GLOB SOURCES "src/*.c")
 # Separate main.c from the rest of the logic logic
 set(SERVER_MAIN "src/main.c")
 list(REMOVE_ITEM SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/${SERVER_MAIN}")
+
+# --- Optional Phase 4 fuzzing ---------------------------------------------
+# libFuzzer is intentionally outside the default build. Configure this tree
+# with CC=clang and -DENABLE_FUZZING=ON; the targets use sanitizer instrumentation
+# and are not production server binaries.
+if(ENABLE_FUZZING)
+    if(NOT CMAKE_C_COMPILER_ID MATCHES "Clang")
+        message(FATAL_ERROR "ENABLE_FUZZING requires a Clang compiler with libFuzzer; configure with CC=clang")
+    endif()
+
+    set(FUZZ_COMMON ${SOURCES})
+    add_executable(http_parser_fuzzer fuzz/http_parser_fuzz.c ${FUZZ_COMMON})
+    add_executable(connection_state_fuzzer fuzz/connection_state_fuzz.c ${FUZZ_COMMON})
+    foreach(fuzz_target http_parser_fuzzer connection_state_fuzzer)
+        target_compile_definitions(${fuzz_target} PRIVATE
+            FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION)
+        target_compile_options(${fuzz_target} PRIVATE
+            -O1 -g -fno-omit-frame-pointer
+            -fsanitize=fuzzer-no-link,address,undefined)
+        target_link_options(${fuzz_target} PRIVATE
+            -fsanitize=fuzzer,address,undefined)
+        target_link_libraries(${fuzz_target} PRIVATE
+            Threads::Threads ZLIB::ZLIB OpenSSL::SSL OpenSSL::Crypto)
+    endforeach()
+
+    add_custom_target(fuzz-smoke
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/fuzz_smoke.py
+                --repo-root ${CMAKE_SOURCE_DIR}
+        DEPENDS http_parser_fuzzer connection_state_fuzzer
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        USES_TERMINAL
+        COMMENT "Running the Phase 4 libFuzzer smoke corpus")
+endif()
 
 # --- 4. Target: HTTP Server ---
 add_executable(http_server 
@@ -341,6 +401,17 @@ add_custom_target(phase4-hardening
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     USES_TERMINAL
     COMMENT "Running Phase 4 compiler-hardening and privilege-drop acceptance"
+)
+
+# Phase 4 sandbox/resource acceptance: exercises Landlock/seccomp startup and
+# serving, per-IP admission, slowloris progress deadlines, rlimits, and the
+# hardened systemd unit. Writes production_phase4_sandbox_resources.json.
+add_custom_target(phase4-sandbox-resources
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/phase4_sandbox_resources_test.py
+    DEPENDS http_server
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    USES_TERMINAL
+    COMMENT "Running Phase 4 sandbox and resource-control acceptance"
 )
 
 # Phase 5 observability acceptance: scrape the Prometheus endpoint, correlate

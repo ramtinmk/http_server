@@ -49,6 +49,7 @@ make phase0-2x            # 2x-capacity overload with wrk
 make phase0-accesslog     # access-log overhead gate with wrk
 make phase2-static        # doc-root traversal corpus + streaming + budgets, no wrk
 make phase4-hardening     # ELF hardening + run_user/run_group drop, no wrk
+make phase4-sandbox-resources # Landlock/seccomp + resource-control E2E artifact
 make saturation           # existing Phase 4 overload acceptance
 ```
 

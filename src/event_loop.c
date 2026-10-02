@@ -5,6 +5,8 @@
 #include "metrics.h"
 #include "log.h"
 #include "privilege.h"
+#include "client_limits.h"
+#include "sandbox.h"
 #include "tls.h"
 
 #include <sys/epoll.h>
@@ -129,6 +131,11 @@ static int deadline_expired(const struct timespec *dl)
            (now.tv_sec == dl->tv_sec && now.tv_nsec >= dl->tv_nsec);
 }
 
+static void progress_deadline_set(struct timespec *dl, int seconds)
+{
+    deadline_set(dl, seconds);
+}
+
 /* Microseconds elapsed since `start` (both CLOCK_MONOTONIC). */
 static long elapsed_us(const struct timespec *start)
 {
@@ -205,6 +212,11 @@ static int epoll_set_rw(EventLoop *loop, ELConnection *c)
 static int epoll_set_ro(EventLoop *loop, ELConnection *c)
 {
     return epoll_mod(loop, c, EPOLLIN);
+}
+
+static int epoll_set_wo(EventLoop *loop, ELConnection *c)
+{
+    return epoll_mod(loop, c, EPOLLOUT);
 }
 
 /* Enter the writing state and arm the response write deadline. */
@@ -342,6 +354,7 @@ static void conn_close(EventLoop *loop, ELConnection *c, ELCloseReason reason)
     metrics_active_connection_dec();
     if (loop->active_conns > 0)
         loop->active_conns--;
+    client_limits_connection_release(c->peer);
 
     if (reason == CLOSE_DEADLINE) {
         if (c->state == CONN_WRITING) {
@@ -393,7 +406,8 @@ static int conn_open(EventLoop *loop, int fd, const struct sockaddr *addr,
      * readable event, so idle connections do not pin a request buffer. */
 
     /* Capture the numeric peer only when access logging needs it. */
-    if (loop->config->access_log && addr) {
+    if ((loop->config->access_log || loop->config->per_ip_connections > 0 ||
+         loop->config->per_ip_requests_per_minute > 0) && addr) {
         if (addr->sa_family == AF_INET) {
             const struct sockaddr_in *in = (const struct sockaddr_in *)addr;
             inet_ntop(AF_INET, &in->sin_addr, c->peer, sizeof(c->peer));
@@ -402,17 +416,26 @@ static int conn_open(EventLoop *loop, int fd, const struct sockaddr *addr,
             inet_ntop(AF_INET6, &in6->sin6_addr, c->peer, sizeof(c->peer));
         }
     }
+    if (!c->peer[0])
+        snprintf(c->peer, sizeof(c->peer), "unknown");
+    if (!client_limits_connection_admit(c->peer)) {
+        conn_return(loop, c);
+        return -1;
+    }
     (void)addrlen;
 
     int one = 1;
     setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
 
     deadline_set(&c->deadline, loop->config->header_read_timeout_sec);
+    progress_deadline_set(&c->header_progress_deadline,
+                          loop->config->header_progress_timeout_sec);
 
     struct epoll_event ev;
     ev.events   = EPOLLIN;
     ev.data.ptr = c;
     if (epoll_ctl(loop->epoll_fd, EPOLL_CTL_ADD, fd, &ev) < 0) {
+        client_limits_connection_release(c->peer);
         conn_return(loop, c);
         return -1;
     }
@@ -428,6 +451,9 @@ static int process_input(EventLoop *loop, ELConnection *c)
     int queued = 0;
 
     if (!c->in_buf)
+        return 0;
+
+    if (c->pq_count >= EL_OUTPUT_BACKPRESSURE_DEPTH)
         return 0;
 
     while (!ring_buffer_is_empty(c->in_buf) &&
@@ -449,6 +475,12 @@ static int process_input(EventLoop *loop, ELConnection *c)
             return -1;
         }
 
+        if (!client_limits_request_admit(c->peer)) {
+            pending_release(&pr);
+            conn_close(loop, c, CLOSE_PROTOCOL_ERROR);
+            return -1;
+        }
+
         c->keep_alive = req_ka;
         pq_push(c, &pr);
         c->request_count++;
@@ -458,6 +490,8 @@ static int process_input(EventLoop *loop, ELConnection *c)
     if (pq_full(c)) {
         metrics_el_pipeline_full();
     }
+    if (c->pq_count >= EL_OUTPUT_BACKPRESSURE_DEPTH)
+        epoll_set_wo(loop, c);
     return queued;
 }
 
@@ -788,6 +822,9 @@ static void el_tls_readable(EventLoop *loop, ELConnection *c)
         int n = SSL_read(c->ssl, buf, (int)sizeof(buf));
         if (n > 0) {
             ring_buffer_write(c->in_buf, buf, (size_t)n);
+            if (c->state == CONN_READING_HEADERS)
+                progress_deadline_set(&c->header_progress_deadline,
+                                      loop->config->header_progress_timeout_sec);
             if (ring_buffer_get_size(c->in_buf) >=
                 (size_t)loop->config->max_input_buffer_bytes) {
                 metrics_input_buffer_limit();
@@ -1037,6 +1074,9 @@ static void el_readable(EventLoop *loop, ELConnection *c)
         ssize_t n = recv(c->fd, buf, sizeof(buf), 0);
         if (n > 0) {
             ring_buffer_write(c->in_buf, buf, (size_t)n);
+            if (c->state == CONN_READING_HEADERS)
+                progress_deadline_set(&c->header_progress_deadline,
+                                      loop->config->header_progress_timeout_sec);
             if (ring_buffer_get_size(c->in_buf) >=
                 (size_t)loop->config->max_input_buffer_bytes) {
                 metrics_input_buffer_limit();
@@ -1214,6 +1254,12 @@ static void el_scan_deadlines(EventLoop *loop)
         ELConnection *c = &loop->pool[i];
         if (c->fd < 0)
             continue;
+        if (c->state == CONN_READING_HEADERS &&
+            deadline_expired(&c->header_progress_deadline)) {
+            metrics_el_deadline_close();
+            conn_close(loop, c, CLOSE_DEADLINE);
+            continue;
+        }
         if (deadline_expired(&c->deadline)) {
             metrics_el_deadline_close();
             conn_close(loop, c, CLOSE_DEADLINE);
@@ -1526,6 +1572,10 @@ int event_loop_run(int server_fd, volatile sig_atomic_t *running,
      * startup so no request is ever served with the elevated identity.
      */
     if (status == 0 && privilege_drop(cfg) != 0)
+        status = -1;
+
+    if (status == 0 && (cfg->landlock_enabled || cfg->seccomp_enabled) &&
+        sandbox_apply(cfg, getenv("HTTP_SERVER_METRICS_FILE")) != 0)
         status = -1;
 
     if (status == 0) {

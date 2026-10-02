@@ -190,7 +190,19 @@ Sharp edges that cost time. Each entry says what bites and how to avoid it.
   would warn) at `-O0`, so the flag is scoped to non-Debug configurations.
 - **Hardening flags are compile-probed.** `-DENABLE_HARDENING=OFF` reverts to
   the previous unhardened build; `readelf` on `bin/http_server` should show
-  `Type: DYN`, `GNU_RELRO`, `BIND_NOW`, and a non-executable `GNU_STACK`.
+ `Type: DYN`, `GNU_RELRO`, `BIND_NOW`, and a non-executable `GNU_STACK`.
+- **Landlock and seccomp are opt-in and fail closed.** Enable them only after
+  making the configured document root, certificate, log, metrics, and config
+  paths accessible to the service account. Unsupported kernels or CPUs abort
+  startup rather than silently running without the requested sandbox.
+- **Per-IP limits use numeric address strings.** IPv4 and IPv6 forms are
+  distinct, and the bounded table refuses unseen addresses when all entries
+  have active connections. Rate-limited clients are closed before a response
+  is queued.
+- **Header progress is separate from the total header deadline.** A client that
+  drips bytes more slowly than `header_progress_timeout` is closed even if its
+  absolute `header_read_timeout` has not expired. Output backpressure pauses
+  reads at `EL_OUTPUT_BACKPRESSURE_DEPTH` to bound pipeline memory.
 
 ## Observability (Phase 5)
 

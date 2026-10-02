@@ -1,0 +1,7 @@
+GET /home HTTP/1.1
+Host: fuzz
+Connection: keep-alive
+
+GET /hello HTTP/1.1
+Host: fuzz
+Connection: close

@@ -143,6 +143,12 @@
 #define WRITE_TIMEOUT_SEC 10
 #endif
 
+/* Maximum interval without receiving another byte while reading headers.
+ * HEADER_READ_TIMEOUT_SEC remains the absolute per-request header deadline. */
+#ifndef HEADER_PROGRESS_TIMEOUT_SEC
+#define HEADER_PROGRESS_TIMEOUT_SEC 2
+#endif
+
 /* --- Graceful shutdown --------------------------------------------------- */
 
 /* On SIGTERM/SIGINT the server stops accepting and finishes in-flight
@@ -223,6 +229,7 @@
 #define ENV_HEADER_READ_TIMEOUT     "HTTP_SERVER_HEADER_READ_TIMEOUT"
 #define ENV_IDLE_TIMEOUT            "HTTP_SERVER_IDLE_TIMEOUT"
 #define ENV_WRITE_TIMEOUT           "HTTP_SERVER_WRITE_TIMEOUT"
+#define ENV_HEADER_PROGRESS_TIMEOUT "HTTP_SERVER_HEADER_PROGRESS_TIMEOUT"
 #define ENV_SHUTDOWN_DRAIN_TIMEOUT  "HTTP_SERVER_SHUTDOWN_DRAIN_TIMEOUT"
 #define ENV_LOG_LEVEL               "HTTP_SERVER_LOG_LEVEL"
 #define ENV_LOG_FILE                "HTTP_SERVER_LOG_FILE"
@@ -245,6 +252,18 @@
 /* Phase 4: privilege drop and hardening. */
 #define ENV_RUN_USER                "HTTP_SERVER_RUN_USER"
 #define ENV_RUN_GROUP               "HTTP_SERVER_RUN_GROUP"
+#define ENV_LANDLOCK                "HTTP_SERVER_LANDLOCK"
+#define ENV_SECCOMP                 "HTTP_SERVER_SECCOMP"
+#define ENV_PER_IP_CONNECTIONS      "HTTP_SERVER_PER_IP_CONNECTIONS"
+#define ENV_PER_IP_REQUESTS_PER_MINUTE "HTTP_SERVER_PER_IP_REQUESTS_PER_MINUTE"
+#define ENV_RLIMIT_NPROC            "HTTP_SERVER_RLIMIT_NPROC"
+
+/* Number of remembered client IPs for per-IP connection and rate limits.
+ * Entries with active connections are pinned; inactive least-recently-used
+ * entries are evicted when this bounded table fills. */
+#ifndef PER_IP_LIMIT_TABLE_SIZE
+#define PER_IP_LIMIT_TABLE_SIZE 4096
+#endif
 
 /* --- Phase 4: privilege drop and hardening ------------------------------ */
 
@@ -353,6 +372,12 @@
  */
 #ifndef EL_MAX_CONNECTION_TABLE
 #define EL_MAX_CONNECTION_TABLE 65536
+#endif
+
+/* Pause socket reads when this many response descriptors are queued, resuming
+ * when the queue drains. MAX_PIPELINE_DEPTH remains the hard queue limit. */
+#ifndef EL_OUTPUT_BACKPRESSURE_DEPTH
+#define EL_OUTPUT_BACKPRESSURE_DEPTH 4
 #endif
 
 /* --- Allocator ---------------------------------------------------------- */
