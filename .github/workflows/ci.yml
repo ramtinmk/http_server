@@ -55,7 +55,7 @@ jobs:
       - name: Valgrind ring and close/error paths
         run: |
           valgrind --leak-check=full --errors-for-leak-kinds=definite,possible --error-exitcode=99 ./bin/run_tests ring
-          valgrind --leak-check=full --errors-for-leak-kinds=definite,possible --error-exitcode=99 ./bin/http_server --port 18081 --document-root . >valgrind-server.log 2>&1 &
+          valgrind --leak-check=full --errors-for-leak-kinds=definite,possible --error-exitcode=99 ./bin/http_server --port 8081 --document-root . >valgrind-server.log 2>&1 &
           pid=$!
           trap 'kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true' EXIT
           ready=0
@@ -64,7 +64,7 @@ jobs:
               cat valgrind-server.log
               exit 1
             fi
-            if python3 -c 'import socket; s=socket.create_connection(("127.0.0.1", 18081), 0.25); s.close()' 2>/dev/null; then
+            if python3 -c 'import socket; s=socket.create_connection(("127.0.0.1", 8081), 0.25); s.close()' 2>/dev/null; then
               ready=1
               break
             fi
