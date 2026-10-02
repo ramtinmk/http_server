@@ -36,7 +36,22 @@ jobs:
           ./bin/http_server --document-root . >server-ci.log 2>&1 &
           pid=$!
           trap 'kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true' EXIT
-          sleep 1
+          ready=0
+          for attempt in $(seq 1 120); do
+            if ! kill -0 "$pid" 2>/dev/null; then
+              cat server-ci.log
+              exit 1
+            fi
+            if python3 -c 'import socket; s=socket.create_connection(("127.0.0.1", 8081), 0.25); s.close()' 2>/dev/null; then
+              ready=1
+              break
+            fi
+            sleep 0.25
+          done
+          if [ "$ready" -ne 1 ]; then
+            cat server-ci.log
+            exit 1
+          fi
           ./bin/run_tests server
       - name: Load smoke
         run: python3 scripts/http_benchmark.py --start-server --scenario keep-alive-5000 --warmup 1 --duration 2 --concurrency 4
@@ -86,3 +101,18 @@ jobs:
           scan-args: |-
             --recursive
             ./
+
+  coverage:
+    name: Phase 4 coverage floor
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure coverage build
+        run: cmake -S . -B build-coverage -DCMAKE_BUILD_TYPE=Debug -DENABLE_HARDENING=OFF -DENABLE_COVERAGE=ON
+      - name: Measure and enforce baseline
+        run: cmake --build build-coverage --target coverage --parallel 2
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-phase4-coverage
+          path: benchmarks/production_phase4_coverage.json

@@ -134,12 +134,13 @@ non-goals). Cross-compilation and non-Linux sandboxes.
 
 **Work**
 
-- [ ] A coverage-instrumented build option (`--coverage`/`gcov` or `llvm-cov`)
-  that does not disturb the default Release build.
-- [ ] Measure line/function coverage over the focused suites and the server e2e
+- [x] A coverage-instrumented `ENABLE_COVERAGE` build option using gcov that does
+  not disturb the default Release build.
+- [x] Measure line/function coverage over the focused suites and the server e2e
   suite for the parser, path resolver, and connection state machine; record the
-  baseline in a checked-in file.
-- [ ] Enforce the baseline in CI, failing when coverage drops below it.
+  baseline in `coverage/phase4_baseline.json`.
+- [x] Enforce the baseline in CI, failing when coverage drops below it and
+  uploading `benchmarks/production_phase4_coverage.json`.
 
 ## Steps (4a-4f progress)
 
@@ -162,6 +163,8 @@ non-goals). Cross-compilation and non-Linux sandboxes.
     seed corpora, and smoke-run artifact.
 11. [x] Add independent ASan/UBSan/TSan CMake options, sanitizer CI jobs,
     Valgrind close/error coverage, clang-tidy, and OSV scanning.
+12. [x] Add isolated gcov coverage measurement, the checked-in Phase 4 baseline,
+    and CI enforcement with an uploaded coverage artifact.
 
 ## Validation
 
@@ -196,9 +199,11 @@ non-goals). Cross-compilation and non-Linux sandboxes.
 - [x] ASan+UBSan and Clang TSan builds configure and compile; ASan+UBSan ring/TLS
   suites and Clang TSan ring suite pass locally. Full Valgrind/OSV evidence is
   produced by CI on the configured Ubuntu runner.
-- [ ] The coverage build reports the parser, path resolver, and connection state
-  machine at or above the checked-in line/function baseline; evidence in the CI
-  coverage artifact.
+- [x] `cmake --build <coverage-build> --target coverage` passes locally with
+  parser, path-resolver, and connection-state line/function floors enforced.
+- [x] The coverage build reports the parser, path resolver, and connection state
+  machine at or above the checked-in line/function baseline; evidence is
+  `benchmarks/production_phase4_coverage.json` and the CI coverage artifact.
 
 ## Risks and rollback
 

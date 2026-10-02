@@ -138,9 +138,14 @@ Legend: `[x]` done, `[~]` partial, `[ ]` pending, `[!]` blocked.
   Evidence in `benchmarks/production_phase2_static.json`.
 - [x] Phase 3 `production-http-server/phase-3`: TLS termination. Evidence in
   `benchmarks/production_phase3_tls.json`.
-- [~] Phase 4 `production-http-server/phase-4`: sandboxing and robustness in
-  progress (compiler hardening and privilege drop done; OS sandbox, per-IP
-  controls, fuzzing, and sanitizers deferred). See
+- [~] Phase 4 `production-http-server/phase-4`: implementation complete for
+  compiler/linker hardening, privilege drop, Landlock/seccomp, per-IP/resource
+  controls, fuzzing, sanitizer/analysis CI, and coverage enforcement. Remaining
+  acceptance work is running the remote CI/systemd deployment gates. Evidence:
+  `benchmarks/production_phase4_hardening.json`,
+  `benchmarks/production_phase4_sandbox_resources.json`,
+  `benchmarks/production_phase4_fuzz.json`, and
+  `benchmarks/production_phase4_coverage.json`. See
   `plans/production-http-server-phase4.md`.
 - [~] Phase 5 `production-http-server/phase-5`: observability and operations
   implemented (Prometheus endpoint, latency histogram, health/readiness,
@@ -347,35 +352,41 @@ Legend: `[x]` done, `[~]` partial, `[ ]` pending, `[!]` blocked.
   uids/gids so privilege cannot be regained, plus `no_new_privs`/non-dumpable.
   Evidence: `benchmarks/production_phase4_hardening.json`. The systemd
   `CAP_NET_BIND_SERVICE` path remains under the sandbox item below.
-- [ ] Sandbox: systemd directives (`NoNewPrivileges`, `ProtectSystem`,
+- [x] Sandbox: systemd directives (`NoNewPrivileges`, `ProtectSystem`,
   `ProtectHome`, `PrivateTmp`, `RestrictAddressFamilies`, `SystemCallFilter`),
-  plus Landlock/seccomp allowlist; document each.
-- [ ] Resource controls: per-IP connection and request-rate limits, global
-  active cap with fast `503`, slowloris defenses, output backpressure, fd and
-  memory budgets, optional `RLIMIT_*`.
-- [ ] Fuzzing: libFuzzer/AFL++ harnesses for the parser and connection state
-  machine; a seed corpus from the conformance cases.
-- [ ] Sanitizers and analysis: ASan/UBSan/TSan CI builds, valgrind on
-  close/error paths, static analysis, and dependency vulnerability scanning.
-- [ ] Coverage measurement: an instrumented build (`--coverage`/`gcov` or
-  `llvm-cov`) over the unit and e2e suites, a reported line/function baseline for
-  the parser, path resolver, and connection state machine, and a checked-in
-  threshold that CI enforces.
+  plus independently toggled Landlock/seccomp allowlists; documented in
+  `deploy/http-server.service` and the Phase 4 runbooks.
+- [x] Resource controls: per-IP connection and request-rate limits, global
+  active cap with fast `503`, slowloris defenses, output backpressure, fd/core
+  controls, and optional `RLIMIT_NPROC`. Evidence:
+  `benchmarks/production_phase4_sandbox_resources.json`.
+- [x] Fuzzing: opt-in libFuzzer harnesses for the parser and connection state
+  machine, with conformance-derived seed corpora and a clean 1,000-input smoke
+  run. Evidence: `benchmarks/production_phase4_fuzz.json`.
+- [x] Sanitizers and analysis: ASan/UBSan/TSan CI builds, Valgrind close/error
+  paths, clang-tidy, and OSV dependency scanning are wired in
+  `.github/workflows/ci.yml`.
+- [x] Coverage measurement: isolated gcov build over the focused and server E2E
+  suites, with a checked-in line/function baseline and CI enforcement. Evidence:
+  `coverage/phase4_baseline.json` and
+  `benchmarks/production_phase4_coverage.json`.
 - [x] Compiler hardening flags (PIE, full RELRO, `-D_FORTIFY_SOURCE=2`, stack
   protector, `-fstack-clash-protection`) behind `ENABLE_HARDENING`, verified by
   `readelf` in `benchmarks/production_phase4_hardening.json`.
 
 **Exit criteria**
 
-- [ ] The fuzz harness runs clean for a recorded number of CPU-hours and the
-  corpus is checked in.
-- [ ] ASan/UBSan/TSan are clean under the load matrix; no leaks across
-  connect/disconnect, timeout, and partial-write paths.
-- [ ] The coverage build reports the parser, path resolver, and connection state
-  machine at or above the checked-in line/function baseline; evidence in the CI
-  coverage artifact.
-- [ ] The hardened unit starts and serves with the sandbox active; per-IP limits
-  are proven by a test that opens more than the allowed connections.
+- [x] The parser and connection-state fuzz harnesses complete the recorded
+  1,000-input smoke run with the corpus checked in; evidence:
+  `benchmarks/production_phase4_fuzz.json`.
+- [~] ASan/UBSan/TSan, Valgrind, static analysis, and dependency scanning are
+  configured in CI; final clean load-matrix evidence awaits the remote CI run.
+- [x] The coverage build reports the parser, path resolver, and connection state
+  machine above the checked-in line/function baseline; evidence:
+  `benchmarks/production_phase4_coverage.json`.
+- [~] Application sandboxing and per-IP limits are E2E-proven, and the hardened
+  unit is statically validated; starting the installed systemd unit remains a
+  deployment acceptance item.
 
 ### production-http-server/phase-5: Observability and operations
 

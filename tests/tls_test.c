@@ -165,7 +165,10 @@ static pid_t spawn_tls_server(void) {
         setenv("HTTP_SERVER_DOCUMENT_ROOT", g_tls.docroot, 1);
         setenv("HTTP_SERVER_ACCESS_LOG", "0", 1);
         setenv("HTTP_SERVER_LOG_LEVEL", "error", 1);
-        execl("./bin/http_server", "http_server", (char *)NULL);
+        const char *server_binary = getenv("HTTP_SERVER_TEST_BINARY");
+        if (!server_binary || !*server_binary)
+            server_binary = "./bin/http_server";
+        execl(server_binary, "http_server", (char *)NULL);
         _exit(127);
     }
     return pid;

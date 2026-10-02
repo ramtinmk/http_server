@@ -46,7 +46,7 @@ iteration. Keep this file a router (short, links out); put depth in `docs/`.
 - Build with `make`; CMake writes executables directly to `bin/`, not `build/` (`bin/http_server` and `bin/run_tests`). Ignore legacy root-level binaries.
 - The binary is built hardened by default (PIE, full RELRO, NX stack, stack protector, `_FORTIFY_SOURCE=2`) behind `ENABLE_HARDENING`; disable with `-DENABLE_HARDENING=OFF`.
 - `CMakeLists.txt` uses `file(GLOB ...)` for `src/*.c` and `tests/*.c`; after adding or removing a C file, regenerate with `cmake -S . -B .` before building.
-- Targets include `make benchmark`, `make benchmark-tls`, `make corpus`, `make stress`, `make benchmark-matrix`, `make saturation`, `make phase0-lifecycle`, `make phase0-2x`, `make phase0-accesslog`, `make phase2-static`, `make phase3-tls`, `make phase4-hardening`, `make phase4-sandbox-resources`, `make fuzz-smoke` (only in an `ENABLE_FUZZING` Clang build), `make memory-soak`, `make startup-failfast`, `make lint`, and `make lint-fix`. `lint`/`lint-fix` exist only when clang-tidy is installed; `lint-fix` edits source files.
+- Targets include `make benchmark`, `make benchmark-tls`, `make corpus`, `make stress`, `make benchmark-matrix`, `make saturation`, `make phase0-lifecycle`, `make phase0-2x`, `make phase0-accesslog`, `make phase2-static`, `make phase3-tls`, `make phase4-hardening`, `make phase4-sandbox-resources`, `make fuzz-smoke` (only in an `ENABLE_FUZZING` Clang build), `make coverage` (only in an `ENABLE_COVERAGE` build), `make memory-soak`, `make startup-failfast`, `make lint`, and `make lint-fix`. `lint`/`lint-fix` exist only when clang-tidy is installed; `lint-fix` edits source files.
 
 ## Tests
 

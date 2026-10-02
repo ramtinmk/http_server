@@ -60,6 +60,9 @@ each harness: `../docs/runbooks/reproduce-a-benchmark.md`.
   `../benchmarks/production_phase4_sandbox_resources.json`.
 - `fuzz_smoke.py` — runs the opt-in libFuzzer targets over the checked-in seed
   corpus and records `../benchmarks/production_phase4_fuzz.json`.
+- `phase4_coverage.py` — runs the focused/server suites under gcov, merges
+  runner/server execution data for critical modules, and enforces the checked-in
+  `../coverage/phase4_baseline.json`.
 - `startup_failfast_test.py` — missing static asset must fail startup.
 - `memory_soak.py` — stationary keep-alive RSS/PSS drift gate.
 - `wrk_benchmark.py` / `wrk_pipeline.lua` — raw `wrk` sweeps (needs `wrk`).
