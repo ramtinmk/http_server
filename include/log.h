@@ -33,9 +33,14 @@ void log_msg(LogLevel level, const char *fmt, ...)
     __attribute__((format(printf, 2, 3)));
 
 /* Emit one access record for a completed response. No-op unless access logging
- * is enabled. `latency_us` is the response time in microseconds. */
+ * is enabled. `latency_us` is the response time in microseconds; `request_id`
+ * is the correlation id returned in the response (may be NULL). */
 void log_access(const char *client, const char *method, const char *path,
-                int status, size_t bytes, long latency_us);
+                int status, size_t bytes, long latency_us,
+                const char *request_id);
+
+/* Change the maximum emitted level at runtime (SIGHUP safe tunable). */
+void log_set_level(LogLevel level);
 
 /* Cumulative count of records dropped because the pipe was full. */
 long long log_dropped_total(void);

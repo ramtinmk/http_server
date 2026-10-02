@@ -12,6 +12,7 @@
 #include <stdatomic.h>
 #include <stdio.h>
 #include <string.h>
+#include <syslog.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -26,8 +27,9 @@ static pthread_t        g_writer;
 static int              g_writer_started;
 static _Atomic int      g_stop;
 static _Atomic long long g_dropped;
-static LogLevel         g_max_level = LOG_LEVEL_INFO;
+static _Atomic int      g_max_level = LOG_LEVEL_INFO;
 static int              g_access_enabled;
+static int              g_syslog_enabled;
 
 /* Set from a signal handler; polled by the writer thread. */
 static volatile sig_atomic_t g_reopen_requested;
@@ -125,7 +127,8 @@ static void log_emit(const char *line, size_t len)
 
 void log_msg(LogLevel level, const char *fmt, ...)
 {
-    if (level > g_max_level || g_pipe_wr < 0)
+    if ((int)level > atomic_load_explicit(&g_max_level, memory_order_relaxed) ||
+        g_pipe_wr < 0)
         return;
 
     char text[1024];
@@ -151,7 +154,8 @@ void log_msg(LogLevel level, const char *fmt, ...)
 }
 
 void log_access(const char *client, const char *method, const char *path,
-                int status, size_t bytes, long latency_us)
+                int status, size_t bytes, long latency_us,
+                const char *request_id)
 {
     if (!g_access_enabled || g_pipe_wr < 0)
         return;
@@ -162,23 +166,33 @@ void log_access(const char *client, const char *method, const char *path,
     char esc_client[128];
     char esc_method[32];
     char esc_path[1200];
+    char esc_rid[64];
     json_escape(client ? client : "-", strlen(client ? client : "-"),
                 esc_client, sizeof(esc_client));
     json_escape(method ? method : "-", strlen(method ? method : "-"),
                 esc_method, sizeof(esc_method));
     json_escape(path ? path : "-", strlen(path ? path : "-"),
                 esc_path, sizeof(esc_path));
+    json_escape(request_id ? request_id : "-",
+                strlen(request_id ? request_id : "-"),
+                esc_rid, sizeof(esc_rid));
 
     char line[LOG_LINE_MAX];
     size_t off = put(line, sizeof(line), 0,
                      "{\"ts\":\"%s\",\"level\":\"info\",\"kind\":\"access\","
+                     "\"request_id\":\"%s\","
                      "\"client\":\"%s\",\"method\":\"%s\",\"path\":\"%s\","
                      "\"status\":%d,\"bytes\":%zu,\"latency_us\":%ld}\n",
-                     ts, esc_client, esc_method, esc_path, status, bytes,
-                     latency_us);
+                     ts, esc_rid, esc_client, esc_method, esc_path, status,
+                     bytes, latency_us);
     if (off >= sizeof(line))
         off = sizeof(line) - 1;
     log_emit(line, off);
+}
+
+void log_set_level(LogLevel level)
+{
+    atomic_store_explicit(&g_max_level, (int)level, memory_order_relaxed);
 }
 
 long long log_dropped_total(void)
@@ -239,6 +253,46 @@ static void write_all(int fd, const char *buf, size_t len)
     }
 }
 
+/*
+ * Mirror complete records to syslog(3). The pipe reader sees arbitrary chunk
+ * boundaries, so a partial trailing line is buffered until the next chunk.
+ * Called only from the writer thread.
+ */
+static void syslog_chunk(const char *buf, size_t len)
+{
+    if (!g_syslog_enabled)
+        return;
+
+    static char   pending[LOG_LINE_MAX];
+    static size_t pending_len;
+    size_t start = 0;
+
+    for (size_t i = 0; i < len; i++) {
+        if (buf[i] != '\n')
+            continue;
+        char line[LOG_LINE_MAX];
+        size_t plen = pending_len;
+        size_t seg = i - start;
+        if (plen + seg >= sizeof(line))
+            seg = sizeof(line) - 1 - plen;
+        if (plen)
+            memcpy(line, pending, plen);
+        memcpy(line + plen, buf + start, seg);
+        line[plen + seg] = '\0';
+        syslog(LOG_INFO, "%s", line);
+        pending_len = 0;
+        start = i + 1;
+    }
+
+    size_t rem = len - start;
+    if (rem > 0) {
+        if (rem >= sizeof(pending))
+            rem = sizeof(pending) - 1;
+        memcpy(pending, buf + start, rem);
+        pending_len = rem;
+    }
+}
+
 static void *writer_main(void *arg)
 {
     (void)arg;
@@ -249,8 +303,10 @@ static void *writer_main(void *arg)
         int r = poll(&pfd, 1, LOG_POLL_INTERVAL_MS);
         if (r > 0 && (pfd.revents & POLLIN)) {
             ssize_t n = read(g_pipe_rd, buf, sizeof(buf));
-            if (n > 0)
+            if (n > 0) {
                 write_all(g_log_fd, buf, (size_t)n);
+                syslog_chunk(buf, (size_t)n);
+            }
             continue;
         }
         if (g_reopen_requested) {
@@ -265,15 +321,20 @@ static void *writer_main(void *arg)
         if (n <= 0)
             break;
         write_all(g_log_fd, buf, (size_t)n);
+        syslog_chunk(buf, (size_t)n);
     }
     return NULL;
 }
 
 int log_init(const ServerConfig *cfg)
 {
-    g_max_level = cfg->log_level;
+    atomic_store_explicit(&g_max_level, (int)cfg->log_level,
+                          memory_order_relaxed);
     g_access_enabled = cfg->access_log;
+    g_syslog_enabled = cfg->syslog_enabled;
     snprintf(g_log_path, sizeof(g_log_path), "%s", cfg->log_file);
+    if (g_syslog_enabled)
+        openlog("http_server", LOG_PID, LOG_DAEMON);
 
     if (open_target() != 0) {
         fprintf(stderr, "FATAL: cannot open log file '%s' (key 'log_file'): "
@@ -323,6 +384,8 @@ void log_shutdown(void)
         if (g_owns_fd && g_log_fd >= 0)
             close(g_log_fd);
         g_log_fd = -1;
+        if (g_syslog_enabled)
+            closelog();
         return;
     }
     atomic_store_explicit(&g_stop, 1, memory_order_relaxed);
@@ -336,4 +399,6 @@ void log_shutdown(void)
     g_pipe_rd = g_pipe_wr = -1;
     g_log_fd = -1;
     g_writer_started = 0;
+    if (g_syslog_enabled)
+        closelog();
 }

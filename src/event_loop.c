@@ -879,8 +879,10 @@ static void el_tls_writable(EventLoop *loop, ELConnection *c)
         }
 
         metrics_response(pr->status);
+        long latency = elapsed_us(&pr->started);
+        metrics_observe_request_latency(latency);
         log_access(c->peer, pr->method, pr->path, pr->status,
-                   pr->header_len + pr->body_len, elapsed_us(&pr->started));
+                   pr->header_len + pr->body_len, latency, pr->request_id);
         int fc = pr->force_close;
         pq_pop(c);
 
@@ -969,8 +971,10 @@ static void el_writable(EventLoop *loop, ELConnection *c)
 
         /* --- Response fully sent --- */
         metrics_response(pr->status);
+        long latency = elapsed_us(&pr->started);
+        metrics_observe_request_latency(latency);
         log_access(c->peer, pr->method, pr->path, pr->status,
-                   pr->header_len + pr->body_len, elapsed_us(&pr->started));
+                   pr->header_len + pr->body_len, latency, pr->request_id);
         int fc = pr->force_close;
         pq_pop(c);
 
@@ -1218,10 +1222,21 @@ static void el_scan_deadlines(EventLoop *loop)
 
     sample_listen_drops(&loop->listen_drops, loop->listen_fd);
 
-    /* Certificate hot reload is requested by SIGHUP and applied here (never in
-     * the signal handler); one loop owns the global context. */
-    if (loop->id == 0)
+    /* Certificate hot reload and safe-config reload are requested by SIGHUP and
+     * applied here (never in the signal handler); one loop owns the globals. */
+    if (loop->id == 0) {
         tls_reload_if_requested();
+
+        ServerConfig reloaded;
+        int rr = config_reload_if_requested(&reloaded);
+        if (rr > 0) {
+            log_set_level(reloaded.log_level);
+            log_msg(LOG_LEVEL_INFO, "config reload ok log_level=%s",
+                    log_level_name(reloaded.log_level));
+        } else if (rr < 0) {
+            log_msg(LOG_LEVEL_ERROR, "config reload failed; keeping previous");
+        }
+    }
 }
 
 /* ------------------------------------------------------------------ */
