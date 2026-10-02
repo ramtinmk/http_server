@@ -343,6 +343,18 @@ add_custom_target(phase4-hardening
     COMMENT "Running Phase 4 compiler-hardening and privilege-drop acceptance"
 )
 
+# Phase 5 observability acceptance: scrape the Prometheus endpoint, correlate
+# request IDs between the response header and the access log, and verify a
+# SIGHUP reload keeps a keep-alive connection usable.
+# Writes benchmarks/production_phase5_observability.json.
+add_custom_target(phase5-observability
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/phase5_observability_test.py
+    DEPENDS http_server
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    USES_TERMINAL
+    COMMENT "Running Phase 5 observability and operations acceptance"
+)
+
 # Phase 4: static assets are precompressed/cached at startup and startup must
 # fail fast when one cannot be loaded.
 add_custom_target(startup-failfast
