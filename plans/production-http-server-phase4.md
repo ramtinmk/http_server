@@ -5,7 +5,7 @@ category: implementation
 status: active
 owner: agent
 created: 2026-10-01
-updated: 2026-10-01
+updated: 2026-10-02
 related: [production-http-server, production-http-server-phase3]
 ---
 
@@ -18,11 +18,11 @@ abusive input: build the binary hardened, drop privileges after binding, apply
 an OS sandbox, bound per-client resource use, and fuzz/sanitize the parser and
 connection state machine. This is `production-http-server` phase 4.
 
-The phase is deliberately split into six independent workstreams (4a–4f). Each
-workstream is reversible on its own (a CMake option, a runtime key, a systemd
-directive, or a separate harness), which is the split justification the program
-plan records. This plan tracks them together because they share one objective
-and one exit gate.
+The phase is deliberately split into seven independent workstreams (4a–4g).
+Each workstream is reversible on its own (a CMake option, a runtime key, a
+systemd directive, or a separate harness), which is the split justification the
+program plan records. This plan tracks them together because they share one
+objective and one exit gate.
 
 ## Scope
 
@@ -32,8 +32,9 @@ surface (`run_user`/`run_group`) implemented in a new `src/privilege.c` +
 seccomp allowlists and a hardened systemd unit; per-IP connection and
 request-rate limits, slowloris defenses, output backpressure, and optional
 `RLIMIT_*`; libFuzzer harnesses with a seed corpus from the Phase 1 conformance
-cases; ASan/UBSan/TSan build options and CI jobs; and the E2E harness
-`scripts/phase4_hardening_test.py` plus docs.
+cases; ASan/UBSan/TSan build options and CI jobs; a coverage-instrumented
+build with a checked-in baseline for the parser, path resolver, and connection
+state machine; and the E2E harness `scripts/phase4_hardening_test.py` plus docs.
 
 Out: HTTP/2 and HTTP/3, dynamic content, and a general config DSL (program
 non-goals). Cross-compilation and non-Linux sandboxes.
@@ -123,6 +124,17 @@ non-goals). Cross-compilation and non-Linux sandboxes.
 - [ ] Static analysis (existing `make lint`) and dependency vulnerability scan
   in CI.
 
+### 4g Coverage measurement
+
+**Work**
+
+- [ ] A coverage-instrumented build option (`--coverage`/`gcov` or `llvm-cov`)
+  that does not disturb the default Release build.
+- [ ] Measure line/function coverage over the focused suites and the server e2e
+  suite for the parser, path resolver, and connection state machine; record the
+  baseline in a checked-in file.
+- [ ] Enforce the baseline in CI, failing when coverage drops below it.
+
 ## Steps (this iteration: 4a + 4b)
 
 1. [x] Add the `ENABLE_HARDENING` option and flags to `CMakeLists.txt`.
@@ -156,6 +168,9 @@ non-goals). Cross-compilation and non-Linux sandboxes.
   an unresolvable name/group is fatal and names the key.
 - [x] No regression in the existing ring/server/TLS suites (the one server-suite
   failure reproduces on `main`).
+- [ ] The coverage build reports the parser, path resolver, and connection state
+  machine at or above the checked-in line/function baseline; evidence in the CI
+  coverage artifact.
 
 ## Risks and rollback
 
@@ -170,3 +185,6 @@ non-goals). Cross-compilation and non-Linux sandboxes.
   before any request is served.
 - **Fortify mismatch at `-O0`** → `_FORTIFY_SOURCE=2` is applied only to
   non-Debug configuration generator expressions.
+- **Coverage instrumentation perturbs the measured binary or gates on noise** →
+  the coverage build is a separate CMake option off the default Release path,
+  and the baseline is a floor (fail below), not an exact match.
