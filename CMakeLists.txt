@@ -196,7 +196,7 @@ if(ENABLE_COVERAGE)
         DEPENDS http_server run_tests
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
         USES_TERMINAL
-        COMMENT "Measuring and enforcing Phase 4 coverage")
+        COMMENT "Measuring and enforcing coverage")
 endif()
 
 target_link_libraries(http_server PRIVATE 

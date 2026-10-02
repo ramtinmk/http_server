@@ -83,6 +83,8 @@ def make_fixtures(root):
         f.write(SMALL_BODY)
     with open(os.path.join(root, "nested", "hello.txt"), "wb") as f:
         f.write(NESTED_BODY)
+    with open(os.path.join(root, "custom.asset"), "wb") as f:
+        f.write(b"custom mime asset\n")
     with open(os.path.join(root, ".hidden"), "wb") as f:
         f.write(b"hidden\n")
     with open(os.path.join(root, "large.bin"), "wb") as f:
@@ -104,15 +106,19 @@ def make_fixtures(root):
     return has_symlinks
 
 
-def start_server(repo_root, root, port, budget, metrics_path):
-    server = os.path.join(repo_root, "bin", "http_server")
+def start_server(repo_root, root, port, budget, metrics_path, server=None,
+                 mime_file=None):
+    server = server or os.path.join(repo_root, "bin", "http_server")
     env = dict(os.environ)
     env["HTTP_SERVER_METRICS_FILE"] = metrics_path
     env["HTTP_SERVER_ACCESS_LOG"] = "0"
+    command = [server, "--document-root", root, "--port", str(port),
+               "--cache-budget-bytes", str(budget), "--max-keepalive-requests",
+               "1000000", "--log-level", "error"]
+    if mime_file:
+        command.extend(["--mime-types", mime_file])
     proc = subprocess.Popen(
-        [server, "--document-root", root, "--port", str(port),
-         "--cache-budget-bytes", str(budget), "--max-keepalive-requests",
-         "1000000", "--log-level", "error"],
+        command,
         cwd=repo_root, env=env, stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT, text=True)
     deadline = time.time() + 10
@@ -224,6 +230,8 @@ def main(argv=None):
                         help="artifact path (default: benchmarks/production_phase2_static.json)")
     parser.add_argument("--skip-throughput", action="store_true",
                         help="record throughput as null (for constrained hosts)")
+    parser.add_argument("--server", default=None,
+                        help="server binary to exercise (defaults to repo-root/bin/http_server)")
     args = parser.parse_args(argv)
 
     repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -236,11 +244,16 @@ def main(argv=None):
     has_symlinks = make_fixtures(root)
     with open(os.path.join(tmp, "sentinel.txt"), "wb") as f:
         f.write(SENTINEL)
+    mime_file = os.path.join(tmp, "mime.types")
+    with open(mime_file, "w") as f:
+        f.write("# Custom MIME map\n\n")
+        f.write("application/x-custom asset ASSET\n")
 
     port = free_port()
     budget = 65536
     metrics_path = os.path.join(tmp, "metrics.json")
-    proc = start_server(repo_root, root, port, budget, metrics_path)
+    proc = start_server(repo_root, root, port, budget, metrics_path, args.server,
+                        mime_file)
     failures = []
     report = {"document_root": root, "cache_budget_bytes": budget,
               "large_file_bytes": LARGE_BYTES}
@@ -260,6 +273,15 @@ def main(argv=None):
         report["mime_text_html"] = hdrs.get("content-type")
         if hdrs.get("content-type") != "text/html":
             failures.append("MIME: index.html -> %s" % hdrs.get("content-type"))
+        status, hdrs, body = get(port, "/custom.asset")
+        report["mime_custom"] = hdrs.get("content-type")
+        if status != 200 or hdrs.get("content-type") != "application/x-custom":
+            failures.append("MIME: custom.asset -> %s %s" %
+                            (status, hdrs.get("content-type")))
+
+        # Preserve cached bytes across eviction churn. This catches stale or
+        # incorrectly reused representations, not just cache-size violations.
+        _, _, cached_body = get(port, "/small.html")
 
         # Large file streamed correctly, including a slow reader.
         status, hdrs, body = get(port, "/large.bin")
@@ -301,6 +323,10 @@ def main(argv=None):
                 get(port, p)
             get(port, "/large.bin")
             get(port, "/small.html")
+        _, _, cached_body_after_churn = get(port, "/small.html")
+        report["cache_content_preserved"] = cached_body_after_churn == cached_body
+        if cached_body_after_churn != cached_body:
+            failures.append("cache: small.html changed after eviction churn")
         time.sleep(0.5)  # let the reporter refresh
         m = read_metrics(metrics_path)
         cache_bytes = m.get("cache_bytes", -1)

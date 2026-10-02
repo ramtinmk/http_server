@@ -1,21 +1,19 @@
 {
   "cache_budget_bytes": 65536,
   "cache_bytes": 59735,
+  "cache_content_preserved": true,
   "cache_entries": 8,
-  "document_root": "/tmp/http_phase2_czqaac1m/docroot",
+  "document_root": "/tmp/http_phase2_f5mfnkz2/docroot",
   "failures": [],
-  "fds_after": 30,
-  "fds_before": 30,
+  "fds_after": -1,
+  "fds_before": -1,
   "large_file_bytes": 3145728,
+  "mime_custom": "application/x-custom",
   "mime_text_html": "text/html",
   "mime_text_plain": "text/plain",
   "passed": true,
   "slow_reader_bytes": 3145728,
-  "throughput": {
-    "baseline_home_rps": 3576.7414376138445,
-    "docroot_small_rps": 3633.403344115549,
-    "ratio": 1.0158417675669353
-  },
+  "throughput": null,
   "traversal_cases": [
     {
       "actual": 200,

@@ -7,6 +7,7 @@ import re
 import signal
 import socket
 import subprocess
+import sys
 import tempfile
 import time
 
@@ -58,6 +59,45 @@ def run_server_suite(root, binary_dir):
         except subprocess.TimeoutExpired:
             process.kill()
             process.wait(timeout=5)
+
+
+def run_observability_suite(root, binary_dir):
+    """Exercise the observability E2E path with the instrumented binary."""
+    script = os.path.join(root, "scripts", "phase5_observability_test.py")
+    artifact = os.path.join(root, "benchmarks",
+                            "production_phase5_observability.json")
+    run([
+        sys.executable, script,
+        "--server", os.path.join(binary_dir, "http_server"),
+        "--output", artifact,
+    ], root, timeout=120)
+
+
+def run_static_suite(root, binary_dir):
+    """Exercise document-root resolution with the instrumented binary."""
+    script = os.path.join(root, "scripts", "phase2_static_test.py")
+    artifact = os.path.join(root, "benchmarks",
+                            "production_phase2_static.json")
+    run([
+        sys.executable, script,
+        "--server", os.path.join(binary_dir, "http_server"),
+        "--skip-throughput",
+        "--output", artifact,
+    ], root, timeout=180)
+
+
+def run_configuration_suite(root, binary_dir):
+    """Exercise configuration validation, precedence, and lifecycle paths."""
+    script = os.path.join(root, "scripts", "phase0_lifecycle_test.py")
+    artifact = os.path.join(root, "benchmarks",
+                            "production_phase0_lifecycle.json")
+    run([
+        sys.executable, script,
+        "--server", os.path.join(binary_dir, "http_server"),
+        "--artifact", artifact,
+        "--conns", "2",
+        "--pipeline", "3",
+    ], root, timeout=180)
 
 
 def parse_gcov(source, object_dir, output_dir):
@@ -191,6 +231,9 @@ def main():
         run([os.path.join(binary_dir, "run_tests"), "ring"], root)
         run([os.path.join(binary_dir, "run_tests"), "tls"], root)
         run_server_suite(root, binary_dir)
+        run_static_suite(root, binary_dir)
+        run_configuration_suite(root, binary_dir)
+        run_observability_suite(root, binary_dir)
         report["targets"] = collect_coverage(root, build_dir)
         with open(baseline_path) as stream:
             baseline = json.load(stream)

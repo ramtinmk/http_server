@@ -148,11 +148,15 @@ def main():
     parser.add_argument(
         "--output",
         default="benchmarks/production_phase5_observability.json")
+    parser.add_argument(
+        "--server",
+        default=None,
+        help="server binary to exercise (defaults to repo-root/bin/http_server)")
     args = parser.parse_args()
     repo_root = os.path.abspath(args.repo_root)
     out_path = args.output if os.path.isabs(args.output) \
         else os.path.join(repo_root, args.output)
-    binary = os.path.join(repo_root, "bin", "http_server")
+    binary = args.server or os.path.join(repo_root, "bin", "http_server")
 
     report = {}
     failures = []
