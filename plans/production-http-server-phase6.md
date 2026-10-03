@@ -217,10 +217,11 @@ Reuse the `scaling-plan` / `hardware-agnostic-benchmark` contract. Phase 6 adds:
   remote CI run is pending.
 - [x] `git ls-files` reports no compiled binary or log and
   `LICENSE`/`CHANGELOG`/`CONTRIBUTING` exist.
-- [!] The soak artifact shows RSS and FD drift within 5% over the final 80% of a
+- [~] The soak artifact shows RSS and FD drift within 5% over the final 80% of a
   multi-hour run: the harness and `make soak` are ready and a short control
-  passes; the 3-hour acceptance run has not been executed. Blocked on a quiet
-  host and 3 hours of wall-clock; unblocks by running `make soak`.
+  passes; the 3-hour acceptance run is in progress and writes
+  `benchmarks/production_phase6_soak.json`. Blocked only on wall-clock time; no
+  code or harness work remains.
 - [x] The capacity report is published
   (`benchmarks/production_phase6_capacity.json`) and the `scaling-plan`
   acceptance is re-verified.

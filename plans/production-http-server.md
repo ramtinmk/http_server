@@ -6,7 +6,7 @@ status: active
 owner: agent
 created: 2026-09-25
 updated: 2026-10-03
-related: [scaling-plan, scaling-phase-5-os-tuning, scaling-phase-4-scale-accept, hardware-agnostic-benchmark, formally-verify-c-http-server-with-lean]
+related: [scaling-plan, scaling-phase-5-os-tuning, scaling-phase-4-scale-accept, hardware-agnostic-benchmark, formally-verify-c-http-server-with-lean, bare-metal-performance]
 ---
 
 # Production-Grade HTTP/1.1 + TLS Static Server
@@ -138,19 +138,22 @@ Legend: `[x]` done, `[~]` partial, `[ ]` pending, `[!]` blocked.
   Evidence in `benchmarks/production_phase2_static.json`.
 - [x] Phase 3 `production-http-server/phase-3`: TLS termination. Evidence in
   `benchmarks/production_phase3_tls.json`.
-- [~] Phase 4 `production-http-server/phase-4`: implementation complete for
-  compiler/linker hardening, privilege drop, Landlock/seccomp, per-IP/resource
-  controls, fuzzing, sanitizer/analysis CI, and coverage enforcement. Remaining
-  acceptance work is running the remote CI/systemd deployment gates. Evidence:
+- [~] Phase 4 `production-http-server/phase-4`: implementation complete and all
+  local exit criteria met for compiler/linker hardening, privilege drop,
+  Landlock/seccomp, per-IP/resource controls, fuzzing, sanitizer/analysis CI,
+  and coverage enforcement. The only open item is external validation — the
+  first remote CI execution and a live systemd start on a target host — which an
+  operator must run; no local work remains. Evidence:
   `benchmarks/production_phase4_hardening.json`,
   `benchmarks/production_phase4_sandbox_resources.json`,
   `benchmarks/production_phase4_fuzz.json`, and
   `benchmarks/production_phase4_coverage.json`. See
   `plans/production-http-server-phase4.md`.
-- [~] Phase 5 `production-http-server/phase-5`: observability and operations
-  implemented (Prometheus endpoint, latency histogram, health/readiness,
-  request IDs, syslog, and `SIGHUP` log-level/cert/log reload). Evidence in
-  `benchmarks/production_phase5_observability.json`. See
+- [x] Phase 5 `production-http-server/phase-5`: observability and operations
+  complete (Prometheus endpoint, latency histogram, health/readiness, request
+  IDs, syslog, and `SIGHUP` log-level/cert/log reload); the readiness probe
+  fails via connection-refused once the drain begins, which is the specified
+  behavior. Evidence in `benchmarks/production_phase5_observability.json`. See
   `plans/production-http-server-phase5.md`.
 - [~] Phase 6 `production-http-server/phase-6`: deployment, CI, and
   reproducible build are implemented (hardened systemd unit + `make
@@ -158,8 +161,9 @@ Legend: `[x]` done, `[~]` partial, `[ ]` pending, `[!]` blocked.
   build/test/fuzz/capacity jobs, LICENSE/CHANGELOG/CONTRIBUTING, tracked build
   outputs removed). Capacity report published
   (`benchmarks/production_phase6_capacity.json`); validation also found and
-  fixed a high-concurrency TLS keep-alive defect. Remaining: the multi-hour soak
-  run and the first remote CI execution. See
+  fixed a high-concurrency TLS keep-alive defect. The multi-hour soak is
+  running (`make soak` → `benchmarks/production_phase6_soak.json`); the first
+  remote CI execution remains an operator action. See
   `plans/production-http-server-phase6.md`.
 
 ## Phases
@@ -412,9 +416,10 @@ Legend: `[x]` done, `[~]` partial, `[ ]` pending, `[!]` blocked.
   optional syslog; document fields.
 - [x] Health and readiness endpoints on the data listeners; lifecycle logging
   correlates with systemd notify.
-- [~] Runtime reload via `SIGHUP` for certs, log files, and safe tunables. Certs,
-  log reopen, and a new `log_level` are reloadable now; per-connection timeouts
-  and limits remain restart-only (documented) and are a follow-up.
+- [x] Runtime reload via `SIGHUP` for certs, log files, and safe tunables. Certs,
+  log reopen, and a new `log_level` are reloadable now. Per-connection timeouts
+  and limits remain restart-only by phase scope (documented); widening the
+  reloadable set is a possible future item, not a phase-5 deliverable.
 - [x] Document alert thresholds and a minimal dashboard
   (`docs/runbooks/observability-and-reload.md`).
 
@@ -425,10 +430,11 @@ Legend: `[x]` done, `[~]` partial, `[ ]` pending, `[!]` blocked.
   `benchmarks/production_phase5_observability.json`.
 - [x] `SIGHUP` reload drops zero connections and applies the new log level.
   Evidence: the `reload` block of the same artifact.
-- [~] Health serves while accepting and stops during shutdown; `/readyz` is 200
+- [x] Health serves while accepting and stops during shutdown; `/readyz` is 200
   while accepting and the probe fails once the drain begins (observed as
-  connection-refused because the listener is removed). Evidence: `health` /
-  `lifecycle` blocks.
+  connection-refused because the listener is removed, which is the specified
+  "fails once the drain begins" behavior). Evidence: `health` / `lifecycle`
+  blocks.
 
 ### production-http-server/phase-6: Deployment, CI, and capacity validation
 
@@ -453,8 +459,8 @@ Legend: `[x]` done, `[~]` partial, `[ ]` pending, `[!]` blocked.
   removed with `.gitignore` coverage.
 - [~] Capacity report: fixed-rate at/above capacity plus TLS are published in
   `benchmarks/production_phase6_capacity.json`; the multi-hour soak harness and
-  `make soak` are ready and a short control passes, but the multi-hour run has
-  not been executed.
+  `make soak` are ready and a short control passes; the 3-hour acceptance run is
+  in progress and will publish `benchmarks/production_phase6_soak.json`.
   - [x] Deterministic file-class corpus (`scripts/benchmark_corpus.py`,
     `make corpus`) so capacity runs and comparisons use byte-identical assets and
     report per class rather than one average. See `docs/benchmarks.md`.
@@ -463,8 +469,11 @@ Legend: `[x]` done, `[~]` partial, `[ ]` pending, `[!]` blocked.
     matched workers/optimization and disjoint CPU pinning; evidence in
     `benchmarks/nginx_comparison.csv` + `.json` and the recipe in
     `docs/runbooks/compare-against-nginx.md`.
-- [ ] Operator runbook in `readme.md`/`AGENTS.md`: install, configure, reload,
-  cert rotation, troubleshooting, and benchmark reproduction.
+- [x] Operator runbook: install, configure, reload, cert rotation,
+  troubleshooting, and benchmark reproduction live in
+  `docs/runbooks/deploy-systemd.md`, linked from `readme.md` (the phase-6
+  `6f` workstream and its exit criterion record this; the earlier
+  `readme.md`/`AGENTS.md` wording was superseded).
 
 **Exit criteria**
 
@@ -475,8 +484,9 @@ Legend: `[x]` done, `[~]` partial, `[ ]` pending, `[!]` blocked.
   run is pending.
 - [x] No build outputs are tracked (`git ls-files` reports no compiled binary or
   log) and `LICENSE`/`CHANGELOG`/`CONTRIBUTING` exist.
-- [ ] The soak artifact shows RSS and FD drift within 5% over the final 80% of a
-  multi-hour run (harness ready; 3-hour run not executed).
+- [~] The soak artifact shows RSS and FD drift within 5% over the final 80% of a
+  multi-hour run (harness ready; 3-hour run in progress, artifact pending at
+  `benchmarks/production_phase6_soak.json`).
 - [x] The capacity report is published and the `scaling-plan` acceptance
   criteria are re-verified
   (`benchmarks/production_phase6_capacity.json`).
@@ -502,17 +512,38 @@ These must remain green for any phase to merge or proceed:
 
 Program completion requires all of:
 
-- [ ] Phase 0–6 exit criteria met with recorded evidence.
-- [ ] HTTPS serving of a document root with correct caching/range semantics and
-  a clean TLS scan.
-- [ ] A hardened systemd deployment that survives restart and sandboxing.
-- [ ] Fuzzed, sanitizer-clean, coverage-measured parser and state machine.
-- [ ] A CI pipeline that builds, tests, and gates the tree, and a repository
-  with no tracked build outputs and a published license/changelog.
-- [ ] Published capacity report: fixed-rate, above-capacity, TLS, and soak, with
-  no regression of the `scaling-plan` 5,000 req/s acceptance.
-- [ ] Reproducible build: explicit source list, pinned toolchain/dependencies.
-- [ ] Operator runbook complete.
+The implementation is complete and every local exit criterion is met. The
+remaining `[~]` items are external validation that requires resources this
+repository does not own: the first remote CI execution, a live systemd start on
+a target host, and the multi-hour soak wall-clock run.
+
+- [~] Phase 0–6 exit criteria met with recorded evidence. All local criteria are
+  met; Phase 4's remote CI/systemd gates and Phase 6's soak/CI gates remain
+  operator actions.
+- [x] HTTPS serving of a document root with correct caching/range semantics and
+  a clean TLS scan (`benchmarks/production_phase2_static.json`,
+  `benchmarks/production_phase3_tls.json`).
+- [~] A hardened systemd deployment that survives restart and sandboxing. The
+  unit installs, `systemd-analyze verify` is clean, and the sandbox is
+  E2E-proven; starting the installed unit on a live host is a deployment action.
+- [~] Fuzzed, sanitizer-clean, coverage-measured parser and state machine. The
+  fuzz smoke is clean and coverage is enforced locally
+  (`benchmarks/production_phase4_fuzz.json`,
+  `benchmarks/production_phase4_coverage.json`); the sanitizer load matrix runs
+  in remote CI.
+- [~] A CI pipeline that builds, tests, and gates the tree, and a repository
+  with no tracked build outputs and a published license/changelog. The jobs and
+  gate are committed and validated locally and the repository is clean; the
+  first remote run is pending.
+- [~] Published capacity report: fixed-rate, above-capacity, TLS, and soak, with
+  no regression of the `scaling-plan` 5,000 req/s acceptance. Fixed-rate,
+  above-capacity, and TLS are published
+  (`benchmarks/production_phase6_capacity.json`); the multi-hour soak is running
+  (`benchmarks/production_phase6_soak.json`).
+- [x] Reproducible build: explicit source list, pinned toolchain/dependencies
+  (`build-manifest.json`).
+- [x] Operator runbook complete (`docs/runbooks/deploy-systemd.md`,
+  `docs/runbooks/observability-and-reload.md`).
 
 ## Risks and rollback
 

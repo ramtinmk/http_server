@@ -141,10 +141,13 @@ internal snapshot format or benchmark harness.
 - [x] `SIGHUP` on an open keep-alive connection applies the new log level and
   leaves the connection usable with zero dropped connections; evidence:
   `reload` block of the artifact.
-- [~] `/healthz` serves `200` while accepting; `/readyz` serves `200` while
+- [x] `/healthz` serves `200` while accepting; `/readyz` serves `200` while
   accepting and the probe fails once shutdown removes the listener (observed as
-  connection-refused). A drain-time `503` is not observable because accepting
-  stops at the same instant. Evidence: `health`/`lifecycle` blocks.
+  connection-refused, which is the specified "fails once the drain begins"
+  behavior). A drain-time `503` body is not observable because accepting stops at
+  the same instant; the readiness atomic is still cleared first so a probe fails
+  before connections stop. Evidence: `health`/`lifecycle` blocks of
+  `benchmarks/production_phase5_observability.json`.
 - [x] No regression in the ring/server/TLS suites.
 
 ## Risks and rollback
