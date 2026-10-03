@@ -7,14 +7,14 @@ installed instance. Everything after build is reversible with `make uninstall`.
 
 - A C11 compiler, CMake, `zlib1g-dev`, and `libssl-dev`.
 - Root (or `sudo`) for the install, the service account, and systemd.
-- The tree builds: `cmake -S . -B . && make`.
+- The tree builds: `cmake -S . -B build && cmake --build build` (or `make`).
 
 ## 1. Install
 
 ```bash
-cmake -S . -B .
-make
-sudo make install          # or: sudo cmake --install .
+cmake -S . -B build
+cmake --build build
+sudo make install          # or: sudo cmake --install build
 ```
 
 `make install` (prefix `/usr/local`) lays out:

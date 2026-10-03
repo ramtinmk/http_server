@@ -117,12 +117,14 @@ RELRO, a non-executable stack, `-fstack-protector-strong`,
 `-DENABLE_HARDENING=OFF`; verify with `readelf -h/-l/-d bin/http_server` or
 `make phase4-hardening`.
 
-CMake writes executables to `bin/`:
+CMake configures the out-of-source `build/` tree and emits the executables to `bin/`:
 
 ```
 ./bin/http_server     # server
 ./bin/run_tests       # C test runner
 ```
+
+The build tree (`build/`) holds the CMake cache and `build-manifest.json`; the source root stays clean.
 
 ## Run
 
@@ -191,8 +193,8 @@ invalid or exceeds the configured bounds is answered with the full `200`.
 and the `logrotate`/`tmpfiles`/`sysusers` snippets:
 
 ```bash
-cmake -S . -B . && make
-sudo make install
+cmake -S . -B build && cmake --build build   # or: make
+sudo make install                            # or: sudo cmake --install build
 sudo systemd-sysusers /usr/lib/sysusers.d/http-server.conf
 sudo systemd-tmpfiles --create /usr/lib/tmpfiles.d/http-server.conf
 sudo systemctl daemon-reload
@@ -211,6 +213,24 @@ is in `docs/runbooks/deploy-systemd.md`.
 Build provenance is recorded at configure time: `build-manifest.json` (next to
 the build) lists the compiler, CMake, `zlib`, and OpenSSL versions, the git
 revision, and the explicit source list.
+
+### Container
+
+A multi-stage `Dockerfile` builds the same hardened binary out-of-source and
+ships it with the `/home`/`/hello` assets and the default config on a pinned
+Alpine base. The container runs as the unprivileged `http-server` account and
+has a `/home` healthcheck:
+
+```bash
+docker build -t c-http-server .
+docker run --rm -p 8081:8081 c-http-server
+curl -s http://127.0.0.1:8081/hello
+```
+
+`docker-compose.yml` encodes the documented CPU/memory/`nofile`/`somaxconn`
+envelope. Because the per-CPU event-loop count, `RLIMIT_NOFILE` preflight, and
+`procfs` memory sampling are cgroup-sensitive, use the systemd install for
+production and the container for a portable demo or CI.
 
 ## Tests
 
@@ -572,19 +592,21 @@ The next program takes this to production: HTTP/1.1 + TLS static serving, secure
 document-root handling, sandboxing, observability, and a hardened systemd
 deployment. See `plans/production-http-server.md`; its Phase 0 (operational
 safety and overload), Phase 1 (HTTP/1.1 correctness and caching), Phase 2
-(secure document-root serving), and Phase 3 (TLS termination) are complete.
-Phase 4 (sandboxing and robustness) is in progress: compiler/linker hardening,
-privilege drop, OS sandboxing, per-IP resource controls, fuzzing, and sanitizer
-CI infrastructure are implemented. Phase 5 (observability and operations) adds
-the Prometheus endpoint, health/readiness probes, request IDs, and a widened
-`SIGHUP` reload — see `docs/runbooks/observability-and-reload.md`. Phase 6
-(deployment, CI, reproducible build, capacity validation) adds the installable
-systemd unit and `make install`/`uninstall` (`docs/runbooks/deploy-systemd.md`),
-the explicit source list and `build-manifest.json` reproducible build, the CI
-build/test/fuzz/capacity jobs, and the capacity report and RSS/FD soak harnesses
-(`docs/benchmarks.md`). The deterministic file-class corpus and the nginx
-comparison are in `docs/benchmarks.md` and
-`docs/runbooks/compare-against-nginx.md`.
+(secure document-root serving), Phase 3 (TLS termination), Phase 4 (sandboxing
+and robustness), Phase 5 (observability and operations), and Phase 6
+(deployment, CI, reproducible build, capacity validation) are implemented and
+locally verified. Phase 4 covers compiler/linker hardening, privilege drop, OS
+sandboxing, per-IP resource controls, fuzzing, and sanitizer CI infrastructure;
+Phase 5 adds the Prometheus endpoint, health/readiness probes, request IDs, and a
+widened `SIGHUP` reload — see `docs/runbooks/observability-and-reload.md`.
+Phase 6 adds the installable systemd unit and `make install`/`uninstall`
+(`docs/runbooks/deploy-systemd.md`), the explicit source list and
+`build-manifest.json` reproducible build, the CI build/test/fuzz/capacity jobs,
+and the capacity report and RSS/FD soak harnesses (`docs/benchmarks.md`). The
+only remaining validation is external: the first remote CI execution, a live
+systemd start on a target host, and the multi-hour soak wall-clock run. The
+deterministic file-class corpus and the nginx comparison are in
+`docs/benchmarks.md` and `docs/runbooks/compare-against-nginx.md`.
 
 Still out of scope: HTTP/2, CGI, reverse proxy, dynamic content, and directory
 listing. See `plans/` for the specifications behind each phase.

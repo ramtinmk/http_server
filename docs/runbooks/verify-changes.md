@@ -5,7 +5,7 @@ Run everything from the repository root.
 ## 1. Build
 
 ```bash
-cmake -S . -B .          # required after adding/removing a .c file (source lists are explicit)
+cmake -S . -B build          # required after adding/removing a .c file (source lists are explicit)
 make
 ```
 

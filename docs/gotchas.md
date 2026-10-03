@@ -13,7 +13,7 @@ Sharp edges that cost time. Each entry says what bites and how to avoid it.
 - **Source lists are explicit; a new file is not built until you list it.**
   `CMakeLists.txt` names every `src/*.c` and `tests/*.c` (no `file(GLOB ...)`).
   After adding or deleting a file, update the matching `set(SOURCES ...)` /
-  `set(TEST_SOURCES ...)` list and re-run `cmake -S . -B .`. A listed-but-missing
+  `set(TEST_SOURCES ...)` list and re-run `cmake -S . -B build`. A listed-but-missing
   file fails at configure; a file you forgot to list fails loudly at the link
   when something references it, rather than silently not compiling.
 - **Generated CMake files are git-ignored on purpose** (`CMakeCache.txt`,

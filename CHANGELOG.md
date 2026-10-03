@@ -20,11 +20,20 @@ summarize the behavior each phase shipped.
 - Operator runbook covering install, configure, reload, certificate rotation,
   troubleshooting, and benchmark reproduction.
 - `LICENSE` (MIT), `CONTRIBUTING.md`, and this changelog.
+- `SECURITY.md` (private vulnerability disclosure), `.clang-format`, and
+  `.editorconfig` for consistent editing.
 - CI: a build-matrix + `ctest` job, a libFuzzer smoke job, and a capacity smoke
   gate tied to a checked-in `benchmarks/ci_baseline.json` floor.
 
 ### Changed
 
+- The default build is now out-of-source: `make` configures and builds `./build`
+  (the wrapper in `GNUmakefile`) and CMake still emits the executables to
+  `./bin`, so the source root no longer collects CMake cache/state.
+- The `Dockerfile` builds out-of-source on a pinned Alpine base with the
+  required `zlib-dev`/`openssl-dev`, copies the runtime libraries, assets, and
+  default config into a minimal final image, and adds a healthcheck; CI builds
+  and smoke-tests the image so it cannot silently rot again.
 - `project(HTTPServer VERSION ...)` is now `1.1.0` and is compiled into the
   binary as `BUILD_VERSION`.
 - Removed the tracked `test` ELF and `server.log` build outputs; `.gitignore`

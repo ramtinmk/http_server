@@ -20,7 +20,7 @@ If the limit should be runtime-tunable, also add a row to `CFG_KEYS` in
 ## 2. Override per build (without editing the header)
 
 ```bash
-cmake -S . -B . -DCMAKE_C_FLAGS="-DEL_THREAD_COUNT=4 -DMAX_ACTIVE_CONNECTIONS=256"
+cmake -S . -B build -DCMAKE_C_FLAGS="-DEL_THREAD_COUNT=4 -DMAX_ACTIVE_CONNECTIONS=256"
 make
 ```
 
@@ -32,7 +32,7 @@ make
 ## 4. Rebuild and verify startup
 
 ```bash
-cmake -S . -B . && make
+cmake -S . -B build && cmake --build build
 ./bin/http_server        # prints every resolved limit under "Server Configuration"
 ```
 

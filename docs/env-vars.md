@@ -156,7 +156,7 @@ in your shell does nothing. Pass them to the compiler through CMake, then
 rebuild:
 
 ```bash
-cmake -S . -B . -DCMAKE_C_FLAGS="-DEL_THREAD_COUNT=4 -DMAX_ACTIVE_CONNECTIONS=256"
+cmake -S . -B build -DCMAKE_C_FLAGS="-DEL_THREAD_COUNT=4 -DMAX_ACTIVE_CONNECTIONS=256"
 make
 ```
 
