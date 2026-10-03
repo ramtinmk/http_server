@@ -161,10 +161,10 @@ Legend: `[x]` done, `[~]` partial, `[ ]` pending, `[!]` blocked.
   build/test/fuzz/capacity jobs, LICENSE/CHANGELOG/CONTRIBUTING, tracked build
   outputs removed). Capacity report published
   (`benchmarks/production_phase6_capacity.json`); validation also found and
-  fixed a high-concurrency TLS keep-alive defect. The multi-hour soak is
-  running (`make soak` → `benchmarks/production_phase6_soak.json`); the first
-  remote CI execution remains an operator action. See
-  `plans/production-http-server-phase6.md`.
+  fixed a high-concurrency TLS keep-alive defect. The multi-hour soak has not
+  been executed (a first attempt was cancelled by a host restart); the harness
+  and `make soak` are ready. The first remote CI execution remains an operator
+  action. See `plans/production-http-server-phase6.md`.
 
 ## Phases
 
@@ -459,8 +459,9 @@ Legend: `[x]` done, `[~]` partial, `[ ]` pending, `[!]` blocked.
   removed with `.gitignore` coverage.
 - [~] Capacity report: fixed-rate at/above capacity plus TLS are published in
   `benchmarks/production_phase6_capacity.json`; the multi-hour soak harness and
-  `make soak` are ready and a short control passes; the 3-hour acceptance run is
-  in progress and will publish `benchmarks/production_phase6_soak.json`.
+  `make soak` are ready and a short control passes; the 3-hour acceptance run
+  has not been executed (a first attempt was cancelled by a host restart) and
+  will publish `benchmarks/production_phase6_soak.json`.
   - [x] Deterministic file-class corpus (`scripts/benchmark_corpus.py`,
     `make corpus`) so capacity runs and comparisons use byte-identical assets and
     report per class rather than one average. See `docs/benchmarks.md`.
@@ -485,7 +486,8 @@ Legend: `[x]` done, `[~]` partial, `[ ]` pending, `[!]` blocked.
 - [x] No build outputs are tracked (`git ls-files` reports no compiled binary or
   log) and `LICENSE`/`CHANGELOG`/`CONTRIBUTING` exist.
 - [~] The soak artifact shows RSS and FD drift within 5% over the final 80% of a
-  multi-hour run (harness ready; 3-hour run in progress, artifact pending at
+  multi-hour run (harness ready; 3-hour run not executed — a first attempt was
+  cancelled by a host restart; artifact pending at
   `benchmarks/production_phase6_soak.json`).
 - [x] The capacity report is published and the `scaling-plan` acceptance
   criteria are re-verified
@@ -538,8 +540,9 @@ a target host, and the multi-hour soak wall-clock run.
 - [~] Published capacity report: fixed-rate, above-capacity, TLS, and soak, with
   no regression of the `scaling-plan` 5,000 req/s acceptance. Fixed-rate,
   above-capacity, and TLS are published
-  (`benchmarks/production_phase6_capacity.json`); the multi-hour soak is running
-  (`benchmarks/production_phase6_soak.json`).
+  (`benchmarks/production_phase6_capacity.json`); the multi-hour soak has not
+  been executed (a first attempt was cancelled by a host restart), and the
+  harness is ready (`benchmarks/production_phase6_soak.json`).
 - [x] Reproducible build: explicit source list, pinned toolchain/dependencies
   (`build-manifest.json`).
 - [x] Operator runbook complete (`docs/runbooks/deploy-systemd.md`,

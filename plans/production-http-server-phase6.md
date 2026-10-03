@@ -219,9 +219,10 @@ Reuse the `scaling-plan` / `hardware-agnostic-benchmark` contract. Phase 6 adds:
   `LICENSE`/`CHANGELOG`/`CONTRIBUTING` exist.
 - [~] The soak artifact shows RSS and FD drift within 5% over the final 80% of a
   multi-hour run: the harness and `make soak` are ready and a short control
-  passes; the 3-hour acceptance run is in progress and writes
-  `benchmarks/production_phase6_soak.json`. Blocked only on wall-clock time; no
-  code or harness work remains.
+  passes; the 3-hour acceptance run has not been executed (a first attempt was
+  cancelled by a host restart) and will write
+  `benchmarks/production_phase6_soak.json`. Blocked on wall-clock time and a
+  host that stays up; no code or harness work remains.
 - [x] The capacity report is published
   (`benchmarks/production_phase6_capacity.json`) and the `scaling-plan`
   acceptance is re-verified.
