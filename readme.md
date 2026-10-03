@@ -184,6 +184,34 @@ returns `405` with the same `Allow`; other methods return `501`. Multi-range
 requests return a bounded `206 multipart/byteranges`; a range-set that is
 invalid or exceeds the configured bounds is answered with the full `200`.
 
+## Deploy (systemd)
+
+`make install` (prefix `/usr/local`) installs the hardened binary, the
+`/home`/`/hello` alias assets, the systemd unit, the `/etc/http-server` config,
+and the `logrotate`/`tmpfiles`/`sysusers` snippets:
+
+```bash
+cmake -S . -B . && make
+sudo make install
+sudo systemd-sysusers /usr/lib/sysusers.d/http-server.conf
+sudo systemd-tmpfiles --create /usr/lib/tmpfiles.d/http-server.conf
+sudo systemctl daemon-reload
+sudo systemctl enable --now http-server
+curl -s http://127.0.0.1:8081/readyz      # ready
+sudo make uninstall                        # remove exactly what install wrote
+```
+
+The unit runs as the unprivileged `http-server` account with `Type=notify`, a
+sandbox directive set, `LimitNOFILE=65536`, and `Restart=on-failure`.
+`systemctl reload http-server` applies the log level, reopens the log, and
+reloads the TLS certificate without dropping connections. The full install,
+configure, cert-rotation, troubleshooting, and capacity-reproduction procedure
+is in `docs/runbooks/deploy-systemd.md`.
+
+Build provenance is recorded at configure time: `build-manifest.json` (next to
+the build) lists the compiler, CMake, `zlib`, and OpenSSL versions, the git
+revision, and the explicit source list.
+
 ## Tests
 
 Unit suites do not need a running server:
@@ -235,6 +263,15 @@ SERVER_PID=$!
 sleep 0.5
 ./bin/run_tests server
 kill "$SERVER_PID" && wait "$SERVER_PID" 2>/dev/null || true
+```
+
+Phase 5 observability and Phase 6 capacity artifacts:
+
+```
+make phase5-observability   # /metrics, request IDs, SIGHUP reload
+make phase6-capacity        # plaintext + TLS fixed-rate + 2x overload
+make capacity-smoke         # short CI throughput gate
+make soak                   # 3-hour RSS/FD drift soak (run out of band)
 ```
 
 ## Benchmarking
@@ -541,8 +578,12 @@ privilege drop, OS sandboxing, per-IP resource controls, fuzzing, and sanitizer
 CI infrastructure are implemented. Phase 5 (observability and operations) adds
 the Prometheus endpoint, health/readiness probes, request IDs, and a widened
 `SIGHUP` reload — see `docs/runbooks/observability-and-reload.md`. Phase 6
-capacity validation has begun with the deterministic file-class corpus and the
-nginx comparison — see `docs/benchmarks.md` and
+(deployment, CI, reproducible build, capacity validation) adds the installable
+systemd unit and `make install`/`uninstall` (`docs/runbooks/deploy-systemd.md`),
+the explicit source list and `build-manifest.json` reproducible build, the CI
+build/test/fuzz/capacity jobs, and the capacity report and RSS/FD soak harnesses
+(`docs/benchmarks.md`). The deterministic file-class corpus and the nginx
+comparison are in `docs/benchmarks.md` and
 `docs/runbooks/compare-against-nginx.md`.
 
 Still out of scope: HTTP/2, CGI, reverse proxy, dynamic content, and directory

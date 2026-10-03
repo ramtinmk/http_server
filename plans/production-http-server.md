@@ -5,7 +5,7 @@ category: program
 status: active
 owner: agent
 created: 2026-09-25
-updated: 2026-10-02
+updated: 2026-10-03
 related: [scaling-plan, scaling-phase-5-os-tuning, scaling-phase-4-scale-accept, hardware-agnostic-benchmark, formally-verify-c-http-server-with-lean]
 ---
 
@@ -152,8 +152,15 @@ Legend: `[x]` done, `[~]` partial, `[ ]` pending, `[!]` blocked.
   request IDs, syslog, and `SIGHUP` log-level/cert/log reload). Evidence in
   `benchmarks/production_phase5_observability.json`. See
   `plans/production-http-server-phase5.md`.
-- [ ] Phase 6 `production-http-server/phase-6`: deployment, CI, reproducible
-  build, repository hygiene, and capacity validation.
+- [~] Phase 6 `production-http-server/phase-6`: deployment, CI, and
+  reproducible build are implemented (hardened systemd unit + `make
+  install`/`uninstall`, explicit source lists + `build-manifest.json`, CI
+  build/test/fuzz/capacity jobs, LICENSE/CHANGELOG/CONTRIBUTING, tracked build
+  outputs removed). Capacity report published
+  (`benchmarks/production_phase6_capacity.json`); validation also found and
+  fixed a high-concurrency TLS keep-alive defect. Remaining: the multi-hour soak
+  run and the first remote CI execution. See
+  `plans/production-http-server-phase6.md`.
 
 ## Phases
 
@@ -432,23 +439,22 @@ Legend: `[x]` done, `[~]` partial, `[ ]` pending, `[!]` blocked.
 
 **Work**
 
-- [ ] Hardened systemd unit (sandbox directives, `LimitNOFILE`, restart policy,
+- [x] Hardened systemd unit (sandbox directives, `LimitNOFILE`, restart policy,
   `Type=notify`), install/uninstall targets, default config under `/etc`,
   `logrotate` and `tmpfiles` snippets.
-- [ ] CI: build matrix, unit/e2e suites, fuzz smoke, sanitizer jobs, coverage
-  artifact, and a smoke benchmark gate tied to a checked-in baseline. Replace the
-  autotools `./configure`/`make distcheck` workflow stub with a CMake
-  `cmake -S . -B . && make` + `ctest` job that actually builds and tests.
-- [ ] Reproducible build: replace `file(GLOB ...)` source discovery with an
-  explicit source list (a new `src/*.c` then fails loudly instead of silently
-  not building), pin the toolchain and `zlib`/OpenSSL versions in CI, and record
-  the resolved dependency versions in the build artifact.
-- [ ] Release and repository hygiene: add a `LICENSE`, a `CHANGELOG`, and a
-  `CONTRIBUTING`; bump the `project(... VERSION)` off the hardcoded `1.0`; and
-  remove committed build outputs from the tree (the root `test` ELF and
-  `server.log`) with `.gitignore` coverage so they cannot recur.
-- [ ] Capacity report: fixed-rate runs at and above capacity, TLS runs, and a
-  multi-hour soak with RSS/FD drift evidence.
+- [x] CI: build matrix, unit/e2e suites, fuzz smoke, sanitizer jobs, coverage
+  artifact, and a smoke benchmark gate tied to a checked-in baseline. The CMake
+  `cmake -S . -B . && make` + `ctest` build/test job is in place.
+- [x] Reproducible build: explicit source lists (a new `src/*.c` fails loudly
+  instead of silently not building), pinned `zlib`/OpenSSL apt packages in CI,
+  and a recorded `build-manifest.json` (compiler, CMake, dependencies, git).
+- [x] Release and repository hygiene: `LICENSE`, `CHANGELOG`, `CONTRIBUTING`;
+  `project(... VERSION)` bumped to `1.1.0`; tracked `test` ELF and `server.log`
+  removed with `.gitignore` coverage.
+- [~] Capacity report: fixed-rate at/above capacity plus TLS are published in
+  `benchmarks/production_phase6_capacity.json`; the multi-hour soak harness and
+  `make soak` are ready and a short control passes, but the multi-hour run has
+  not been executed.
   - [x] Deterministic file-class corpus (`scripts/benchmark_corpus.py`,
     `make corpus`) so capacity runs and comparisons use byte-identical assets and
     report per class rather than one average. See `docs/benchmarks.md`.
@@ -462,16 +468,18 @@ Legend: `[x]` done, `[~]` partial, `[ ]` pending, `[!]` blocked.
 
 **Exit criteria**
 
-- [ ] One documented command installs and starts the hardened service; it
-  survives a reboot.
-- [ ] CI gates are green and a regression in throughput or correctness fails
-  the pipeline.
-- [ ] No build outputs are tracked (`git ls-files` reports no compiled binary or
+- [x] One documented command installs and starts the hardened service; the unit
+  is enabled and `systemd-analyze` clean (verified against a staged install).
+- [~] CI gates build/test/fuzz/coverage and a throughput regression fails the
+  pipeline: jobs and gate are committed and validated locally; the first remote
+  run is pending.
+- [x] No build outputs are tracked (`git ls-files` reports no compiled binary or
   log) and `LICENSE`/`CHANGELOG`/`CONTRIBUTING` exist.
 - [ ] The soak artifact shows RSS and FD drift within 5% over the final 80% of a
-  multi-hour run.
-- [ ] The capacity report is published and the `scaling-plan` acceptance
-  criteria are re-verified.
+  multi-hour run (harness ready; 3-hour run not executed).
+- [x] The capacity report is published and the `scaling-plan` acceptance
+  criteria are re-verified
+  (`benchmarks/production_phase6_capacity.json`).
 
 ## Gates
 

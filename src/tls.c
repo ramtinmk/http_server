@@ -177,6 +177,13 @@ int tls_init(const ServerConfig *cfg)
 #ifdef SSL_OP_NO_RENEGOTIATION
     opts |= SSL_OP_NO_RENEGOTIATION;
 #endif
+#ifdef SSL_OP_IGNORE_UNEXPECTED_EOF
+    /* A peer that closes without sending close_notify is a clean EOF, not a
+     * fatal protocol error. Without this, OpenSSL 3 reports the FIN as
+     * SSL_ERROR_SSL (SSL_R_UNEXPECTED_EOF_WHILE_READING) and the event loop
+     * drops a keep-alive connection the client only intended to reuse. */
+    opts |= SSL_OP_IGNORE_UNEXPECTED_EOF;
+#endif
     SSL_CTX_set_options(g_ctx, opts);
     SSL_CTX_set_mode(g_ctx, SSL_MODE_ENABLE_PARTIAL_WRITE |
                             SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER |
@@ -239,6 +246,11 @@ SSL *tls_new_conn(int fd)
 int tls_handshake_step(SSL *ssl, int *want_write)
 {
     *want_write = 0;
+    /* SSL_get_error() attributes whatever is on the (thread-local) OpenSSL
+     * error queue, so it must be empty before each I/O call. Otherwise a
+     * stale error from a previous connection makes a benign WANT_READ look
+     * like a fatal SSL_ERROR_SSL. */
+    ERR_clear_error();
     int r = SSL_accept(ssl);
     if (r == 1)
         return 1;

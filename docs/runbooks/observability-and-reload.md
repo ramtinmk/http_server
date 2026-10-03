@@ -57,9 +57,11 @@ Key series: `simplehttp_requests_total`, `simplehttp_responses_total{status}`,
 `simplehttp_admission_rejected_total`, `simplehttp_overload_responses_total`,
 `simplehttp_header_timeouts_total`, `simplehttp_tls_handshakes_total`,
 `simplehttp_tls_handshake_failures_total`, `simplehttp_cache_bytes`,
-`simplehttp_ready`, and `simplehttp_uptime_seconds`. The memory gauges are `0`
-unless `HTTP_SERVER_METRICS_FILE` started the reporter thread, which is the only
-memory sampler.
+`simplehttp_open_fds`, `simplehttp_ready`, and `simplehttp_uptime_seconds`. The
+memory gauges are `0` unless `HTTP_SERVER_METRICS_FILE` started the reporter
+thread, which is the only memory sampler. `simplehttp_open_fds` is the server's
+self-reported descriptor count (the process is non-dumpable, so an external
+`/proc/<pid>/fd` read is denied); the soak harness gates its drift.
 
 Run the end-to-end gate:
 

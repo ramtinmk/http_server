@@ -1,0 +1,20 @@
+# Generated from cmake/cmake_uninstall.cmake.in by CMakeLists.txt.
+# Removes every file/directory recorded by the most recent `make install`.
+# Honors DESTDIR for staged installs.
+
+if(NOT EXISTS "@CMAKE_BINARY_DIR@/install_manifest.txt")
+    message(FATAL_ERROR
+        "Cannot find install manifest: @CMAKE_BINARY_DIR@/install_manifest.txt\n"
+        "Run `make install` first.")
+endif()
+
+file(STRINGS "@CMAKE_BINARY_DIR@/install_manifest.txt" _files)
+foreach(_file IN LISTS _files)
+    set(_path "$ENV{DESTDIR}${_file}")
+    if(IS_SYMLINK "${_path}" OR EXISTS "${_path}")
+        message(STATUS "Uninstalling ${_path}")
+        file(REMOVE "${_path}")
+    else()
+        message(STATUS "Skipping ${_path} (does not exist)")
+    endif()
+endforeach()

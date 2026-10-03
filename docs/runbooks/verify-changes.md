@@ -5,7 +5,7 @@ Run everything from the repository root.
 ## 1. Build
 
 ```bash
-cmake -S . -B .          # required after adding/removing a .c file (GLOB)
+cmake -S . -B .          # required after adding/removing a .c file (source lists are explicit)
 make
 ```
 
@@ -50,6 +50,9 @@ make phase0-accesslog     # access-log overhead gate with wrk
 make phase2-static        # doc-root traversal corpus + streaming + budgets, no wrk
 make phase4-hardening     # ELF hardening + run_user/run_group drop, no wrk
 make phase4-sandbox-resources # Landlock/seccomp + resource-control E2E artifact
+make phase5-observability # Prometheus + request IDs + SIGHUP reload, no wrk
+make phase6-capacity      # plaintext + TLS fixed-rate + 2x overload, needs wrk
+make capacity-smoke       # CI throughput gate vs benchmarks/ci_baseline.json
 make saturation           # existing Phase 4 overload acceptance
 ```
 

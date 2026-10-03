@@ -175,8 +175,16 @@ def main(argv=None):
                       metrics.get("admission_rejected_capacity", 0) > 0)
         if not overloaded:
             failures.append("no above-capacity rejection recorded")
-        p99_ms = wrk.get("p99", 0.0) * (1000.0 if wrk.get("p99_unit") == "ms"
-                                        else 1.0)
+        # wrk reports percentile latency with an explicit unit (`3.87ms`,
+        # `1.20s`); normalize to milliseconds without double-converting.
+        p99_value = wrk.get("p99", 0.0)
+        p99_unit = wrk.get("p99_unit", "ms")
+        if p99_unit == "s":
+            p99_ms = p99_value * 1000.0
+        elif p99_unit == "us":
+            p99_ms = p99_value / 1000.0
+        else:
+            p99_ms = p99_value
         if p99_ms > 5000:
             failures.append("p99 %.1f ms is unbounded" % p99_ms)
 

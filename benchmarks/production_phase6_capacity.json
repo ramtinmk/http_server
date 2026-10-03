@@ -1,0 +1,71 @@
+{
+  "acceptance": {
+    "overload_bounded": true,
+    "plaintext_zero_timeouts": true,
+    "scaling_5000_rps": true,
+    "tls_to_plaintext_ratio": 0.6643,
+    "tls_zero_timeouts": true
+  },
+  "failures": [],
+  "generated_utc": "2026-10-03T08:47:34Z",
+  "passed": true,
+  "runs": {
+    "overload_2x": {
+      "active_connections_max": 256,
+      "attempts": 1,
+      "capacity": 256,
+      "connections": 512,
+      "failures": [],
+      "listener_disabled_count": 0,
+      "non_2xx_responses": 905241,
+      "overload_responses": 901104,
+      "p99_ms": 4.99,
+      "requests_per_sec": 225694.39,
+      "socket_errors": {
+        "connect": 0,
+        "read": 0,
+        "timeout": 0,
+        "write": 0
+      },
+      "success": true
+    },
+    "plaintext": {
+      "commit_id": "e71f61fb5db6ea050fa6c218e796a6a2b817d72f",
+      "cpu_model": "13th Gen Intel(R) Core(TM) i9-13900K",
+      "fail_timeout": 0,
+      "hardware_agnostic_rps": 14753.974,
+      "host_name": "WIN-EF8DPSI8JVV",
+      "latency_p50_ms": 0.094,
+      "latency_p99_ms": 0.632,
+      "mode": "plaintext",
+      "os_kernel": "6.18.33.1-microsoft-standard-WSL2",
+      "returncode": 0,
+      "scenario": "keep-alive-5000",
+      "server_connection_capacity": 1024,
+      "server_connection_resets": 0,
+      "server_listener_disabled": 0,
+      "server_overload_responses": 0,
+      "status_200": 24999,
+      "successful_rps": 4999.8
+    },
+    "tls": {
+      "commit_id": "e71f61fb5db6ea050fa6c218e796a6a2b817d72f",
+      "cpu_model": "13th Gen Intel(R) Core(TM) i9-13900K",
+      "fail_timeout": 0,
+      "hardware_agnostic_rps": 9801.047,
+      "host_name": "WIN-EF8DPSI8JVV",
+      "latency_p50_ms": 0.128,
+      "latency_p99_ms": 1.29,
+      "mode": "tls",
+      "os_kernel": "6.18.33.1-microsoft-standard-WSL2",
+      "returncode": 0,
+      "scenario": "keep-alive-5000",
+      "server_connection_capacity": 1024,
+      "server_connection_resets": 0,
+      "server_listener_disabled": 0,
+      "server_overload_responses": 0,
+      "status_200": 25000,
+      "successful_rps": 5000.0
+    }
+  }
+}

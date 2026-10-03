@@ -82,8 +82,9 @@ event loop. Directory-wide rules (build, tests, plans) are in `../AGENTS.md`.
 
 ## Editing rules
 
-- Adding or removing a `.c` file here requires `cmake -S . -B .` (the build uses
-  `file(GLOB ...)`).
+- Adding or removing a `.c` file here requires editing the explicit `SOURCES`
+  list in `../CMakeLists.txt` and re-running `cmake -S . -B .` (the build does
+  not glob).
 - New compile-time limits belong in `../include/server_config.h`; new runtime
   keys additionally need a `CFG_KEYS` row in `config.c` and a `config_defaults`
   entry. Never a literal.

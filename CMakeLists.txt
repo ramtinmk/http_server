@@ -1,7 +1,9 @@
 cmake_minimum_required(VERSION 3.16)
 
-# Project Configuration
-project(HTTPServer VERSION 1.0 LANGUAGES C)
+# Project Configuration.
+# The version is a real release identifier (see CHANGELOG.md); it is also
+# compiled into the binary as BUILD_VERSION and recorded in build-manifest.json.
+project(HTTPServer VERSION 1.1.0 LANGUAGES C)
 
 # Default to an optimized build. Without this, CMAKE_BUILD_TYPE is empty and no
 # -O flag is applied, which makes the server unusable as a performance baseline
@@ -135,12 +137,30 @@ include_directories(include)
 
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 
-# Automatically find all .c files in src/
-file(GLOB SOURCES "src/*.c")
-
-# Separate main.c from the rest of the logic logic
+# Explicit source list. This replaces a previous `file(GLOB ...)`: a source file
+# that exists on disk but is not listed here is *not* built, and if anything
+# references its symbols the link fails loudly. Update this list when adding or
+# removing a file, then re-run `cmake -S . -B .`.
+#
+# SERVER_MAIN is excluded from SOURCES because the fuzz targets link the library
+# sources without a second `main()`.
 set(SERVER_MAIN "src/main.c")
-list(REMOVE_ITEM SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/${SERVER_MAIN}")
+set(SOURCES
+    src/client_limits.c
+    src/config.c
+    src/event_loop.c
+    src/file_cache.c
+    src/http_server.c
+    src/log.c
+    src/memory_profiler.c
+    src/metrics.c
+    src/path_resolver.c
+    src/privilege.c
+    src/ring_buffer.c
+    src/sandbox.c
+    src/sd_notify.c
+    src/tls.c
+)
 
 # --- Optional Phase 4 fuzzing ---------------------------------------------
 # libFuzzer is intentionally outside the default build. Configure this tree
@@ -211,11 +231,18 @@ target_link_libraries(http_server PRIVATE
 # defaults regardless of the process working directory.
 target_compile_definitions(http_server PRIVATE
     DEFAULT_CONFIG_FILE="${CMAKE_SOURCE_DIR}/http_server.conf"
+    BUILD_VERSION="${PROJECT_VERSION}"
 )
 
-file(GLOB TEST_SOURCES "tests/*.c")
+# Explicit test source list (see the note on SOURCES above).
+set(TEST_SOURCES
+    tests/main_test.c
+    tests/server_test.c
+    tests/test_ring_buffer.c
+    tests/tls_test.c
+)
 
-# If we found test files, build the test runner
+# Build the test runner when test sources are present.
 if(TEST_SOURCES)
     add_executable(run_tests 
         ${TEST_SOURCES}   # main_test.c, test_ring_buffer.c, etc.
@@ -245,6 +272,69 @@ if(TEST_SOURCES)
         PROPERTIES WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     )
 endif()
+
+# --- Build manifest --------------------------------------------------------
+# Record the resolved toolchain and dependency versions next to the build so a
+# binary can be traced back to exactly what produced it. Written at configure
+# time to ${CMAKE_BINARY_DIR}/build-manifest.json; CI uploads it as an artifact.
+execute_process(
+    COMMAND git -C ${CMAKE_SOURCE_DIR} rev-parse HEAD
+    OUTPUT_VARIABLE BUILD_GIT_COMMIT
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET
+)
+execute_process(
+    COMMAND git -C ${CMAKE_SOURCE_DIR} rev-parse --abbrev-ref HEAD
+    OUTPUT_VARIABLE BUILD_GIT_BRANCH
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET
+)
+execute_process(
+    COMMAND git -C ${CMAKE_SOURCE_DIR} status --porcelain
+    OUTPUT_VARIABLE BUILD_GIT_STATUS
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET
+)
+if(BUILD_GIT_COMMIT STREQUAL "")
+    set(BUILD_GIT_COMMIT "unknown")
+endif()
+if(BUILD_GIT_BRANCH STREQUAL "")
+    set(BUILD_GIT_BRANCH "unknown")
+endif()
+if(BUILD_GIT_STATUS STREQUAL "")
+    set(BUILD_GIT_DIRTY false)
+else()
+    set(BUILD_GIT_DIRTY true)
+endif()
+
+# Render a JSON array of quoted, comma-separated entries from a list.
+function(_json_array out_var)
+    set(_acc "")
+    foreach(_item IN LISTS ARGN)
+        if(_acc)
+            string(APPEND _acc ",\n")
+        endif()
+        string(APPEND _acc "    \"${_item}\"")
+    endforeach()
+    set(${out_var} "${_acc}" PARENT_SCOPE)
+endfunction()
+
+_json_array(BUILD_MANIFEST_SOURCES ${SOURCES})
+_json_array(BUILD_MANIFEST_TEST_SOURCES ${TEST_SOURCES})
+
+configure_file(
+    ${CMAKE_SOURCE_DIR}/cmake/build-manifest.json.in
+    ${CMAKE_BINARY_DIR}/build-manifest.json
+    @ONLY
+)
+
+# Convenience target so `make build-manifest` resolves for CI scripts; the file
+# itself is produced at configure time.
+add_custom_target(build-manifest
+    COMMAND ${CMAKE_COMMAND} -E cat ${CMAKE_BINARY_DIR}/build-manifest.json
+    COMMENT "Showing ${CMAKE_BINARY_DIR}/build-manifest.json"
+    VERBATIM
+)
 
 add_test(
     NAME benchmark_python_tests
@@ -459,6 +549,45 @@ add_custom_target(phase5-observability
     COMMENT "Running Phase 5 observability and operations acceptance"
 )
 
+# Phase 6 capacity smoke gate: a fixed low-rate keep-alive run whose
+# hardware_agnostic_rps must stay above the checked-in floor in
+# benchmarks/ci_baseline.json. Used by CI and runnable locally.
+# Writes benchmarks/ci_capacity_gate.json.
+add_custom_target(capacity-smoke
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/ci_capacity_gate.py
+    DEPENDS http_server
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    USES_TERMINAL
+    COMMENT "Running the Phase 6 CI capacity smoke gate"
+)
+
+# Phase 6 capacity report: fresh plaintext fixed-rate, TLS fixed-rate, and
+# above-capacity overload runs, re-verifying the scaling-plan 5000 req/s
+# acceptance and the bounded overload contract. Writes
+# benchmarks/production_phase6_capacity.json.
+add_custom_target(phase6-capacity
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/phase6_capacity_report.py
+    DEPENDS http_server
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    USES_TERMINAL
+    COMMENT "Running the Phase 6 capacity report (plaintext + TLS + overload)"
+)
+
+# Phase 6 multi-hour soak: stationary keep-alive load that must leave RSS and
+# open file descriptors flat (within 5% over the final 80% of the run). The
+# default is three hours; pass `--duration` to memory_soak.py directly for a
+# shorter control. Writes benchmarks/production_phase6_soak.json.
+add_custom_target(soak
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/memory_soak.py
+            --start-server --duration 10800 --rate 1000 --concurrency 16
+            --interval 60
+            --output ${CMAKE_SOURCE_DIR}/benchmarks/production_phase6_soak.json
+    DEPENDS http_server
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    USES_TERMINAL
+    COMMENT "Running the Phase 6 multi-hour soak (3h; RSS/FD drift)"
+)
+
 # Phase 4: static assets are precompressed/cached at startup and startup must
 # fail fast when one cannot be loaded.
 add_custom_target(startup-failfast
@@ -513,3 +642,49 @@ if(CLANG_TIDY_EXE)
 else()
     message(WARNING "clang-tidy not found; install with: apt install clang-tidy")
 endif()
+
+# --- Installation ----------------------------------------------------------
+# `cmake --install .` (or `make install`) installs the hardened binary, the
+# shipped alias assets, the docs, and the systemd/logrotate/tmpfiles/sysusers
+# integration. The default prefix is /usr/local and the unit and installed
+# config assume that prefix; DESTDIR is honored for staged/packaged installs.
+include(GNUInstallDirs)
+
+install(TARGETS http_server RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+
+# Alias assets for /home and /hello. The unit sets
+# WorkingDirectory=/usr/local/share/http-server so these resolve.
+install(DIRECTORY ${CMAKE_SOURCE_DIR}/root/
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/http-server/root
+        FILES_MATCHING PATTERN "*.html")
+
+install(FILES
+        ${CMAKE_SOURCE_DIR}/readme.md
+        ${CMAKE_SOURCE_DIR}/CHANGELOG.md
+        ${CMAKE_SOURCE_DIR}/LICENSE
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/http-server)
+
+# System integration. Absolute DESTINATIONs are deliberate: /etc and /usr/lib
+# are conventional locations independent of the install prefix, and DESTDIR
+# still stages them for packaging.
+install(FILES ${CMAKE_SOURCE_DIR}/deploy/http-server.service
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/systemd/system)
+install(FILES ${CMAKE_SOURCE_DIR}/deploy/http_server.conf
+        DESTINATION /etc/http-server)
+install(FILES ${CMAKE_SOURCE_DIR}/deploy/logrotate.conf
+        DESTINATION /etc/logrotate.d RENAME http-server)
+install(FILES ${CMAKE_SOURCE_DIR}/deploy/http-server.sysusers
+        DESTINATION /usr/lib/sysusers.d RENAME http-server.conf)
+install(FILES ${CMAKE_SOURCE_DIR}/deploy/http-server.tmpfiles
+        DESTINATION /usr/lib/tmpfiles.d RENAME http-server.conf)
+
+# --- Uninstallation --------------------------------------------------------
+configure_file(
+    ${CMAKE_SOURCE_DIR}/cmake/cmake_uninstall.cmake.in
+    ${CMAKE_BINARY_DIR}/cmake_uninstall.cmake
+    @ONLY
+)
+add_custom_target(uninstall
+    COMMAND ${CMAKE_COMMAND} -P ${CMAKE_BINARY_DIR}/cmake_uninstall.cmake
+    COMMENT "Uninstalling files recorded in install_manifest.txt"
+)

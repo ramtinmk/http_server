@@ -1,6 +1,7 @@
 #include "metrics.h"
 #include "memory_profiler.h"
 
+#include <dirent.h>
 #include <pthread.h>
 #include <stdarg.h>
 #include <stdatomic.h>
@@ -375,6 +376,35 @@ static size_t appendf(char *buf, size_t cap, size_t off, const char *fmt, ...)
 #define LOAD(counter) atomic_load_explicit(&(counter), memory_order_relaxed)
 
 /*
+ * Count the process's open file descriptors from /proc/self/fd. The server is
+ * non-dumpable (PR_SET_DUMPABLE=0), so an external sampler cannot read
+ * /proc/<pid>/fd; the process must report its own count. Returns -1 when procfs
+ * is unavailable. The directory handle opened by opendir() is itself one of the
+ * listed descriptors, so subtract it.
+ */
+static long count_open_fds(void)
+{
+#if defined(__linux__)
+    DIR *dir = opendir("/proc/self/fd");
+    if (!dir)
+        return -1;
+    long count = 0;
+    for (;;) {
+        struct dirent *ent = readdir(dir);
+        if (!ent)
+            break;
+        if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0)
+            continue;
+        count++;
+    }
+    closedir(dir);
+    return count > 0 ? count - 1 : count;
+#else
+    return -1;
+#endif
+}
+
+/*
  * Serialize the counters into one line of JSON. The output is intentionally
  * flat and fixed-shape so the benchmark can parse it with the standard library
  * and so CSV columns line up across runs. `snprintf` returns the length the
@@ -510,8 +540,9 @@ size_t metrics_snapshot(char *buf, size_t cap)
     if (sampler)
         sampler(&cache_bytes, &cache_entries);
     used = appendf(buf, cap, used,
-                   ",\"cache_bytes\":%ld,\"cache_entries\":%ld",
-                   cache_bytes, cache_entries);
+                   ",\"cache_bytes\":%ld,\"cache_entries\":%ld"
+                   ",\"open_fds\":%ld",
+                   cache_bytes, cache_entries, count_open_fds());
 
     used = memory_profiler_append_json(buf, cap, used);
     used = appendf(buf, cap, used, "}");
@@ -691,14 +722,17 @@ size_t metrics_prometheus(char *buf, size_t cap)
          "# HELP simplehttp_cache_entries Entries in the representation cache.\n"
          "# TYPE simplehttp_cache_entries gauge\n"
          "simplehttp_cache_entries %ld\n"
+         "# HELP simplehttp_open_fds Open file descriptors held by the server.\n"
+         "# TYPE simplehttp_open_fds gauge\n"
+         "simplehttp_open_fds %ld\n"
          "# HELP simplehttp_resident_memory_bytes Resident set size.\n"
          "# TYPE simplehttp_resident_memory_bytes gauge\n"
          "simplehttp_resident_memory_bytes %lld\n"
          "# HELP simplehttp_virtual_memory_bytes Virtual memory size.\n"
          "# TYPE simplehttp_virtual_memory_bytes gauge\n"
          "simplehttp_virtual_memory_bytes %lld\n",
-         cache_bytes, cache_entries, (long long)rss_kb * 1024,
-         (long long)vm_kb * 1024);
+         cache_bytes, cache_entries, count_open_fds(),
+         (long long)rss_kb * 1024, (long long)vm_kb * 1024);
 
 #undef PROM
     return used;

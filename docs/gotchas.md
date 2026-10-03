@@ -10,10 +10,12 @@ Sharp edges that cost time. Each entry says what bites and how to avoid it.
 - **Executables land in `bin/`, not `build/`.** `CMAKE_RUNTIME_OUTPUT_DIRECTORY`
   is set to `bin/` in `CMakeLists.txt:17`. Ignore stale root-level binaries
   (e.g. `./test`).
-- **`file(GLOB ...)` does not notice new/removed files.** After adding or
-  deleting any `src/*.c` or `tests/*.c`, run `cmake -S . -B .` before `make`,
-  otherwise the new file is silently not compiled. This is the most common
-  "my code changes have no effect" cause.
+- **Source lists are explicit; a new file is not built until you list it.**
+  `CMakeLists.txt` names every `src/*.c` and `tests/*.c` (no `file(GLOB ...)`).
+  After adding or deleting a file, update the matching `set(SOURCES ...)` /
+  `set(TEST_SOURCES ...)` list and re-run `cmake -S . -B .`. A listed-but-missing
+  file fails at configure; a file you forgot to list fails loudly at the link
+  when something references it, rather than silently not compiling.
 - **Generated CMake files are git-ignored on purpose** (`CMakeCache.txt`,
   `Makefile`, `compile_commands.json`, `Testing/`) because they embed absolute
   paths. Never commit them.
@@ -171,6 +173,14 @@ Sharp edges that cost time. Each entry says what bites and how to avoid it.
 - **`SIGHUP` reload keeps connections.** The certificate is reloaded into the
   live context; established sessions keep their original certificate and a
   failed reload keeps the previous one.
+- **Clear the OpenSSL error queue before every `SSL_read`/`SSL_write`/
+  `SSL_accept`.** `SSL_get_error()` attributes whatever is on the thread-local
+  error queue, so a stale error (for example, one left by `SSL_shutdown()` on a
+  previous connection handled by the same loop thread) makes a benign `WANT_READ`
+  look like a fatal `SSL_ERROR_SSL` and drops a healthy keep-alive connection.
+  The context also sets `SSL_OP_IGNORE_UNEXPECTED_EOF` so a peer that closes
+  without `close_notify` is a clean EOF, matching the plaintext path; before that
+  fix roughly 0.04% of high-concurrency TLS keep-alive requests were cut off.
 
 ## Hardening (Phase 4)
 
@@ -230,6 +240,35 @@ Sharp edges that cost time. Each entry says what bites and how to avoid it.
 - **`syslog=1` mirrors records from the writer thread**, not the event loops, so
   a syslog target cannot stall a loop. A full pipe still drops records (counted
   in `dropped_logs`).
+- **The process is non-dumpable (`PR_SET_DUMPABLE=0`), so `/proc/<pid>/fd` is
+  not readable by an external sampler.** Use the self-reported
+  `simplehttp_open_fds` Prometheus gauge / JSON `open_fds` field (the soak
+  harness does); counting descriptors from outside the process returns
+  `Permission denied`.
+
+## Deployment (Phase 6)
+
+- **`make install` defaults to prefix `/usr/local`, and the unit/config assume
+  it.** The systemd unit's `ExecStart`, `WorkingDirectory`, and `--config` paths
+  are absolute `/usr/local`/`/etc` locations; changing `CMAKE_INSTALL_PREFIX`
+  means editing `deploy/http-server.service` and `deploy/http_server.conf` too.
+  `DESTDIR` is honored for staged installs.
+- **The service must run with `WorkingDirectory` containing `root/`.** The
+  `/home` and `/hello` aliases are opened from the fixed relative paths
+  `root/home.html`/`root/hello.html`; the unit installs those assets under
+  `/usr/local/share/http-server` and sets that as the working directory. If you
+  move the assets without the unit, startup fails the static-asset preflight.
+- **The installed config lives at `/etc/http-server/http_server.conf` and is
+  passed explicitly with `--config`.** The compiled-in `DEFAULT_CONFIG_FILE`
+  (the repository path) is irrelevant to the installed service.
+- **The unit is `Type=notify`.** The server sends `sd_notify(READY)` only after
+  binding; if it cannot bind or the preflight fails, systemd sees the process
+  exit and restarts per `Restart=on-failure`. `systemctl reload` (HUP) is the
+  zero-downtime path for the log level and certificate.
+- **`LimitNOFILE=65536` in the unit, not the host default.** The startup
+  preflight refuses to run when the effective soft limit is below the connection
+  budget, so a low limit makes the installed service exit at start rather than
+  serve.
 
 ## Tests
 

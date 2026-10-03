@@ -295,9 +295,13 @@ static int ssl_read_headers(SSL *ssl, char **headers) {
 }
 
 /* Send one request and read one Content-Length-framed response. The connection
- * is left open so a keep-alive test can issue a second request. */
-static int tls_request(SSL *ssl, const char *request, TlsResponse *response) {
+ * is left open so a keep-alive test can issue another request. When `close` is
+ * non-NULL it is set to 1 if the response signalled `Connection: close` (the
+ * server ends the connection after this response). */
+static int tls_request_ex(SSL *ssl, const char *request, TlsResponse *response,
+                          int *close) {
     memset(response, 0, sizeof(*response));
+    if (close) *close = 0;
     if (SSL_write(ssl, request, (int)strlen(request)) <= 0) return -1;
 
     char *headers = NULL;
@@ -307,6 +311,7 @@ static int tls_request(SSL *ssl, const char *request, TlsResponse *response) {
         free(headers);
         return -1;
     }
+    if (close && strcasestr(headers, "connection: close") != NULL) *close = 1;
     const char *length_field = strcasestr(headers, "content-length:");
     if (!length_field) {
         free(headers);
@@ -327,6 +332,10 @@ static int tls_request(SSL *ssl, const char *request, TlsResponse *response) {
     response->body = body;
     response->body_len = (size_t)length;
     return 0;
+}
+
+static int tls_request(SSL *ssl, const char *request, TlsResponse *response) {
+    return tls_request_ex(ssl, request, response, NULL);
 }
 
 /* ------------------------------------------------------------------ */
@@ -484,6 +493,49 @@ void test_tls_keepalive_two_requests(void) {
     tls_close(ssl);
 }
 
+void test_tls_keepalive_churn(void) {
+    /* Exercise keep-alive across the server's per-connection request limit:
+     * every response must be complete, and when the server intends to end the
+     * connection it must say so with `Connection: close` before closing. A
+     * premature close (the client is left waiting for headers) fails the read
+     * and is the bug this guards against. */
+    const int connections = 4;
+    const int requests_per_connection = 130;
+    int served = 0;
+    int reconnects = 0;
+    SSL *ssl = NULL;
+
+    for (int i = 0; i < connections * requests_per_connection; i++) {
+        if (ssl == NULL) {
+            ssl = tls_connect_current();
+            TEST_ASSERT(ssl != NULL);
+        }
+        TlsResponse response;
+        int close = 0;
+        TEST_ASSERT(tls_request_ex(
+            ssl,
+            "GET /home HTTP/1.1\r\nHost: localhost\r\n"
+            "Connection: keep-alive\r\n\r\n",
+            &response, &close) == 0);
+        TEST_ASSERT(response.status == 200);
+        TEST_ASSERT(response.body_len > 0);
+        tls_response_free(&response);
+        served++;
+        if (close) {
+            tls_close(ssl);
+            ssl = NULL;
+            reconnects++;
+        }
+    }
+    if (ssl != NULL) {
+        tls_close(ssl);
+    }
+    TEST_ASSERT(served == connections * requests_per_connection);
+    /* The default limit is 100, so a 130-request connection must be ended by
+     * the server rather than by the client. */
+    TEST_ASSERT(reconnects >= 1);
+}
+
 void test_tls_streamed_large_body(void) {
     SSL *ssl = tls_connect_current();
     TEST_ASSERT(ssl != NULL);
@@ -563,6 +615,8 @@ void run_tls_tests(void) {
              "TLS 1.2+/ALPN http/1.1 and no weak cipher");
     RUN_TEST(test_tls_get_cached_body, "GET a cached asset over TLS");
     RUN_TEST(test_tls_keepalive_two_requests, "Two requests on one TLS session");
+    RUN_TEST(test_tls_keepalive_churn,
+             "Keep-alive churn across the request limit");
     RUN_TEST(test_tls_streamed_large_body, "Stream a 2 MiB file over TLS");
     RUN_TEST(test_plaintext_listener_serves, "Plaintext listener coexists");
     RUN_TEST(test_tls_rejects_garbage_then_serves,

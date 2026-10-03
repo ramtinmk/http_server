@@ -1,0 +1,30 @@
+{
+  "project": "HTTPServer",
+  "version": "@PROJECT_VERSION@",
+  "build_type": "@CMAKE_BUILD_TYPE@",
+  "hardening": "@ENABLE_HARDENING@",
+  "fuzzing": "@ENABLE_FUZZING@",
+  "sanitizers": "@SANITIZER_NAMES@",
+  "coverage": "@ENABLE_COVERAGE@",
+  "cmake_version": "@CMAKE_VERSION@",
+  "compiler": {
+    "id": "@CMAKE_C_COMPILER_ID@",
+    "version": "@CMAKE_C_COMPILER_VERSION@",
+    "command": "@CMAKE_C_COMPILER@"
+  },
+  "dependencies": {
+    "zlib": "@ZLIB_VERSION_STRING@",
+    "openssl": "@OPENSSL_VERSION@"
+  },
+  "git": {
+    "commit": "@BUILD_GIT_COMMIT@",
+    "branch": "@BUILD_GIT_BRANCH@",
+    "dirty": @BUILD_GIT_DIRTY@
+  },
+  "sources": [
+@BUILD_MANIFEST_SOURCES@
+  ],
+  "test_sources": [
+@BUILD_MANIFEST_TEST_SOURCES@
+  ]
+}

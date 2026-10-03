@@ -1,28 +1,61 @@
 [Unit]
-Description=SimpleHTTP static file server
-After=network.target
+Description=C HTTP static file server
+Documentation=file:///usr/local/share/doc/http-server/readme.md
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=notify
+NotifyAccess=main
 User=http-server
 Group=http-server
+WorkingDirectory=/usr/local/share/http-server
 ExecStart=/usr/local/bin/http_server --config /etc/http-server/http_server.conf
+ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 RestartSec=2s
+
+# --- Runtime/state/log directories (created by systemd, owned by the user) ---
+RuntimeDirectory=http-server
+RuntimeDirectoryMode=0750
+StateDirectory=http-server
+StateDirectoryMode=0750
+LogsDirectory=http-server
+LogsDirectoryMode=0750
+ReadWritePaths=/var/lib/http-server /var/log/http-server /run/http-server
+
+# --- Sandboxing ---
 NoNewPrivileges=true
 PrivateTmp=true
+PrivateDevices=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/var/log/http-server /var/lib/http-server /run/http-server
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+ProcSubset=pid
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RemoveIPC=true
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 AmbientCapabilities=CAP_NET_BIND_SERVICE
+SystemCallArchitectures=native
 SystemCallFilter=@system-service @network-io @file-system @signal @io-event @process
 SystemCallErrorNumber=EPERM
-LimitNOFILE=4096
+
+# --- Resource limits ---
+LimitNOFILE=65536
 LimitCORE=0
-RuntimeDirectory=http-server
-StateDirectory=http-server
+LimitNPROC=512
+UMask=0027
 
 [Install]
 WantedBy=multi-user.target
