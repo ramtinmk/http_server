@@ -1,32 +1,34 @@
+# Version control
+.git/
+.gitignore
 
-# Ignore CMake cache and build files
+# Out-of-source build tree and legacy in-source CMake state
+build/
+build-*/
 CMakeCache.txt
 CMakeFiles/
 cmake_install.cmake
+CTestTestfile.cmake
+DartConfiguration.tcl
 Makefile
+compile_commands.json
+Testing/
+bin/
+build-manifest.json
+cmake_uninstall.cmake
+install_manifest.txt
 
-# Ignore build directories (common practice)
-build/
-**/build/
-
-# Ignore compiled executables/libraries if they end up in source dir
+# Compiled objects/libraries/executables
 *.o
-*.so
 *.a
-*.dll
-*.exe
-http_server
-test
+*.so
+*.so.*
 
-# Ignore Git directory
-.git/
+# Generated benchmark corpus, runtime logs, and local TLS material
+benchmarks/corpus/
+*.log
+tls/
 
-# Ignore IDE directories (examples)
+# Editors
 .vscode/
 .idea/
-IGNORE_WHEN_COPYING_START
-content_copy
-download
-Use code with caution.
-IGNORE_WHEN_COPYING_END
-

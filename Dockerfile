@@ -1,53 +1,58 @@
-# Stage 1: Build the application using Alpine
-FROM alpine:latest AS builder
-LABEL stage=builder
+# syntax=docker/dockerfile:1
 
-# Install necessary build tools for Alpine
-# build-base includes gcc, make, libc-dev (for headers like pthread.h)
+# --- Stage 1: build ---------------------------------------------------------
+# A pinned Alpine release keeps the toolchain reproducible. `build-base` pulls
+# in gcc, make, and the libc headers; `zlib-dev` and `openssl-dev` satisfy the
+# REQUIRED CMake packages (`find_package(ZLIB)` and `find_package(OpenSSL)`).
+FROM alpine:3.20 AS builder
+
 RUN apk add --no-cache \
-    build-base \
-    cmake \
-    pkgconfig
-RUN apk add --no-cache musl-dev
-RUN apk add --no-cache coreutils bash
+        build-base \
+        cmake \
+        pkgconfig \
+        python3 \
+        linux-headers \
+        zlib-dev \
+        openssl-dev
 
-# Set the working directory
 WORKDIR /app
 
-# Copy the CMakeLists.txt file first (leverages Docker cache)
-COPY CMakeLists.txt ./
-
-# Copy the rest of the source code
+# Copy the whole (dockerignored) tree. CMake needs CMakeLists.txt, src/,
+# include/, cmake/, root/, and http_server.conf.
 COPY . .
 
-# Create a build directory and build the project
-RUN mkdir build && \
-    cd build && \
-    cmake .. && \
-    make
+# Explicit out-of-source build. The runtime artifacts land in ./bin at the
+# source root because CMakeLists.txt sets CMAKE_RUNTIME_OUTPUT_DIRECTORY to
+# ${CMAKE_SOURCE_DIR}/bin (so the documented ./bin/http_server path holds in
+# and out of the container).
+RUN cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+    && cmake --build build --parallel "$(nproc)"
 
-# Stage 2: Create the final runtime image based on Alpine
-FROM alpine:latest
+# --- Stage 2: runtime -------------------------------------------------------
+# Only the shared libraries the binary needs; no compiler, headers, or build
+# tree in the final image.
+FROM alpine:3.20 AS runtime
 
-# Alpine doesn't have /usr/local/bin in PATH by default for non-login shells
-# Placing it in /usr/bin is common, or add /usr/local/bin to PATH
-# Let's put it in /usr/bin for simplicity here.
+RUN apk add --no-cache libssl3 libcrypto3 zlib libgcc \
+    && addgroup -S http-server \
+    && adduser -S -G http-server -H -s /sbin/nologin http-server
+
 WORKDIR /app
 
-# Copy only the compiled http_server executable from the build stage
-COPY --from=builder /app/build/http_server /usr/bin/http_server
+# The binary, the document-root assets, and the default config. The config is
+# baked in as DEFAULT_CONFIG_FILE="/app/http_server.conf" and sets
+# `document_root = root`, which resolves relative to this working directory.
+COPY --from=builder /app/bin/http_server /usr/local/bin/http_server
+COPY --from=builder /app/root/ ./root/
+COPY --from=builder /app/http_server.conf ./http_server.conf
 
-# (Optional) If you also need the 'test' executable in the final image:
-COPY --from=builder /app/build/test /usr/bin/test
+USER http-server
 
-# Add non-root user/group for security
-RUN addgroup -S appgroup && adduser -S appuser -G appgroup
-
-# Switch to non-root user
-USER appuser
-
-# Expose the port your http_server listens on (Replace 8081 if different)
 EXPOSE 8081
 
-# Set the default command to run when the container starts
+# `/home` is served from the startup-cached assets on the default listener, so
+# it is a dependency-free liveness check (busybox `wget`).
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD wget -q -O /dev/null http://127.0.0.1:8081/home || exit 1
+
 CMD ["http_server"]

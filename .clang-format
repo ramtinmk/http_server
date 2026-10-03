@@ -1,0 +1,28 @@
+# clang-format configuration for the C sources.
+#
+# This captures the prevailing house style: 4-space indentation, no tabs,
+# functions with the opening brace on its own line and control statements with
+# the brace on the same line (the Linux brace convention), and a 100-column
+# soft limit.
+#
+# Apply it to a file with:
+#   clang-format -i src/foo.c include/foo.h
+#
+# The tree predates this file, so not every existing file is clean yet; the
+# config is the reference for new and edited code.
+---
+Language: Cpp
+BasedOnStyle: LLVM
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+ColumnLimit: 100
+BreakBeforeBraces: Linux
+AllowShortFunctionsOnASingleLine: All
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+PointerAlignment: Right
+DerivePointerAlignment: false
+SortIncludes: Never
+SpaceBeforeParens: ControlStatements
+AlignAfterOpenBracket: Align

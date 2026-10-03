@@ -73,6 +73,10 @@ dkms.conf
 
 CMakeFiles
 
+# Default out-of-source build tree (contains the CMake cache and the generated
+# build-manifest.json/cmake_uninstall.cmake); never commit it.
+/build/
+
 # Separate compile database used by `make lint` (hardening off)
 /.lint-db/
 

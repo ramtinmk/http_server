@@ -24,8 +24,10 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 # Generate compile_commands.json
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-# --- NEW: Output Directory Configuration ---
-# This tells CMake to put all executables in ./bin/ instead of ./build/
+# --- Output Directory Configuration ---
+# The build tree is out-of-source in ./build (see GNUmakefile, README, and
+# CONTRIBUTING); this keeps the executables in ./bin at the source root so the
+# documented ./bin/http_server and ./bin/run_tests commands keep working.
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/bin)
 
 # --- 1. Find Dependencies ---
@@ -140,7 +142,7 @@ find_package(Python3 COMPONENTS Interpreter REQUIRED)
 # Explicit source list. This replaces a previous `file(GLOB ...)`: a source file
 # that exists on disk but is not listed here is *not* built, and if anything
 # references its symbols the link fails loudly. Update this list when adding or
-# removing a file, then re-run `cmake -S . -B .`.
+# removing a file, then re-run `cmake -S . -B build`.
 #
 # SERVER_MAIN is excluded from SOURCES because the fuzz targets link the library
 # sources without a second `main()`.
@@ -644,7 +646,7 @@ else()
 endif()
 
 # --- Installation ----------------------------------------------------------
-# `cmake --install .` (or `make install`) installs the hardened binary, the
+# `cmake --install build` (or `make install`) installs the hardened binary, the
 # shipped alias assets, the docs, and the systemd/logrotate/tmpfiles/sysusers
 # integration. The default prefix is /usr/local and the unit and installed
 # config assume that prefix; DESTDIR is honored for staged/packaged installs.

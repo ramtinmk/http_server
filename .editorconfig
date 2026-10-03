@@ -1,0 +1,21 @@
+# Editor conventions for the repository. clang-format owns C formatting; this
+# file keeps editors consistent for everything else.
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 4
+
+[*.{md,markdown}]
+# Markdown tables and hard-wrapped prose rely on trailing spaces in places.
+trim_trailing_whitespace = false
+
+[*.{yml,yaml,json,jsonl}]
+indent_size = 2
+
+[{Makefile,GNUmakefile}]
+indent_style = tab

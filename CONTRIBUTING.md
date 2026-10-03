@@ -29,12 +29,14 @@ The project uses C11, POSIX threads, `zlib`, and OpenSSL (`libssl-dev`). Run all
 commands from the repository root.
 
 ```bash
-cmake -S . -B . && make          # Release (-O2 -DNDEBUG), hardened by default
+make                             # configures build/, then builds (Release, hardened)
+# or, explicitly out-of-source:
+cmake -S . -B build && cmake --build build
 ```
 
 - Executables land in `bin/` (`bin/http_server`, `bin/run_tests`).
 - After adding or removing a C file, add/remove it in the explicit source lists
-  in [`CMakeLists.txt`](CMakeLists.txt) and re-run `cmake -S . -B .`. Removing a
+  in [`CMakeLists.txt`](CMakeLists.txt) and re-run `cmake -S . -B build`. Removing a
   file that is still listed fails loudly at configure/link time.
 - Use `-DCMAKE_BUILD_TYPE=Debug` for symbols; do not benchmark a Debug build.
 - The build writes a `build-manifest.json` beside the build recording the

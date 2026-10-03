@@ -195,7 +195,7 @@ jobs:
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y zlib1g-dev libssl-dev
       - name: Build
-        run: cmake -S . -B . -DCMAKE_BUILD_TYPE=Release && cmake --build . --target http_server --parallel 2
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build --target http_server --parallel 2
       - name: Capacity gate
         run: python3 scripts/ci_capacity_gate.py
       - name: Upload gate artifact
@@ -204,3 +204,28 @@ jobs:
           name: ci-capacity-gate
           path: benchmarks/ci_capacity_gate.json
           if-no-files-found: error
+
+  docker:
+    name: Docker image build and smoke
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker build -t c-http-server:ci .
+      - name: Smoke test the served assets
+        run: |
+          docker run -d --name c-http-server -p 8081:8081 c-http-server:ci
+          trap 'docker rm -f c-http-server >/dev/null 2>&1 || true' EXIT
+          ready=0
+          for attempt in $(seq 1 60); do
+            if curl -fsS -o /dev/null http://127.0.0.1:8081/home; then
+              ready=1
+              break
+            fi
+            sleep 0.5
+          done
+          if [ "$ready" -ne 1 ]; then
+            docker logs c-http-server
+            exit 1
+          fi
+          curl -fsS -o /dev/null http://127.0.0.1:8081/hello
