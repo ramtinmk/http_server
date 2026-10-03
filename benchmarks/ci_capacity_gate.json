@@ -1,0 +1,11 @@
+{
+  "baseline_file": "benchmarks/ci_baseline.json",
+  "concurrency": 4,
+  "duration_seconds": 3,
+  "floor_hardware_agnostic_rps": 2000.0,
+  "harness_returncode": 0,
+  "measured_hardware_agnostic_rps": 15715.61,
+  "passed": true,
+  "scenario": "keep-alive-5000",
+  "seconds": 4.372
+}

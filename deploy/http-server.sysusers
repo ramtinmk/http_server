@@ -1,0 +1,4 @@
+# Installed as /usr/lib/sysusers.d/http-server.conf.
+# Create the unprivileged service account used by the systemd unit.
+# Type Name        ID Description                Home                 Shell
+u http-server      -  "C HTTP static server"    /var/lib/http-server /usr/sbin/nologin

@@ -116,3 +116,91 @@ jobs:
         with:
           name: production-phase4-coverage
           path: benchmarks/production_phase4_coverage.json
+
+  build-test:
+    name: Build and test (${{ matrix.name }})
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Release
+            build: build-release
+            flags: -DCMAKE_BUILD_TYPE=Release
+          - name: Debug
+            build: build-debug
+            flags: -DCMAKE_BUILD_TYPE=Debug
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y zlib1g-dev libssl-dev
+      - name: Configure
+        run: cmake -S . -B ${{ matrix.build }} ${{ matrix.flags }}
+      - name: Build
+        run: cmake --build ${{ matrix.build }} --parallel 2
+      - name: Focused suites
+        run: ./bin/run_tests ring && ./bin/run_tests tls
+      - name: Server E2E and CTest
+        run: |
+          ./bin/http_server --document-root . >server-ci.log 2>&1 &
+          pid=$!
+          trap 'kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true' EXIT
+          ready=0
+          for attempt in $(seq 1 120); do
+            if ! kill -0 "$pid" 2>/dev/null; then
+              cat server-ci.log
+              exit 1
+            fi
+            if python3 -c 'import socket; s=socket.create_connection(("127.0.0.1", 8081), 0.25); s.close()' 2>/dev/null; then
+              ready=1
+              break
+            fi
+            sleep 0.25
+          done
+          if [ "$ready" -ne 1 ]; then
+            cat server-ci.log
+            exit 1
+          fi
+          ctest --test-dir ${{ matrix.build }} --output-on-failure
+      - name: Upload build manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-manifest-${{ matrix.name }}
+          path: ${{ matrix.build }}/build-manifest.json
+          if-no-files-found: error
+
+  fuzz-smoke:
+    name: libFuzzer smoke
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y clang zlib1g-dev libssl-dev
+      - name: Configure fuzzing build
+        run: CC=clang cmake -S . -B build-fuzz -DENABLE_FUZZING=ON -DENABLE_HARDENING=OFF
+      - name: Run fuzz smoke
+        run: cmake --build build-fuzz --target fuzz-smoke --parallel 2
+      - name: Upload fuzz artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-phase4-fuzz
+          path: benchmarks/production_phase4_fuzz.json
+          if-no-files-found: error
+
+  capacity-smoke:
+    name: Capacity smoke gate
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y zlib1g-dev libssl-dev
+      - name: Build
+        run: cmake -S . -B . -DCMAKE_BUILD_TYPE=Release && cmake --build . --target http_server --parallel 2
+      - name: Capacity gate
+        run: python3 scripts/ci_capacity_gate.py
+      - name: Upload gate artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-capacity-gate
+          path: benchmarks/ci_capacity_gate.json
+          if-no-files-found: error

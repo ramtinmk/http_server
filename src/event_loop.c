@@ -26,6 +26,7 @@
 #include <string.h>
 #include <pthread.h>
 
+#include <openssl/err.h>
 #include <openssl/ssl.h>
 
 /* ------------------------------------------------------------------ */
@@ -692,6 +693,9 @@ static int tls_write_some(ELConnection *c, const unsigned char *buf, size_t len,
     size_t off = 0;
     while (off < len) {
         int chunk = (len - off) > (size_t)INT_MAX ? INT_MAX : (int)(len - off);
+        /* SSL_get_error() reads the thread-local error queue; clear it so a
+         * stale error from another connection cannot be misattributed. */
+        ERR_clear_error();
         int n = SSL_write(c->ssl, buf + off, chunk);
         if (n > 0) {
             off += (size_t)n;
@@ -819,6 +823,10 @@ static void el_tls_readable(EventLoop *loop, ELConnection *c)
 
     char buf[EL_RECV_BUFSIZE];
     for (;;) {
+        /* SSL_get_error() reads the thread-local error queue; clear it so a
+         * stale error from SSL_shutdown()/a previous connection cannot make a
+         * benign WANT_READ look like a fatal SSL_ERROR_SSL. */
+        ERR_clear_error();
         int n = SSL_read(c->ssl, buf, (int)sizeof(buf));
         if (n > 0) {
             ring_buffer_write(c->in_buf, buf, (size_t)n);

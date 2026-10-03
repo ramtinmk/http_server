@@ -6,8 +6,9 @@ Repo-wide rules and the test policy live in `../AGENTS.md`. Read those first.
 
 - `main_test.c` — the suite router. It calls `run_ring_buffer_tests()` and
   `run_server_tests()` based on `argv[1]` (`ring`, `server`, or both). A new
-  `tests/*.c` file is globbed into `run_tests` but **runs nothing until you wire
-  its `run_*_tests()` function into `main_test.c`**.
+  `tests/*.c` file must be added to the explicit `TEST_SOURCES` list in
+  `../CMakeLists.txt` (the build does not glob) and then wired into
+  `main_test.c` — otherwise it **runs nothing**.
 - `server_test.c` — the server E2E suite (`RUN_TEST(...)` list at the bottom).
   Requires `./bin/http_server` on `127.0.0.1:8081`. Tests speak raw sockets to
   assert framing, keep-alive, pipelining, timeouts, and status codes.

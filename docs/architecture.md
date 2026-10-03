@@ -270,6 +270,13 @@ Close reasons are enumerated in `ELCloseReason` (`include/event_loop.h:21`).
   reload flag; the deadline tick of loop 0 calls `tls_reload_if_requested()` to
   reload the certificate in place. Existing `SSL` objects keep the certificate
   they started with, so no connection is dropped.
+- Every `SSL_read`/`SSL_write`/`SSL_accept` is preceded by `ERR_clear_error()`:
+  `SSL_get_error()` reads the thread-local error queue, so a stale error left by
+  `SSL_shutdown()` on a previous connection would otherwise turn a benign
+  `WANT_READ` into a fatal `SSL_ERROR_SSL` and drop a healthy keep-alive
+  connection. The context also sets `SSL_OP_IGNORE_UNEXPECTED_EOF`, so a peer
+  that closes without `close_notify` is treated as a clean EOF like the
+  plaintext path.
 
 ## Privilege drop and process hardening (Phase 4)
 
@@ -339,9 +346,13 @@ Close reasons are enumerated in `ELCloseReason` (`include/event_loop.h:21`).
 
 - `src/metrics.c` counters are relaxed atomics updated on the hot path.
 - `metrics_snapshot()` renders one single-line JSON object and appends the
-  memory-profiler fields via `memory_profiler_append_json()`.
-- `metrics_prometheus()` renders the scrape format; `metrics_set_ready()`/
-  `metrics_is_ready()` expose the readiness gauge.
+  memory-profiler fields via `memory_profiler_append_json()`. The JSON also
+  carries `open_fds`, counted from `/proc/self/fd` at render time: the process
+  is non-dumpable, so an external sampler cannot read its `/proc/<pid>/fd`, and
+  the soak harness reads this field instead.
+- `metrics_prometheus()` renders the scrape format and the same
+  `simplehttp_open_fds` gauge; `metrics_set_ready()`/`metrics_is_ready()` expose
+  the readiness gauge.
 - `src/memory_profiler.c` samples `/proc/self/statm`,
   `/proc/self/smaps_rollup`, and `mallinfo2()` (falling back to `mallinfo()`),
   updating high-water marks. Unavailable sources contribute zero and are

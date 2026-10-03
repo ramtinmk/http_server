@@ -1,0 +1,14 @@
+{
+  "description": "Throughput floor for the CI capacity smoke gate. hardware_agnostic_rps is successful requests per server CPU-second, so the threshold is host-independent; the floor is deliberately far below local measurements to tolerate shared-runner noise. Raise it only with a CI run that records a stable value.",
+  "scenario": "keep-alive-5000",
+  "warmup": 1,
+  "duration": 3,
+  "concurrency": 4,
+  "hardware_agnostic_rps_floor": 2000,
+  "recorded": {
+    "date": "2026-10-03",
+    "note": "Floor seeded conservatively at ~12% of the local reference measurement below; it is not a CI-runner measurement.",
+    "local_hardware_agnostic_rps": 17133.008,
+    "local_machine": "developer host, Release build, un-pinned"
+  }
+}

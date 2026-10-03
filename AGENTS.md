@@ -12,6 +12,7 @@ and in the nearest directory's `AGENTS.md`.
 | Every environment variable and compile-time limit| `docs/env-vars.md`            |
 | Sharp edges that waste time                      | `docs/gotchas.md`             |
 | Task recipes (add a route, reproduce a benchmark)| `docs/runbooks/`              |
+| Install/operate the systemd service              | `docs/runbooks/deploy-systemd.md` |
 | File-class benchmark methodology and corpus      | `docs/benchmarks.md`          |
 | Phase specs and intent                           | `plans/` (read `plan-spec.md` first) |
 
@@ -45,8 +46,8 @@ iteration. Keep this file a router (short, links out); put depth in `docs/`.
 - The build defaults to `CMAKE_BUILD_TYPE=Release` (`-O2 -DNDEBUG`); pass `-DCMAKE_BUILD_TYPE=Debug` for an unoptimized build with symbols. Do not benchmark a Debug build.
 - Build with `make`; CMake writes executables directly to `bin/`, not `build/` (`bin/http_server` and `bin/run_tests`). Ignore legacy root-level binaries.
 - The binary is built hardened by default (PIE, full RELRO, NX stack, stack protector, `_FORTIFY_SOURCE=2`) behind `ENABLE_HARDENING`; disable with `-DENABLE_HARDENING=OFF`.
-- `CMakeLists.txt` uses `file(GLOB ...)` for `src/*.c` and `tests/*.c`; after adding or removing a C file, regenerate with `cmake -S . -B .` before building.
-- Targets include `make benchmark`, `make benchmark-tls`, `make corpus`, `make stress`, `make benchmark-matrix`, `make saturation`, `make phase0-lifecycle`, `make phase0-2x`, `make phase0-accesslog`, `make phase2-static`, `make phase3-tls`, `make phase4-hardening`, `make phase4-sandbox-resources`, `make fuzz-smoke` (only in an `ENABLE_FUZZING` Clang build), `make coverage` (only in an `ENABLE_COVERAGE` build), `make memory-soak`, `make startup-failfast`, `make lint`, and `make lint-fix`. `lint`/`lint-fix` exist only when clang-tidy is installed; `lint-fix` edits source files.
+- `CMakeLists.txt` uses **explicit** source lists for `src/*.c` and `tests/*.c` (not `file(GLOB ...)`); after adding or removing a C file, add/remove it in the matching `set(SOURCES ...)` / `set(TEST_SOURCES ...)` list and re-run `cmake -S . -B .`. An unlisted source fails the link loudly instead of silently not building. The configure step also writes `build-manifest.json` with the toolchain and dependency versions.
+- Targets include `make benchmark`, `make benchmark-tls`, `make corpus`, `make stress`, `make benchmark-matrix`, `make saturation`, `make phase0-lifecycle`, `make phase0-2x`, `make phase0-accesslog`, `make phase2-static`, `make phase3-tls`, `make phase4-hardening`, `make phase4-sandbox-resources`, `make phase5-observability`, `make phase6-capacity`, `make soak`, `make capacity-smoke`, `make fuzz-smoke` (only in an `ENABLE_FUZZING` Clang build), `make coverage` (only in an `ENABLE_COVERAGE` build), `make memory-soak`, `make startup-failfast`, `make install`, `make uninstall`, `make lint`, and `make lint-fix`. `lint`/`lint-fix` exist only when clang-tidy is installed; `lint-fix` edits source files.
 
 ## Tests
 

@@ -2,7 +2,7 @@
   "failures": [],
   "health": {
     "body": "ok",
-    "request_id": "0006abfeba407e8a",
+    "request_id": "0006ac0c03f1ef2f",
     "status": 200
   },
   "lifecycle": {
@@ -10,7 +10,7 @@
     "probe_during_shutdown": "refused"
   },
   "metrics": {
-    "bytes": 5052,
+    "bytes": 5178,
     "histogram_buckets": 14,
     "missing": [],
     "names_present": [
@@ -27,6 +27,7 @@
       "simplehttp_idle_timeouts_total",
       "simplehttp_input_buffer_limit_total",
       "simplehttp_listen_drops_total",
+      "simplehttp_open_fds",
       "simplehttp_overload_responses_total",
       "simplehttp_ready",
       "simplehttp_request_duration_seconds_bucket",
@@ -58,7 +59,7 @@
     "debug_line_after": true
   },
   "request_id": {
-    "header": "0006abfeba407e8a",
+    "header": "0006ac0c03f1ef2f",
     "in_access_log": true
   }
 }

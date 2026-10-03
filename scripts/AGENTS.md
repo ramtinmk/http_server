@@ -64,5 +64,16 @@ each harness: `../docs/runbooks/reproduce-a-benchmark.md`.
   runner/server execution data for critical modules, and enforces the checked-in
   `../coverage/phase4_baseline.json`.
 - `startup_failfast_test.py` — missing static asset must fail startup.
-- `memory_soak.py` — stationary keep-alive RSS/PSS drift gate.
+- `memory_soak.py` — stationary keep-alive drift gate. Samples the server's
+  metrics snapshot; gates RSS, PSS, and open-FD drift (the process is
+  non-dumpable, so `open_fds` is read from the snapshot, not `/proc`). Writes
+  `../benchmarks/memory_soak.json` / `production_phase6_soak.json`; `make soak`
+  runs the 3-hour acceptance.
+- `ci_capacity_gate.py` — short fixed-rate keep-alive run gated against the
+  host-independent floor in `../benchmarks/ci_baseline.json`; writes
+  `../benchmarks/ci_capacity_gate.json`. `make capacity-smoke`; used by CI.
+- `phase6_capacity_report.py` — runs plaintext fixed-rate, TLS, and `2×`-capacity
+  overload end to end and writes `../benchmarks/production_phase6_capacity.json`;
+  re-verifies the `scaling-plan` 5000 req/s acceptance and bounded overload.
+  `make phase6-capacity`.
 - `wrk_benchmark.py` / `wrk_pipeline.lua` — raw `wrk` sweeps (needs `wrk`).

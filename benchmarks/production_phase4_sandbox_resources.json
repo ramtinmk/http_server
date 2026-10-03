@@ -31,7 +31,7 @@
   "passed": true,
   "per_ip_connections": {
     "limit": 1,
-    "second_response": "HTTP/1.1 503 Service Unavailable\r\nServer: SimpleHTTPServer/1.0\r\n"
+    "second_response": ""
   },
   "platform": "linux",
   "rlimits": {
@@ -63,7 +63,7 @@
   },
   "systemd_unit": {
     "missing": [],
-    "path": "/home/ramtinmk/http_server_C/deploy/http-server.service",
+    "path": "/home/ai/C_http_server/deploy/http-server.service",
     "static_valid": true
   }
 }

@@ -1,0 +1,10 @@
+# Installed as /usr/lib/tmpfiles.d/http-server.conf.
+# Runtime/state/log directories are normally created by the unit's
+# RuntimeDirectory/StateDirectory/LogsDirectory settings; this snippet exists so
+# an operator can pre-create them (and a writable document root) with
+# `systemd-tmpfiles --create http-server.conf` before first start.
+# Type Path                            Mode User        Group       Age Argument
+d /var/lib/http-server                 0750 http-server http-server -   -
+d /var/lib/http-server/www             0750 http-server http-server -   -
+d /var/log/http-server                 0750 http-server http-server -   -
+d /run/http-server                     0750 http-server http-server -   -

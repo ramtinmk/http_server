@@ -1,18 +1,19 @@
 #!/usr/bin/env python3
-"""Fixed-rate keep-alive memory soak for the runtime memory profiler.
+"""Fixed-rate keep-alive soak for the runtime memory profiler and Phase 6.
 
 Drives a sustained keep-alive load against the server while sampling its
-``HTTP_SERVER_METRICS_FILE`` snapshot, then writes ``benchmarks/memory_soak.json``
-with the per-sample memory series and the drift computed over the final
-``--final-fraction`` of the run. Sampling starts after ``--warmup`` seconds so
-the first recorded sample is post-initialization rather than the server's
-pre-event-loop snapshot. Exits non-zero when RSS or PSS drift exceeds
-``--drift-tolerance``.
+``HTTP_SERVER_METRICS_FILE`` snapshot and the process's open file descriptors,
+then writes ``benchmarks/memory_soak.json`` with the per-sample series and the
+drift computed over the final ``--final-fraction`` of the run. Sampling starts
+after ``--warmup`` seconds so the first recorded sample is post-initialization
+rather than the server's pre-event-loop snapshot. Exits non-zero when RSS, PSS,
+or open-FD drift exceeds ``--drift-tolerance``.
 
 The artifact is the evidence for the memory-profiler plan's exit criteria
-(``plans/memory-profiler.md``): a stationary load must leave RSS and heap
-allocation flat rather than trending up. Only the Python standard library is
-used so the run is reproducible on any host with the built server.
+(``plans/memory-profiler.md``) and the Phase 6 soak contract
+(``plans/production-http-server-phase6.md``): a stationary load must leave RSS
+and open descriptors flat rather than trending up. Only the Python standard
+library is used so the run is reproducible on any host with the built server.
 """
 
 import argparse
@@ -30,22 +31,27 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_OUTPUT = os.path.join(REPO_ROOT, "benchmarks", "memory_soak.json")
 SERVER_BIN = os.path.join(REPO_ROOT, "bin", "http_server")
 
-# (snapshot key, gated). Gated series must not drift beyond the tolerance.
-# RSS and PSS are the process's real memory footprint and are gated. The glibc
-# heap counters are recorded but not gated: mallinfo() ratchets its in-use
-# figure as buffers churn even when RSS is flat (it cannot exceed RSS, so it is
-# not a leak signal on its own). A real leak shows up as RSS/PSS drift.
+# (series key, gated). Gated series must not drift beyond the tolerance.
+# RSS and PSS are the process's real memory footprint and are gated. Open file
+# descriptors are gated too (Phase 6 soak contract): a leak or stuck socket
+# shows up as FD growth even when RSS is flat. The glibc heap counters are
+# recorded but not gated: mallinfo() ratchets its in-use figure as buffers
+# churn even when RSS is flat (it cannot exceed RSS, so it is not a leak signal
+# on its own). A real leak shows up as RSS/PSS drift.
 DRIFT_CHECKS = (
     ("rss_kb", True),
     ("pss_kb", True),
+    ("open_fds", True),
     # Recorded for attribution but not gated: VMS is allocator arena
-    # reservation, and the glibc heap counters ratchet as buffers churn while
-    # RSS stays flat. Private_Dirty is the stable anonymous-resident proxy.
+    # reservation, the glibc heap counters ratchet as buffers churn while RSS
+    # stays flat, and connection/cache gauges return to their baseline.
     ("private_dirty_kb", False),
     ("vmsize_kb", False),
     ("heap_mmap_bytes", False),
     ("heap_inuse_bytes_max", False),
     ("heap_inuse_bytes", False),
+    ("active_connections", False),
+    ("cache_bytes", False),
 )
 
 
@@ -127,6 +133,16 @@ def read_snapshot(path):
         return {}
 
 
+def open_fd_count(pid):
+    """Open file descriptors of `pid` from /proc, or None if unavailable."""
+    if not pid:
+        return None
+    try:
+        return len(os.listdir("/proc/%d/fd" % pid))
+    except OSError:
+        return None
+
+
 def drift(values, fraction):
     """Max-min relative to the mean over the final `fraction` of `values`."""
     if not values:
@@ -181,6 +197,9 @@ def parse_args(argv):
     parser.add_argument("--drift-tolerance", type=float, default=0.05)
     parser.add_argument("--metrics-file",
                         help="existing server metrics path (implies --no-start-server)")
+    parser.add_argument("--pid", type=int,
+                        help="server PID whose open FDs are sampled when not "
+                             "started by this script")
     parser.add_argument("--start-server", action="store_true",
                         help="launch ./bin/http_server for the run")
     parser.add_argument("--output", default=DEFAULT_OUTPUT)
@@ -207,9 +226,11 @@ def main(argv=None):
         print("error: provide --metrics-file or --start-server", file=sys.stderr)
         return 2
 
+    server_pid = args.pid
     try:
         if args.start_server:
             server = start_server(metrics_path)
+            server_pid = server.pid
             if not wait_for_port(args.host, args.port):
                 print("error: server did not start listening", file=sys.stderr)
                 return 2
@@ -247,8 +268,17 @@ def main(argv=None):
                     for key in ("rss_kb", "rss_kb_max", "pss_kb",
                                 "private_dirty_kb", "vmsize_kb",
                                 "heap_inuse_bytes", "heap_inuse_bytes_max",
-                                "heap_mmap_bytes", "memory_sample_ok"):
+                                "heap_mmap_bytes", "memory_sample_ok",
+                                "active_connections", "cache_bytes"):
                         sample[key] = snapshot.get(key, 0)
+                    # The server is non-dumpable, so /proc/<pid>/fd is not
+                    # readable externally; prefer its self-reported count and
+                    # fall back to procfs only when it is unavailable.
+                    fds = snapshot.get("open_fds")
+                    if fds is None or fds < 0:
+                        fds = open_fd_count(server_pid)
+                    if fds is not None and fds >= 0:
+                        sample["open_fds"] = fds
                     samples.append(sample)
                 next_sample += args.interval
             time.sleep(min(0.1, max(0.0, next_sample - time.monotonic())))
@@ -261,6 +291,7 @@ def main(argv=None):
                 datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "host": args.host,
             "port": args.port,
+            "server_pid": server_pid,
             "config": {
                 "duration_seconds": args.duration,
                 "target_rate": args.rate,

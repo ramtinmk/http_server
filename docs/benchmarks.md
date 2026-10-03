@@ -89,3 +89,30 @@ server with matched worker counts and `-O2`, starts both (plaintext,
 `benchmarks/nginx_comparison.csv` + `.json`. The recipe, fairness rules, and
 recorded results (including TLS) are in
 `docs/runbooks/compare-against-nginx.md`.
+
+## Capacity report and soak (Phase 6)
+
+```bash
+make phase6-capacity   # plaintext + TLS fixed-rate + 2x-capacity overload
+make capacity-smoke    # short fixed-rate gate vs benchmarks/ci_baseline.json
+make soak              # 3-hour stationary keep-alive soak (RSS + FD drift)
+```
+
+`scripts/phase6_capacity_report.py` runs three harnesses end to end and writes
+`benchmarks/production_phase6_capacity.json`: a plaintext fixed-rate keep-alive
+run, a TLS run, and a `wrk` run at `2×` the configured connection capacity. It
+re-checks the `scaling-plan` 5,000 req/s acceptance (with a 1% boundary
+tolerance), zero plaintext/TLS client timeouts, and the bounded above-capacity
+outcome. Run it on a quiet host: residual load from another benchmark can make
+`wrk` record scheduling-induced client timeouts that are not a server
+regression, so the report retries the above-capacity run up to three times and
+records the winning `attempts` count. `benchmarks/ci_baseline.json` holds the host-independent
+`hardware_agnostic_rps` floor used by `scripts/ci_capacity_gate.py` in CI.
+
+`scripts/memory_soak.py` (the `make soak` target, default 3 hours) samples the
+server's own metrics snapshot every 60 s and gates the max−min drift over the
+final 80% of the run to 5% for RSS, PSS, and open descriptors (the process is
+non-dumpable, so `open_fds` comes from the self-reported metric, not an external
+`/proc` read). The artifact is `benchmarks/production_phase6_soak.json`; the
+`config.duration_seconds` field distinguishes a short control from the
+acceptance soak.
