@@ -400,3 +400,15 @@ Close reasons are enumerated in `ELCloseReason` (`include/event_loop.h:21`).
     `src/tls.c`, and a world-accessible private key is fatal. Reload mutates the
     shared context's certificate only; already-established sessions and
     handshakes keep the certificate they started with.
+
+## Formal verification (Lean)
+
+Formal verification is a separate, opt-in artifact under `verification/` and
+does not change the runtime architecture. It currently models the
+`src/ring_buffer.c` cursor arithmetic and machine-checks that a consume preserves
+`ring_buffer_validate`. The architecture, the machine-checked/assumed/tested
+boundary, and the assumptions live in `docs/formal-verification.md`; the
+reproduction steps are in `docs/runbooks/verify-lean-proofs.md` (`make verify`).
+The server's correctness is still established by the tests, sanitizers, fuzzing,
+and benchmarks described above — not by the Lean proofs, which cover a small,
+explicitly bounded subset.

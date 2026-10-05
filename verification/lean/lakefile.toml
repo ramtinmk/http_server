@@ -1,0 +1,14 @@
+name = "http_server_verification"
+version = "0.1.0"
+defaultTargets = ["HttpServer", "ring_buffer_diff"]
+
+# No external dependencies: the proofs use only Lean core, so `lake build`
+# works offline once the pinned toolchain in `lean-toolchain` is installed.
+# See docs/runbooks/verify-lean-proofs.md for the reproduction steps.
+
+[[lean_lib]]
+name = "HttpServer"
+
+[[lean_exe]]
+name = "ring_buffer_diff"
+root = "RingBufferDiff"

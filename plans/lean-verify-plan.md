@@ -2,10 +2,10 @@
 plan_id: formally-verify-c-http-server-with-lean
 title: Formal Verification of the C HTTP Server with Lean
 category: program
-status: draft
+status: active
 owner: Ramtin
 created: 2026-09-21
-updated: 2026-09-21
+updated: 2026-10-05
 related: []
 ---
 
@@ -97,8 +97,8 @@ formal correctness.
 
 ## Progress snapshot
 
-- Program status: `[ ]` Not started
-- Phase 1 — Verification scope and tooling: `[ ]`
+- Program status: `[~]` In progress — Phase 1 complete; Phases 2–8 not started
+- Phase 1 — Verification scope and tooling: `[x]`
 - Phase 2 — Abstract models: `[ ]`
 - Phase 3 — Ring buffer verification: `[ ]`
 - Phase 4 — HTTP parser verification: `[ ]`
@@ -120,20 +120,29 @@ formal correctness.
 
 **Work**
 
-- [ ] Identify the C components that are candidates for formal verification.
-- [ ] Define the boundary between Lean proofs, C verification, and conventional tests.
-- [ ] Evaluate the available C-to-formal-verification approaches relevant to the project.
-- [ ] Select the initial verification tooling.
-- [ ] Define the formal assumptions that will be accepted about external components.
-- [ ] Create a minimal proof-of-concept using a small C component.
-- [ ] Document the selected verification architecture and its limitations.
+- [x] Identify the C components that are candidates for formal verification.
+- [x] Define the boundary between Lean proofs, C verification, and conventional tests.
+- [x] Evaluate the available C-to-formal-verification approaches relevant to the project.
+- [x] Select the initial verification tooling.
+- [x] Define the formal assumptions that will be accepted about external components.
+- [x] Create a minimal proof-of-concept using a small C component.
+- [x] Document the selected verification architecture and its limitations.
 
 **Exit criteria**
 
-- [ ] A documented verification architecture exists.
-- [ ] A minimal C-to-formal-proof example is machine-checked.
-- [ ] The proof environment can be reproduced from project documentation.
-- [ ] The boundary between verified code and assumptions is explicitly documented.
+- [x] A documented verification architecture exists.
+- [x] A minimal C-to-formal-proof example is machine-checked.
+- [x] The proof environment can be reproduced from project documentation.
+- [x] The boundary between verified code and assumptions is explicitly documented.
+
+**Evidence (Phase 1):** architecture and boundary in
+`docs/formal-verification.md`; reproduction in
+`docs/runbooks/verify-lean-proofs.md`; Lean 4.34.1 model and machine-checked
+theorems plus the C differential harness in `verification/`. `make verify`
+builds the proofs under the `warningAsError` proof gate and reports
+"machine-checked proofs and 4844 differential cases agree". The C-correspondence
+link is a shallow embedding validated by finite differential testing, not a
+mechanised refinement; that boundary is stated in the architecture document.
 
 ---
 

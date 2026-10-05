@@ -37,6 +37,13 @@ all:
 	@$(_ENSURE)
 	@$(_INNER) all
 
+# Formal-verification workspace (Lean 4): builds the machine-checked proofs and
+# runs the C differential harness. Independent of the C build tree; see
+# docs/runbooks/verify-lean-proofs.md.
+.PHONY: verify
+verify:
+	@$(CURDIR)/verification/run.sh
+
 # Catch-all: forward any other target (lint, benchmark, install, clean, …)
 # after making sure the build tree is configured.
 .DEFAULT:

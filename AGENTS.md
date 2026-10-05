@@ -14,6 +14,8 @@ and in the nearest directory's `AGENTS.md`.
 | Task recipes (add a route, reproduce a benchmark)| `docs/runbooks/`              |
 | Install/operate the systemd service              | `docs/runbooks/deploy-systemd.md` |
 | File-class benchmark methodology and corpus      | `docs/benchmarks.md`          |
+| Formal-verification scope, tooling, and boundary | `docs/formal-verification.md` |
+| Reproduce the Lean proofs (`make verify`)        | `docs/runbooks/verify-lean-proofs.md` |
 | Phase specs and intent                           | `plans/` (read `plan-spec.md` first) |
 
 ## Git branch selection
@@ -47,7 +49,7 @@ iteration. Keep this file a router (short, links out); put depth in `docs/`.
 - Build with `make` — a wrapper that configures the out-of-source `build/` tree on first use and delegates every target to it. The executables are emitted to `bin/` (`bin/http_server` and `bin/run_tests`); ignore legacy root-level binaries. Build out-of-source directly with `cmake -S . -B build && cmake --build build`.
 - The binary is built hardened by default (PIE, full RELRO, NX stack, stack protector, `_FORTIFY_SOURCE=2`) behind `ENABLE_HARDENING`; disable with `-DENABLE_HARDENING=OFF`.
 - `CMakeLists.txt` uses **explicit** source lists for `src/*.c` and `tests/*.c` (not `file(GLOB ...)`); after adding or removing a C file, add/remove it in the matching `set(SOURCES ...)` / `set(TEST_SOURCES ...)` list and re-run `cmake -S . -B build`. An unlisted source fails the link loudly instead of silently not building. The configure step also writes `build-manifest.json` with the toolchain and dependency versions.
-- Targets include `make benchmark`, `make benchmark-tls`, `make corpus`, `make stress`, `make benchmark-matrix`, `make saturation`, `make phase0-lifecycle`, `make phase0-2x`, `make phase0-accesslog`, `make phase2-static`, `make phase3-tls`, `make phase4-hardening`, `make phase4-sandbox-resources`, `make phase5-observability`, `make phase6-capacity`, `make soak`, `make capacity-smoke`, `make fuzz-smoke` (only in an `ENABLE_FUZZING` Clang build), `make coverage` (only in an `ENABLE_COVERAGE` build), `make memory-soak`, `make startup-failfast`, `make install`, `make uninstall`, `make lint`, and `make lint-fix`. `lint`/`lint-fix` exist only when clang-tidy is installed; `lint-fix` edits source files.
+- Targets include `make benchmark`, `make benchmark-tls`, `make corpus`, `make stress`, `make benchmark-matrix`, `make saturation`, `make phase0-lifecycle`, `make phase0-2x`, `make phase0-accesslog`, `make phase2-static`, `make phase3-tls`, `make phase4-hardening`, `make phase4-sandbox-resources`, `make phase5-observability`, `make phase6-capacity`, `make soak`, `make capacity-smoke`, `make fuzz-smoke` (only in an `ENABLE_FUZZING` Clang build), `make coverage` (only in an `ENABLE_COVERAGE` build), `make memory-soak`, `make startup-failfast`, `make install`, `make uninstall`, `make lint`, and `make lint-fix`. `lint`/`lint-fix` exist only when clang-tidy is installed; `lint-fix` edits source files. `make verify` builds the Lean formal-verification workspace under `verification/` and runs the ring-buffer C differential harness; it is independent of the CMake build and requires the Lean toolchain documented in `docs/runbooks/verify-lean-proofs.md`.
 
 ## Tests
 
