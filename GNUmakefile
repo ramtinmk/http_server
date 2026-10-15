@@ -11,6 +11,7 @@
 SHELL := /bin/sh
 CMAKE ?= cmake
 BUILD_DIR ?= build
+QUALITY_VENV_DIR ?= $(CURDIR)/.venv
 
 # A build tree configured for a different source path (e.g. the repository was
 # moved) cannot be reused: CMake aborts with a cache-path mismatch. Detect it
@@ -32,10 +33,21 @@ _ENSURE := test -f $(BUILD_DIR)/CMakeCache.txt || $(CMAKE) -S . -B $(BUILD_DIR)
 
 .DEFAULT_GOAL := all
 
-.PHONY: all
+.PHONY: all setup-pre-commit pre-commit complexity
 all:
 	@$(_ENSURE)
 	@$(_INNER) all
+
+setup-pre-commit:
+	@QUALITY_VENV_DIR=$(QUALITY_VENV_DIR) ./scripts/setup_precommit.sh
+
+pre-commit: setup-pre-commit
+	@PIP_INDEX_URL=$${PIP_INDEX_URL:-https://mirror-pypi.runflare.com/simple} \
+		$(QUALITY_VENV_DIR)/bin/pre-commit run
+
+complexity: setup-pre-commit
+	@$(QUALITY_VENV_DIR)/bin/lizard --CCN 15 --warnings_only \
+		src include tests fuzz
 
 # Catch-all: forward any other target (lint, benchmark, install, clean, …)
 # after making sure the build tree is configured.
