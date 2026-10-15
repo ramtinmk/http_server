@@ -46,7 +46,8 @@ if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
     # Release uses -O2 rather than CMake's -O3 default: it is the level the
     # benchmark comparisons use and avoids -O3's code-size/register-pressure
     # surprises on this hot loop.
-    set(CMAKE_C_FLAGS_RELEASE "-O2 -DNDEBUG")
+    set(CMAKE_C_FLAGS_RELEASE "-O2 -DNDEBUG" CACHE STRING
+        "C compiler flags for the Release build" FORCE)
 endif()
 
 # --- Phase 4: compiler and linker hardening ---
