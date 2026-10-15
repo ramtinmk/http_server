@@ -82,6 +82,7 @@ CMakeFiles
 
 # Local tool caches
 /.cache/
+/.venv/
 
 # Python bytecode
 __pycache__/

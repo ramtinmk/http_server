@@ -126,6 +126,20 @@ CMake configures the out-of-source `build/` tree and emits the executables to `b
 
 The build tree (`build/`) holds the CMake cache and `build-manifest.json`; the source root stays clean.
 
+## Contributing
+
+Before committing changes, install the repository's pre-commit hooks and run
+the checks:
+
+```
+./scripts/setup_precommit.sh
+make pre-commit
+```
+
+The hooks include C cyclomatic-complexity checking. See
+[`CONTRIBUTING.md`](CONTRIBUTING.md) and the
+[`pre-commit runbook`](docs/runbooks/pre-commit.md) for the full workflow.
+
 ## Run
 
 The server must be launched from the repository root because it opens

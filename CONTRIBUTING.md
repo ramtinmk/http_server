@@ -74,6 +74,22 @@ them with the matching `make` target (for example `make phase5-observability`,
 - Avoid new compiler warnings; the project builds with `-Wall -Wextra
   -pedantic` and lint uses `clang-tidy` (`make lint`).
 
+## Pre-commit checks
+
+Install and enable the repository hooks before committing:
+
+```bash
+./scripts/setup_precommit.sh
+make pre-commit
+```
+
+The hooks check common file errors and enforce a maximum cyclomatic complexity
+of 15 for C functions. See [`docs/runbooks/pre-commit.md`](docs/runbooks/pre-commit.md)
+for details. CI runs the same checks against files changed by each push or pull
+request, so bypassing local hooks does not bypass the project quality gate.
+The project-local setup and current complexity findings are described in
+[`docs/runbooks/complexity-baseline.md`](docs/runbooks/complexity-baseline.md).
+
 ## Reporting a bug
 
 Include the exact command, the effective configuration, the server log, and the
